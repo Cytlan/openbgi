@@ -255,8 +255,8 @@ stack[0x0B] = 0x03
 Note: I'm not 100% sure this explanation is correct, but it is close.
 
 Inputs:
-    n - Item to write
-    n-1 - Destination pointer
+*    n - Item to write
+*    n-1 - Destination pointer
 
 Outputs:
 
@@ -363,9 +363,12 @@ Pops 2 values from the stack, right-shifts the first value by the 2nd value and 
 
 Pops 2 values from the stack. Pushes 1 onto the stack if they are equal, otherwise it pushes 0.
 
-#### 0x30 - eq
+Inputs:
+   * 1 - Left value
+   * 2 - Right value
 
-Pops 2 values from the stack. Pushes 1 onto the stack if they are equal, otherwise it pushes 0.
+Outputs:
+   * 1 - 1 if equal, otherwise 0
 
 #### 0x40 - ternary
 
@@ -382,6 +385,14 @@ Example:
 	ternary    ; 0x11 will be pushed
 ```
 
+Inputs:
+   * 1 - False value
+   * 2 - True value
+   * 3 - Input
+
+Outputs:
+   * 1 - If input == 0: False value, otherwise True value
+
 #### 0x48 - sin
 
 Pops 1 value and pushes the sin() result.
@@ -391,7 +402,13 @@ The sin operation is done as follows:
 pushStack((unsigned int)(fsin((float)popStack() * (float)0.00000027));
 ```
 
-Note: Shouldn't this always cause 0 to be pushed?
+Note: Shouldn't this always cause 0 to be pushed? Decompiler output must be wrong.
+
+Inputs:
+   * 1 - input
+
+Outputs:
+   * 1 - sin(input)
 
 #### 0x49 - cos
 
@@ -402,57 +419,75 @@ The sin operation is done as follows:
 pushStack((unsigned int)(fcos((float)popStack() * (float)0.00000027));
 ```
 
-Note: Shouldn't this always cause 0 to be pushed?
+Note: Shouldn't this always cause 0 to be pushed? Decompiler output must be wrong.
+
+Inputs:
+   * 1 - input
+
+Outputs:
+   * 1 - cos(input)
 
 #### 0x60 - memcpy
 
 Copies n bytes from the source into the destination.
 
-Takes 3 arguments:
-1 - Length
-2 - Source pointer
-3 - Destination pointer
+Inputs:
+   * 1 - Length
+   * 2 - Source pointer
+   * 3 - Destination pointer
+
+Outputs:
 
 #### 0x61 - memclr
 
 Sets n bytes in the destination to 0.
 
-Takes 2 arguments:
-1 - Length
-2 - Destination pointer
+Inputs
+   * 1 - Length
+   * 2 - Destination pointer
+
+Outputs:
 
 #### 0x62 - memset
 
 Sets n bytes in the destination to x.
 
-Takes 3 arguments:
-1 - Value to set
-2 - Length
-3 - Destination pointer
+Inputs:
+   * 1 - Value to set
+   * 2 - Length
+   * 3 - Destination pointer
+
+Outputs:
 
 #### 0x63 - memcmp
 
 Compares n bytes. Pushes 1 if equal, otherwise 0.
 
-Takes 3 arguments:
-1 - Length
-2 - Source pointer
-3 - Destination pointer
+Inputs:
+   * 1 - Length
+   * 2 - Source pointer
+   * 3 - Destination pointer
+
+Outputs:
 
 #### 0x68 - strlen
 
 Counts the length of a null-terminated string and pushes the result.
 
-Takes 1 argument:
-1 - Pointer to string
+Inputs:
+   * 1 - Pointer to string
+
+Outputs:
 
 #### 0x69 - streq
 
 Compares two null-terminated strings and pushes the result.
 
-Takes 2 arguments:
-2 - String 1 pointer
-3 - String 2 pointer
+Inputs:
+   * 2 - String 1 pointer
+   * 3 - String 2 pointer
+
+Outputs:
 
 #### 0x6f - sprintf
 
@@ -489,8 +524,10 @@ Takes 1 argument (size), and attempts to allocate local memory. Pushes the addre
 
 Maximum size allowed is 0x1000000. Any attempt to allocate more (in total or in a single go) will crash the VM.
 
-Takes 1 argument:
-1 - Size
+Inputs:
+   * 1 - Size
+
+Outputs:
 
 #### 0x71 - free
 
@@ -498,8 +535,10 @@ Takes 1 argument (address), and attempts to free local memory. Pushes ??? onto t
 
 Any attempt to free memory ourside the 0x12______ range will cause the VM to crash.
 
-Takes 1 argument:
-1 - Address of block to free
+Inputs:
+   * 1 - Address of block to free
+
+Outputs:
 
 #### 0x78 - cmd_78 / confirm
 
@@ -628,7 +667,6 @@ It seems that the following:
 ```
 will load the value stored at the given offset, and push it onto the stack.
 
-
 #### System: Stack
 
 The stack actually grows downwards inside the engine, but to the VM, it appears to be growing upwards.
@@ -645,36 +683,23 @@ The StackPush routine pushes 32-bit values onto the VM stack.
 `ecx+28` - Stack
 
 Address: `00422400`
+
 Arguments:
-    DWORD on ESI+4
-    VM Struct offset in ECX
-
-#### Opcode: sys1 0x58
-
-4A78C4 - Read in 4440C0
-4A78E0 - Read in 444220
-4A78A8 - Read in 444330 loop
-
-#### Opcode: grp1 0x02
-
-Pops 1 argument off the stack. If the value is 0x01 or 0x03E8, CrashVM will be called.
-
-Writes to:
-`00471AFC` - EAX/ECX
-`004A471C` - 0
+   * DWORD on ESI+4
+   * VM Struct offset in ECX
 
 #### Routine: VM execution loop
 
-At address `0043DDA8`, the engine calls the subroutine of whatever opcode is being executed. You can find the pointer for the VMStateStruct in the EDI register when execution reaches this address.
+At address `0043DDA8`, the engine calls the subroutine of whatever opcode is being executed. You can find the pointer for the `VMStateStruct` in the EDI register when execution reaches this address.
 
 #### Routine: GetTime
 
-If value at `004A78F0` is 1, timeGetTime() will be called.
-Otherwise, GetTickCount() will be called.
+If value at `004A78F0` is 1, `timeGetTime()` will be called.
+Otherwise, `GetTickCount()` will be called.
 
 #### Struct VMStateStruct
 
-This is the VMState struct. It's actually a VM thread, and there can be more than 1 VMState during execution.
+This is the `VMState` struct. It's actually a VM thread, and there can be more than 1 `VMState` during execution.
 
 ```c
 struct
@@ -736,15 +761,15 @@ struct
 
 Guess: Calls the callback function once the timeout value is reached.
 
-If a new VMCallback is placed in unknown21, then the already loaded callback will immediately be called.
+If a new `VMCallback` is placed in `unknown21`, then the already loaded callback will immediately be called.
 
 #### Global variables
 
-gIsWindowActive - Is the main window in focus? Is set to 0 if WA_INACTIVE was sent, and set to 1 if any other activation message was sent.
-gSearchPaths - VMLinkedList of directory paths (Assumed to be search paths)
-DAT_00471758 - Probably a list of directories used for searching when reading files
-DAT_00484130 - Might be a default directory string
-gMillisecondsPerFrame - Framerate in milliseconds between frames
+* `gIsWindowActive` - Is the main window in focus? Is set to 0 if `WA_INACTIVE` was sent, and set to 1 if any other activation message was sent.
+* `gSearchPaths` - `VMLinkedList` of directory paths (Assumed to be search paths)
+* `DAT_00471758` - Probably a list of directories used for searching when reading files
+* `DAT_00484130` - Might be a default directory string
+* `gMillisecondsPerFrame` - Framerate in milliseconds between frames
 
 #### Opcode: move_arg
 
@@ -822,20 +847,20 @@ Copies up to 15 values from pointer to the destination as determined by the cons
 If the array given by the pointer contains more than 15 values, the VM will crash. The array is NULL terminated.
 
 Can return these error codes:
--0x7fffffff - Invalid key size
--0x7ffffffe - Key array too big
+* -0x7fffffff - Invalid key size
+* -0x7ffffffe - Key array too big
 
 Returns 0 on success
 
 Destination depends on param_1.
-0x8000 = DAT_00471ef8
-0x4000 = DAT_00471eb8
-0x2000 = DAT_00471e78
-0x1000 = DAT_00471e38
-0x0200 = DAT_00471df8
-0x0100 = DAT_00471db8
-0x0080 = DAT_00471d78
-0x0040 = DAT_00471d38
+* 0x8000 = `DAT_00471ef8`
+* 0x4000 = `DAT_00471eb8`
+* 0x2000 = `DAT_00471e78`
+* 0x1000 = `DAT_00471e38`
+* 0x0200 = `DAT_00471df8`
+* 0x0100 = `DAT_00471db8`
+* 0x0080 = `DAT_00471d78`
+* 0x0040 = `DAT_00471d38`
 
 Tables
 ------
@@ -990,21 +1015,21 @@ sys1 - System Control
 
 #### 0x80 0x00 - sys1.srand
 
-Seeds the random number generator (using \_srand()).
+Seeds the random number generator (using `_srand()`).
 
 Inputs:
-    1 - Seed
+   * 1 - Seed
 
 Outputs:
 
 #### 0x80 0x01 - sys1.rand
 
-Calls \_rand() to get a random number between 0 and 32767 (0x7FFF), and pushes it onto the stack.
+Calls `_rand()` to get a random number between 0 and 32767 (0x7FFF), and pushes it onto the stack.
 
 Inputs:
 
 Outputs:
-    1 - Random number (between 0x0000 to 0x7FFF inclusive)
+   * 1 - Random number (between 0x0000 to 0x7FFF inclusive)
 
 #### 0x80 0x02 - sys1.randrange
 
@@ -1013,19 +1038,19 @@ Generate a random number between 0 and a given max value (non-inclusive) and pus
 No generated number will ever exceed the value 0x7FFFFFFF.
 
 Inputs:
-    1 - Range (between 0x00000000 to 0x80000000 - result is non-inclusive)
+   * 1 - Range (between 0x00000000 to 0x80000000 - result is non-inclusive)
 
 Outputs:
-    1 - Random number
+   * 1 - Random number
 
 #### 0x80 0x04 - sys1.time
 
-Pushes the current system time in milliseconds onto the stack (precision depends on gUseGetTime).
+Pushes the current system time in milliseconds onto the stack (precision depends on `gUseGetTime`).
 
 Inputs:
 
 Outputs:
-    1 - Time in milliseconds
+   * 1 - Time in milliseconds
 
 #### 0x80 0x08 - sys1.cursorpos
 
@@ -1034,17 +1059,17 @@ Gets the cursor position relative to the main window, and pushes the X and Y coo
 Inputs:
 
 Outputs:
-    1 - Y position
-    2 - X position
+   * 1 - Y position
+   * 2 - X position
 
 #### 0x80 0x0C - sys1.localtime
 
-Get's the system's local time (using GetLocalTime) and writes it to the pointer given as the first argument.
+Get's the system's local time (using `GetLocalTime()`) and writes it to the pointer given as the first argument.
 
-The data written will be in the format of the Windows SYSTEMTIME structure.
+The data written will be in the format of the Windows `SYSTEMTIME` structure.
 
 Inputs:
-    1 - Pointer where result will be written
+   * 1 - Pointer where result will be written
 
 Outputs:
 
@@ -1055,7 +1080,7 @@ Reads the global variable gIsMinimised_maybe and pushes it onto the stack. Might
 Inputs:
 
 Outputs:
-    1 - gIsMinimised_maybe
+   * 1 - gIsMinimised_maybe
 
 #### 0x80 0x0F - sys1.windowactive
 
@@ -1064,47 +1089,48 @@ Pushes 1 onto the stack if the main window is active, otherwise it pushes 0.
 Inputs:
 
 Outputs:
-    1 - gIsWindowActive
+   * 1 - gIsWindowActive
 
 #### 0x80 0x28 - sys1.mkdir
 
 Create a directory at the given path.
+
 Returns 1 if the directory was created, or 0 is the directory could not be created or already exists.
 
 Inputs:
-    1 - Pointer to path string
+   * 1 - Pointer to path string
 
 Outputs:
-    1 - 1 if successful, 0 otherwise.
+   * 1 - 1 if successful, 0 otherwise.
 
 #### 0x80 0x2A - sys1.isdir
 
 Return 1 if the path given is a directory, otherwise it returns 0.
 
 Inputs:
-    1 - Pointer to path string
+   * 1 - Pointer to path string
 
 Outputs:
-    1 - 1 if path is a directory, otherwise 0.
+   * 1 - 1 if path is a directory, otherwise 0.
 
 #### 0x80 0x34 - sys1.fileexists
 
 Takes 2 arguments, and return 1 if the file exists, otherwise 0.
 
-There's something funky going on with someVisualStudioLibFunc(&DAT_00484130). 
+There's something funky going on with `someVisualStudioLibFunc(&DAT_00484130)`.
 
 Inputs:
-    1 - Filename
-    2 - Directory (optional)
+   * 1 - Filename
+   * 2 - Directory (optional)
 
 Outputs:
-    1 - 1 is file exists, otherwise 0
+   * 1 - 1 is file exists, otherwise 0
 
 #### 0x80 0x37 - sys1.adddir
 
 This opcode seems to be appending a string to a linked list.
 
-The tail of the linked list is at gSearchPaths.
+The tail of the linked list is at `gSearchPaths`.
 
 The linked list follows this structure:
 ```c
@@ -1119,15 +1145,14 @@ struct LinkedStrList
 
 Takes 2 arguments; One a pointer to the destination in memory, and the 2nd the path type.
 
-If the type is 0, then we get gCurrentDirectory.
-If the type is 1, then we get DAT_00484130.
+If the type is 0, then we get `gCurrentDirectory`. If the type is 1, then we get `DAT_00484130`.
 
 Inputs:
-    1 - Type
-    2 - Pointer to destination
+   * 1 - Type
+   * 2 - Pointer to destination
 
 Outputs:
-    1 - 1 if successful, or 0 if no suitable path was found for the given type.
+   * 1 - 1 if successful, or 0 if no suitable path was found for the given type.
 
 #### 0x80 0x40 - sys1.loadcode
 
@@ -1151,26 +1176,18 @@ strEnvironBp:
 	.asciiz "environ._bp"
 ```
 
-Note 1:
-When loading the file, the VM allocates 128KiB of heap memory. The size of the file is not checked, thus is the file is greater than 128KiB, a buffer overflow will occur and might crash the VM.
-
-Note 2:
-The error string buffer is only 256 bytes, thus if the file name is long enough, the sprintf will cause a buffer overflow on the stack.
+Notes:
+* When loading the file, the VM allocates 128KiB of heap memory. The size of the file is not checked, thus is the file is greater than 128KiB, a buffer overflow will occur and might crash the VM.
+* The error string buffer is only 256 bytes, thus if the file name is long enough, the sprintf will cause a buffer overflow on the stack.
 
 Possible errors:
-    `指定されたプログラム [ %s : %s ] は存在しません`
-    `The specified program [ %s : %s ] does not exist`
-    
-    `"コード領域のサイズが不足しているので、プログラム [ %s : %s ] を読み込むことができません"`
-    `The program [ %s : %s ] cannot be loaded because the code area size is insufficient`
-
-    (From readEncodedFile())
-    `指定されたファイル [ %s ] は存在しません`
-    `The specified file [ %s ] does not exist`
+   * `指定されたプログラム [ %s : %s ] は存在しません` (`The specified program [ %s : %s ] does not exist`)
+   * `"コード領域のサイズが不足しているので、プログラム [ %s : %s ] を読み込むことができません"` (`The program [ %s : %s ] cannot be loaded because the code area size is insufficient`)
+   * From readEncodedFile(): `指定されたファイル [ %s ] は存在しません` (`The specified file [ %s ] does not exist`)
 
 Inputs:
-    1 - Pointer to filename
-    2 - Opinter to archive filename (optional)
+   * 1 - Pointer to filename
+   * 2 - Opinter to archive filename (optional)
 
 Outputs:
 
@@ -1180,13 +1197,13 @@ Unload the program at the top of the program code stack.
 
 Unloading the main program will result in a crash.
 
-`メインプログラムまで削除されてしまいました`
-`The main program has been deleted`
+Possible errors:
+   * If the last remaining program is uploaded: `メインプログラムまで削除されてしまいました` (`The main program has been deleted`)
 
 Inputs:
 
 Outputs:
-1 - Number of programs loaded (after freeing the top most), or -0x7FFFFFFF on error.
+   * 1 - Number of programs loaded (after freeing the top most), or -0x7FFFFFFF on error.
 
 #### 0x80 0x44 - sys1.newthread
 
@@ -1195,14 +1212,14 @@ Load the code file and create a new VM thread.
 Max filesize: 0x20000 bytes (128 KiB)
 
 Inputs:
-    1 - Local memory size???
-    2 - Codespace size
-    3 - Stack size
-    4 - Filename
-    5 - Archive filename
+   * 1 - Local memory size???
+   * 2 - Codespace size
+   * 3 - Stack size
+   * 4 - Filename
+   * 5 - Archive filename
 
 Outputs:
-    1 - threadId of the new VM thread
+   * 1 - threadId of the new VM thread
 
 #### 0x80 0x46 - sys1.threadid
 
@@ -1211,73 +1228,80 @@ Pushes the current VMState's threadId onto the stack.
 Inputs:
 
 Outputs:
-    1 - vmState->threadId
+   * 1 - `vmState->threadId`
 
 #### 0x80 0x5A - 0x5A
 
-Creates a new callback struct with the time remaining in vmState->timer1, and attaches it to the VM.
+Creates a new callback struct with the time remaining in `vmState->timer1`, and attaches it to the VM.
 
-The callback func is set to FUN_0041d770.
+The callback func is set to `FUN_0041d770`.
 
 It's unknown what the consequences of this is.
 
 Inputs:
 
 Outputs:
-	1 - 1 if there is remaining time, 0 is the current tim is greater than that in timer1
+   * 1 - 1 if there is remaining time, 0 is the current tim is greater than that in timer1
 
 #### 0x80 0x64 - sys1.displaywindow
 
 Takes 1 argument from stack. If the value if 0, close the window. If the value is 1 or above, show the window.
 
+Inputs:
+   * 1 - Boolean show window
+
+Outputs:
+
 #### 0x80 0x66 - windowtitle
 
-Sets the title of the main window. It does this by passing a pointer to a string from the stack to SetWindowTextA().
+Sets the title of the main window. It does this by passing a pointer to a string from the stack to `SetWindowTextA()`.
 
-Takes 1 argument:
-1 - Pointer to string to use as window title
+Inputs:
+   * 1 - Pointer to string to use as window title
+
+Outputs:
 
 #### 0x80 0x67 - cursorshape
 
 Sets the cursor shape (gCursorShape) as given by the 1st argument on stack.
 
 Possible values:
-0 - ???
-1 - ???
-2 - ???
-3 - ???
-4 - ???
+* 0 - ???
+* 1 - ???
+* 2 - ???
+* 3 - ???
+* 4 - ???
 
 Any other value will crash the VM.
 
-Takes 1 argument:
-1 - Cursor shape ID
+Inputs:
+   * 1 - Cursor shape ID
+
+Outputs:
 
 #### 0x80 0x70 - sys1.0x70
 
 Allocates global memory (and frees any previously allocated global memory).
 
 The memory size is defined as follows:
-
-0 - 0x1000   -   1 KiB
-1 - 0x2000   -   2 KiB
-2 - 0x4000   -   4 KiB
-3 - 0x8000   -   8 KiB
-4 - 0x10000  -  64 KiB
-5 - 0x20000  - 128 KiB
-6 - 0x40000  - 256 KiB
-7 - 0x80000  - 512 KiB
-8 - 0x100000 -   1 MiB
+* 0 - 0x1000   -   1 KiB
+* 1 - 0x2000   -   2 KiB
+* 2 - 0x4000   -   4 KiB
+* 3 - 0x8000   -   8 KiB
+* 4 - 0x10000  -  64 KiB
+* 5 - 0x20000  - 128 KiB
+* 6 - 0x40000  - 256 KiB
+* 7 - 0x80000  - 512 KiB
+* 8 - 0x100000 -   1 MiB
 
 Possible errors:
-	`無効なサイズ番号 [ %d ] が指定されました`
-	`Invalid size number [ %d ] specified`
+   * `無効なサイズ番号 [ %d ] が指定されました`	(`Invalid size number [ %d ] specified`)
 
 Inputs:
-    1 - Memory size
+   * 1 - Memory size
 
 Outputs:
-    1 - 1 if successful, 0 if unsuccessful
+   * 1 - 1 if successful, 0 if unsuccessful
 
 #### Sys1 Table
 
@@ -1534,15 +1558,13 @@ grp1 - Graphics Control
 Sets the framerate. Framerates from 1 to 1000 are allowed.
 
 Technical:
-    It will set the global variable gMillisecondsPerFrame to (int)(1000/framerate)
+   * It will set the global variable gMillisecondsPerFrame to (int)(1000/framerate)
 
 Possible errors:
-	If framerate is 0, or above 1000
-	`無効なフレームレート [ %d ] が指定されました`
-	`Invalid frame rate [ %d ] specified`
+   * If framerate is 0, or above 1000: `無効なフレームレート [ %d ] が指定されました` (`Invalid frame rate [ %d ] specified`)
 
 Inputs:
-    1 - Framerate
+  *  1 - Framerate
 
 Outputs:
 
@@ -1551,28 +1573,24 @@ Outputs:
 Sets the cache size (What kind of cache?).
 
 Technical:
-    Allocates a cache struct into gGraphicsCache.
+   * Allocates a cache struct into gGraphicsCache.
 
 Possible errors:
-    If cache size is set to more than 0x4000000
-    `無効なキャッシュサイズ [ %d ] が指定されました`
-    `Invalid cache size [ %d ] specified`
+   * If cache size is set to more than 0x4000000: `無効なキャッシュサイズ [ %d ] が指定されました` (`Invalid cache size [ %d ] specified`)
 
 Inputs:
-    1 - Cache size
+   * 1 - Cache size
 
 Outputs:
 
 #### 0x90 0x0C - grp1.0x0C
 
 Possible errors:
-    If arg2 is over 0x100
-    `無効なエフェクトレベル／トランスペアレンシィ／アディションレベル [ %d ] が指定されました`
-    `Invalid effect level / transparency / addition level [ %d ] specified`
+   * If arg2 is over 0x100: `無効なエフェクトレベル／トランスペアレンシィ／アディションレベル [ %d ] が指定されました` (`Invalid effect level / transparency / addition level [ %d ] specified`)
 
 Inputs:
-    1 - 
-    2 - 
+   * 1 - 
+   * 2 - 
 
 #### 0x90 0x0D - grp1.setantialiasing
 
@@ -1581,15 +1599,14 @@ Sets anti-aliasing level.
 Allowed values: 0, 1 and 2.
 
 Technical:
-    Writes to DAT_004710c4 and DAT_004710c8.
-    The values written are [4, 2], [5, 4] or [6, 6], depending on the level.
+   * Writes to `DAT_004710c4` and `DAT_004710c8`.
+   * The values written are [4, 2], [5, 4] or [6, 6], depending on the level.
 
 Possible errors:
-    `無効なアンチエイリアスレベル [ %d ] が指定されました`
-    `Invalid antialiasing level [ %d ] specified`
+   * `無効なアンチエイリアスレベル [ %d ] が指定されました` (`Invalid antialiasing level [ %d ] specified`)
 
 Inputs:
-    1 - Anti-aliasing level
+   * 1 - Anti-aliasing level
 
 Outputs:
 
@@ -1598,36 +1615,24 @@ Outputs:
 Sets, prepares or loads fonts?
 
 Possible errors:
-	???
-	`無効なキャッシュ量 [ %d ] が指定されました`
-	`Invalid cache amount [ %d ] specified`
-
-	???
-	`無効なフォントサイズ [ %d ] が指定されました`
-	`Invalid font size [ %d ] specified`
-
-	???
-	`無効なフォント幅 [ %d ] が指定されました`
-	`Invalid font width [ %d ] specified`
-
-	If the font ID does not correlate to a valid font
-	`無効なフォント番号 [ %d ] が指定されました`
-	`Invalid font number [ %d ] specified`
+   * ???: `無効なキャッシュ量 [ %d ] が指定されました` (`Invalid cache amount [ %d ] specified`)
+   * ???: `無効なフォントサイズ [ %d ] が指定されました` (`Invalid font size [ %d ] specified`)
+   * ???: `無効なフォント幅 [ %d ] が指定されました` (`Invalid font width [ %d ] specified`)
+   * If the font ID does not correlate to a valid font: `無効なフォント番号 [ %d ] が指定されました` (`Invalid font number [ %d ] specified`)
 
 Inputs:
-    1 - Cache amount
-    2 - ???
-    3 - Font width
-    4 - Font size
-    5 - Font ID
+   * 1 - Cache amount
+   * 2 - ???
+   * 3 - Font width
+   * 4 - Font size
+   * 5 - Font ID
 
 Outputs:
 
 #### 0x90 0x60 - grp1.0x60
 
 Possible errors:
-    `これ以上、フィルターオブジェクトを生成する事は出来ません`
-    `No more filter objects can be created`
+   * `これ以上、フィルターオブジェクトを生成する事は出来ません` (`No more filter objects can be created`)
 
 Inputs:
 
@@ -1636,45 +1641,40 @@ Outputs:
 
 #### 0x90 0x94 - grp1.0x94
 
-Writes arg1 to:
-DAT_00471188
+Writes arg1 to `DAT_00471188`
 
 Inputs:
-    1 - ???
+  *  1 - ???
 
 Outputs:
 
 #### 0x90 0x95 - grp1.0x95
 
 Possible errors:
-    If arg1 is under 0x1 or above 0x100
-    `無効な分割回数 [ %d ] が指定されました`
-    `Invalid split count [ %d ] specified`
+   * If arg1 is under 0x1 or above 0x100: `無効な分割回数 [ %d ] が指定されました` (`Invalid split count [ %d ] specified`)
 
 Inputs:
-    1 - ??? into DAT_0047118c
-    2 - ??? into DAT_00471190
+   * 1 - ??? into DAT_0047118c
+   * 2 - ??? into DAT_00471190
 
 Outputs:
 
 #### 0x90 0x96 - grp1.0x96
 
 Possible errors:
-    If arg1 is under 0x1 or above 0x100
-    `無効な分割回数 [ %d ] が指定されました`
-    `Invalid split count [ %d ] specified`
+   * If arg1 is under 0x1 or above 0x100: `無効な分割回数 [ %d ] が指定されました` (`Invalid split count [ %d ] specified`)
 
 Inputs:
-    1 - ??? into DAT_00471194
-    2 - ??? into DAT_00471198
+   * 1 - ??? into DAT_00471194
+   * 2 - ??? into DAT_00471198
 
 Outputs:
 
 #### 0x90 0x97 - grp1.0x97
 
 Inputs:
-    1 - ??? into DAT_004823c8
-    2 - ??? into DAT_004823cc
+   * 1 - ??? into DAT_004823c8
+   * 2 - ??? into DAT_004823cc
 
 Outputs:
 
@@ -1682,34 +1682,32 @@ Outputs:
 #### 0x90 0x98 - grp1.0x98
 
 Possible errors:
-    `指定されたビットマップ [ %d ] は存在しないか、スクリーンと互換性がありません`
-    `The specified bitmap [ %d ] does not exist or is incompatible with the screen`
+   * `指定されたビットマップ [ %d ] は存在しないか、スクリーンと互換性がありません` (`The specified bitmap [ %d ] does not exist or is incompatible with the screen`)
 
 Inputs:
-    1 - ???
-    2 - ??? Pointer
+   * 1 - ???
+   * 2 - ??? Pointer
 
 Outputs:
 
 #### 0x90 0xAF - grp1.0xAF
 
 Writes arg1 to:
-DAT_00482404
-DAT_00482408
-DAT_00482440
+* `DAT_00482404`
+* `DAT_00482408`
+* `DAT_00482440`
 
 Inputs:
-    1 - ???
+   * 1 - ???
 
 Outputs:
 
 #### 0x90 0x9F - grp1.0x9F
 
-Writes arg1 to:
-DAT_004823d0
+Writes arg1 to `DAT_004823d0`
 
 Inputs:
-    1 - ???
+   * 1 - ???
 
 Outputs:
 
@@ -1718,8 +1716,7 @@ Outputs:
 These addresses are associated with the grp1 instruction. The grp1 instruction is a 2-byte instruction. The 2nd byte is used to select an address from the jumptable.
 
 Possible errors:
-`未定義のグラフィック制御命令 $90%02X を検出しました`
-`Undefined graphic control instruction $90%02X detected`
+   * `未定義のグラフィック制御命令 $90%02X を検出しました` (`Undefined graphic control instruction $90%02X detected`)
 
 ```
 0x00 0x00B03743 - 
