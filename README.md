@@ -7,7 +7,7 @@ Currently the goal is to re-implement the engine in Javascript and make it possi
 
 For now, all reverse-engineering efforts are based on the version of BGI found in the Lump of Sugar visual novel Nursery Rhyme (`Ethornell - Buriko General Interpreter ver 1.64 ( build : 398.3 )`). The tools may work with other games, but you'll likely run into problems fairly quickly.
 
-This is a clean-room reverse engineering project, and we have no intention of facilitating piracy, therefore no files from any games are included in this repository and must be acquired elsewhere.
+This is a clean-room reverse engineering project, and we have no intention of facilitating piracy, therefore no files from any games are included in this repository and must be acquired elsewhere. The downloader script can assist in fetching trial versions of a select few games from official sources.
 
 Technical documentation
 -----------------------
