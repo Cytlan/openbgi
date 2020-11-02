@@ -5,9 +5,21 @@ This document attempts to document and explain the technical aspects of the Buri
 
 The goal of this project is to make an open source, BGI compatible engine.
 
-This document is still a work in progress and some parts of it may not be accurate, and some parts of it only applies to the BGI engine found in the Nursery Rhyme visual novel.
+This document is still a work in progress and some parts of it may not be accurate, and some parts of it only applies to the BGI engine found in the visual novels from Lump of Sugar.
 
 We have borrowed some of the instruction names from the bgidis project and the EthornellTools project, and some assumptions regarding the engine's inner workings are also derived from these projects until we have more information.
+
+Currently this document is based on the following versions:
+```
+Ethornell - Buriko General Interpreter ver 1.58 ( build : 389.2 ) - Nursery Rhyme (2005)
+Ethornell - Buriko General Interpreter ver 1.69 ( build : 444.2 ) - Tayutama (2008)
+Ethornell - BURIKO General Interpreter ( Version : 1.633 - Compatibility : 1.72 ) - Tayutama 2 (2016)
+```
+
+Notes
+-----
+
+`VMThread` and `VMState` refers to the same class. It was renamed `VMThread` to better fit with the terminology used in the engine, but `VMState` might still appear in these docs.
 
 The virtual machine
 -------------------
@@ -111,6 +123,27 @@ Example:
 	push16 0x8000 ; Will push 0xFFFF8000
 ```
 
+#### Integer size enum
+
+Many opcodes accept an argument determining the integer size that will be used. The mapping is as follows:
+* 0x00 - uint8_t
+* 0x01 - uint16_t
+* 0x02 - uint32_t
+
+Using other values than these can cause crashes and other difficult-to-debug errors due to poor handling on illegal integer size values.
+
+#### Address
+
+An `address` is a 32-bit value representing a memory location in the VM's memory space.
+
+#### Offset
+
+An `offset` is an address that is relative to certain addresses in memory. Most commonly this is used in the code space, meaning that the *address* `0x11001234` will also be an *offset* `0x1234`.
+
+#### Pointer
+
+Many opcodes accept an arbitrary VM address which is resolved to a memory location in the interpreter's process space. When an `address` is resolved into a memory address like this, we call it a `pointer` which is is treated differently than an `address`.
+
 Opcodes
 -------
 
@@ -119,146 +152,189 @@ How to read the inputs/outputs:
 The input args / output results are displayed in the order the should appear on the stack. "Top of stack" will always be the most recent element pushed onto the stack.
 
 ```
+Opcode arguments:
+   * 1 - int8_t - Immediate Value 1
+   * 2 - int8_t - Immediate Value 2
+
 Inputs:
-   1 - Arg 1 (top of stack)
-   2 - Arg 2 (2nd most top of stack)
-   3 - Arg 3 (3rd most top of stack)
+   * 1 - Arg 1 (top of stack)
+   * 2 - Arg 2 (2nd most top of stack)
+   * 3 - Arg 3 (3rd most top of stack)
 
 Outputs:
-   1 - Res 1 (top of stack)
-   2 - Res 2 (2nd most top of stack)
-   3 - Res 3 (3rd most top of stack)
+   * 1 - Res 1 (top of stack)
+   * 2 - Res 2 (2nd most top of stack)
+   * 3 - Res 3 (3rd most top of stack)
 ```
 
 #### 0x00 - push8
 
-Takes 1 8-bit immediate argument and pushes it onto the stack.
+Takes an 8-bit immediate argument and pushes it onto the stack.
 
-Inputs:
+Opcode arguments:
+   * 1 - int8_t - Value
 
-Outputs:
+Stack inputs:
+
+Stack outputs:
+   * 1 - Value
 
 #### 0x01 - push16
 
-Takes 1 16-bit immediate argument and pushes it onto the stack.
+Takes a 16-bit immediate argument and pushes it onto the stack.
 
-Inputs:
+Opcode arguments:
+   * 1 - int16_t - Value
 
-Outputs:
+Stack inputs:
+
+Stack outputs:
+   * 1 - Value
 
 #### 0x02 - push32
 
-Takes 1 32-bit immediate argument and pushes it onto the stack.
+Takes a 32-bit immediate argument and pushes it onto the stack.
 
-Inputs:
+Opcode arguments:
+   * 1 - int32_t - Value
 
-Outputs:
+Stack inputs:
+
+Stack outputs:
+   * 1 - Value
 
 #### 0x04 - baseptr
 
-Takes a 16-bit immediate arguments, subtracts it from the base pointer and pushes the address of the resulting base pointer onto the stack.
+Adds the offset given as a signed integer to `base pointer`, converts it to an absolute address (basically, it adds `0x10000000` to the value) and pushes the result onto the stack.
 
-(The base pointer itself remains unchanged)
+The `base pointer` in the thread state is not modified.
 
-Inputs:
+Opcode arguments:
+   * 1 - int16_t - Offset
 
-Outputs:
+Stack inputs:
 
+Stack outputs:
+   * 1 - Address
 
 #### 0x05 - codeptr
 
-Takes a 2-byte immediate relative address, adds the current PC location and pushes the result the stack.
+Adds the offset given as a signed integer to `instruction pointer`, converts it to an absolute address (basically, it adds `0x11000000` to the value) and pushes the result onto the stack.
 
-The result is thus the absolute address of the relative address.
+The `instruction pointer` in the thread state is not modified (as in, this is not a jump instruction).
 
-Due to the way the VM loads code, it's nessecary to use this opcode for jumps.
+Opcode arguments:
+   * 1 - int16_t - Offset
+
+Stack inputs:
+
+Stack outputs:
+   * 1 - Address
 
 #### 0x06 - codeoffset
 
-Takes a 2-byte immediate relative address and pushes the memory address of that location onto the stack.
+Adds the offset given as a signed integer to `instruction pointer` and pushes the result onto the stack.
 
-#### 0x08 - load
+The `instruction pointer` in the thread state is not modified (as in, this is not a jump instruction).
 
-Takes an address as the first argument and the value size as the immediate argument.
+Note that the `instruction pointer` is relative to the beginning of the code space, which is `0x11000000`, so the value pushed to the stack is not an `absolute address`.
 
-This will read the value from the given memory location and push the resulting value onto the stack.
+Opcode arguments:
+   * 1 - int16_t - Offset
 
-The value size argument can be as follows:
-* 0x00 - 1 byte
-* 0x01 - 2 bytes
-* 0x02 - 4 bytes
+Stack inputs:
+
+Stack outputs:
+   * 1 - Offset
+
+#### 0x08 - readmem
+
+Pops a pointer off the stack, and reads it as an integer of the size given. Finally, it pushes the result onto the stack.
+
+Opcode arguments:
+   * 1 - uint8_t - Integer size (See: Integer size enum)
+
+Stack inputs:
+   * 1 - Pointer
+
+Stack outputs:
+   * 1 - Value
+
+#### 0x09 - writecopy
+
+Pops a pointer off the stack, pops a value off the stack, then writes the value to the destination as an integer of the size given. Finally, it pushes value back onto the stack. Useful if you want to write the same value to many different locations.
+
+Opcode arguments:
+   * 1 - uint8_t - Integer size (See: Integer size enum)
+
+Stack inputs:
+   * 1 - Value
+   * 2 - Pointer
+
+Stack outputs:
+   * 1 - Value
+
+#### 0x0A - write
+
+Pops a pointer off the stack, pops a value off the stack, then writes the value to the destination as an integer of the size given.
+
+Opcode arguments:
+   * 1 - uint8_t - Integer size (See: Integer size enum)
+
+Stack inputs:
+   * 1 - Pointer
+   * 2 - Value
+
+Stack outputs:
+
+#### 0x0B - copycode
+
+Takes up to 255 bytes directly following this opcode, and writes it to the destination. The `instruction pointer` is incremented according to the size argument (as in, the interpreter will skip the code it just treated as data).
+
+Opcode arguments:
+   * 1 - uint8_t - Size in bytes
+
+Stack inputs:
+   * 1 - Pointer
+
+Stack outputs:
+
+#### 0x0C - copystack
+
+Pops a number of values off the stack, and writes them to a place in memory.
 
 Example:
 ```
-	; Read a 32-bit value from base offset 0x10
+	push32 0xDEAD0000
+	push32 0xDEAD0001
+	push32 0xDEAD0002
+	push32 0xDEAD0003
 	baseptr 0x10
-	load 0x02
+	copystack 0x02, 0x04
 ```
 
-#### 0x09 - storepv
-
-Takes an address as the first argument, a value as the 2nd argument and the value size as the immediate argument.
-
-The value given will be written to the memory location by the address given.
-
-The value size argument can be as follows:
-* 0x00 - 1 byte
-* 0x01 - 2 bytes
-* 0x02 - 4 bytes
-
-Anything above 0x02 will result in 0 being used for the vaule.
-
-Example:
-```
-	; Store value 0xDEADBEEF at base offset 0x10
-	push32 0xDEADBEEF
-	baseptr 0x10
-	storevp 0x02
+Equivalent C code:
+```c
+uint32_t* ptr = popStackPointer();
+ptr[0x00] = 0xDEAD0000;
+ptr[0x01] = 0xDEAD0001;
+ptr[0x02] = 0xDEAD0002;
+ptr[0x03] = 0xDEAD0003;
 ```
 
-#### 0x0A - storevp
+Note that unaliged writes is allowed.
 
-Exactly the same as `0x09 storepv`, but the value/address arguments are swapped.
+Opcode arguments:
+   * 1 - uint8_t - Integer size (See: Integer size enum)
+   * 2 - uint8_t - Number of values to write (Max 255)
 
-Example:
-```
-	; Store value 0xDEADBEEF at sp offset 0x10
-	baseptr 0x10
-	push32 0xDEADBEEF
-	storepv 0x02
-```
+Stack inputs:
+   * 1 - Data to write
+   * 2 - Data to write
+   * ...
+   * n - Destination pointer
 
-#### 0x0B - write
-
-This opcode is currently unexplored.
-
-#### 0x0C - storemulti
-
-Pops multiple items off the stack and writes them to a memory location in reverse order.
-
-It takes 2 immediate arguments: 1st argument is the size of the values on the stack (i8, i16 or i32). The 2nd argument is the number of items to pop off the stack.
-
-Example:
-```
-push8 0x10
-push8 0x01
-push8 0x02
-push8 0x03
-storemulti i8, 3
-```
-
-This is the same as:
-stack[0x10] = 0x01
-stack[0x0A] = 0x02
-stack[0x0B] = 0x03
-
-Note: I'm not 100% sure this explanation is correct, but it is close.
-
-Inputs:
-*    n - Item to write
-*    n-1 - Destination pointer
-
-Outputs:
+Stack outputs:
 
 #### 0x10 - loadbase
 
@@ -647,55 +723,17 @@ Jump tests performed:
 	; push32 0xFFFFFFFF; jc 0x07 - Jump taken
 ```
 
-Technical
----------
+Engine Globals
+--------------
 
-#### Routine: CrashVM
+#### gAuxMemoryPointers
 
-Creates an error message, writes the error message to BGIError.txt, and throws an exception. The VM will stop executing if an exception is thrown, so this effectively crashes the VM.
+This is an array of 64 pointers to other memory locations. The current assumption is that a program may load external memory into these 64 slots.
 
-#### Opcode: load
+See also: BGI_AllocAuxMemory
 
-The load opcode calls nurseryrhyme.43E9E0, which pops 1 argument off the stack and fetches something (An address?). It seems to be expecting.
-
-It then reads 1 byte from PC. I'm not sure what the value is used for, but values 0, 1 and 2 or above are significant.
-
-It seems that the following:
-```
-	baseptr 0x200
-	load 0x02
-```
-will load the value stored at the given offset, and push it onto the stack.
-
-#### System: Stack
-
-The stack actually grows downwards inside the engine, but to the VM, it appears to be growing upwards.
-
-#### Routine: StackPop
-
-Pops a value from stack into EAX
-
-#### Routine: StackPush
-
-The StackPush routine pushes 32-bit values onto the VM stack.
-
-`ecx+10` - StackSize
-`ecx+28` - Stack
-
-Address: `00422400`
-
-Arguments:
-   * DWORD on ESI+4
-   * VM Struct offset in ECX
-
-#### Routine: VM execution loop
-
-At address `0043DDA8`, the engine calls the subroutine of whatever opcode is being executed. You can find the pointer for the `VMStateStruct` in the EDI register when execution reaches this address.
-
-#### Routine: GetTime
-
-If value at `004A78F0` is 1, `timeGetTime()` will be called.
-Otherwise, `GetTickCount()` will be called.
+Engine Structs
+--------------
 
 #### Struct VMStateStruct
 
@@ -763,104 +801,74 @@ Guess: Calls the callback function once the timeout value is reached.
 
 If a new `VMCallback` is placed in `unknown21`, then the already loaded callback will immediately be called.
 
-#### Global variables
+Engine Functions
+----------------
 
-* `gIsWindowActive` - Is the main window in focus? Is set to 0 if `WA_INACTIVE` was sent, and set to 1 if any other activation message was sent.
-* `gSearchPaths` - `VMLinkedList` of directory paths (Assumed to be search paths)
-* `DAT_00471758` - Probably a list of directories used for searching when reading files
-* `DAT_00484130` - Might be a default directory string
-* `gMillisecondsPerFrame` - Framerate in milliseconds between frames
+#### BGI_ResolveAddr
 
-#### Opcode: move_arg
-
-Only acceps values in the region of: 0x10000000 to 0x12FFFFFF and 0x40000000 to 0x40FFFFFF. Otherwise it calls CrashVM.
-
-EBX: 0x0000000F
-ECX: 0x0000001F
-EDX: 0x00000003
-EBP: 0x0019FEF0
-ESI: 0x0000000A
-EDI: 0x022F61A8
-
------
-
-ESI: 0x022F61A8
-PUSH EDI 0x022F61A8
-PUSH ESI 0x022F61A8
-
-PopStack
-EAX: 0x10000008
-ECX: 0x022F6258
-
-s[0]: 0x10000008
-s[1]: 0x022F61A8
-sub_43E8A0
-
-ESI: 0x10000008 (Value that we popped from the stack)
-if(esi == 0) return;
-mov edi esi
-edi = edi >> 24
-if(edi > 0x12) something...
-else
-jump addresses[lookup[0x43E9CC + edi]]
-
-        0 1 2 3 4 5 6 7 8 9 A B C D E F 0 1 2
-lookup={0,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,1,2,3}
-addresses={0043E8D0, 0043E8E8, 0043E905, 0043E922, 0043E93E}
-
-0043E8D0:
-0043E8E8:
-EAX = `*((&VMStateStruct)+0x4C)`
-0043E905:
-EAX = `*((&VMStateStruct)+0x34)`
-0043E922
-EAX = `*((&VMStateStruct)+0x50)`
-
-#### FUN_0042ca10
-
-This is found in the sys1.0x64 (showwindow) opcode as well as sys1.0x10
-
-Unknown what it does or why.
-
+Signature:
 ```c
-void FUN_0042ca10(void)
-{
-  undefined4 *puVar1;
-  
-  puVar1 = &DAT_004a47b4; // 0x1400 bytes, 5 entries each
-  do {
-    puVar1[-1] = 0;
-    *puVar1 = 0;
-    puVar1[1] = 0;
-    puVar1[3] = 0;
-    puVar1 = puVar1 + 5;
-  } while ((int)puVar1 < 0x4a5bb4);
-  return;
-}
+uint8_t* BGI_ResolveAddr(uint32_t address, VMThread* thread);
 ```
 
-#### FUN_0042cf60
+Returns a virtual pointer from the engine to a memory address. The base location of the pointer varies depending on the pointer. The following mapping is used:
 
-Takes 1 constant and 1 pointer.
-Copies up to 15 values from pointer to the destination as determined by the constant.
+* `0x00??????` - DAT_0048e3ec
+* `0x01??????` - Error 1
+* ...
+* `0x0F??????` - Error 1
+* `0x10??????` - Local memory
+* `0x11??????` - Code space
+* `0x12??????` - Unknown struct buffer
+* `0x13??????` - Error 1
+* ...
+* `0x3F??????` - Error 1
+* `0x40??????` - gAuxMemoryPointers[0] or Error 2
+* ...
+* `0x7F??????` - gAuxMemoryPointers[63] or Error 2
+* `0x80??????` - Error 2
+* ...
+* `0xFF??????` - Error 2
 
-If the array given by the pointer contains more than 15 values, the VM will crash. The array is NULL terminated.
+Possible errors:
+   * 1: Any address in the range of `0x01000000` - `0x0FFFFFFF`, or `0x13000000` - `0x3FFFFFFF`: `指定されたポインタ [ $%.8X ] は無効な領域を示しています` (`The specified pointer [ $%.8X ] indicates an invalid area`)
+   * 2: Any address >= `0x40000000` that resolves to `NULL`: `無効なポインタ [ $%.8X ] にアクセスしようとしました` (`An attempt was made to access an invalid pointer [ $%.8X ]`)
 
-Can return these error codes:
-* -0x7fffffff - Invalid key size
-* -0x7ffffffe - Key array too big
+#### BGI_AllocAuxMemor
 
-Returns 0 on success
+Signature:
+```c
+uint32_t BGI_AllocAuxMemory(uint memSize);
+```
 
-Destination depends on param_1.
-* 0x8000 = `DAT_00471ef8`
-* 0x4000 = `DAT_00471eb8`
-* 0x2000 = `DAT_00471e78`
-* 0x1000 = `DAT_00471e38`
-* 0x0200 = `DAT_00471df8`
-* 0x0100 = `DAT_00471db8`
-* 0x0080 = `DAT_00471d78`
-* 0x0040 = `DAT_00471d38`
+Allocates a new chunk of memory and copies the pointer to the new memory into the next available `gAuxMemoryPointers` slot.
+
+#### BGI_FreeAuxMemory
+
+Signature:
+```c
+int BGI_FreeAuxMemory(uint32_t auxMemAddr);
+```
+
+Expects a virtual pointer in the range of `0x40000000` to `0x7F000000`. It will `free()` the memory at the given `gAuxMemoryPointers` slot. Returns 1 if successful, and 0 if the pointer was invalid or the given `gAuxMemoryPointers` slot was `NULL`.
+
+#### BGI_GetAuxMemory
+
+Signature:
+```c
+uint8_t* BGI_GetAuxMemory(uint auxMemSlot);
+```
+
+Expects a slot index in the range of `0x00` to `0x3F`. Returns the pointer stored in the given `gAuxMemoryPointers` slot.
+
+#### BGI_CopyCodeFromCurrentLocation
+
+Signature:
+```c
+int BGI_CopyCodeFromCurrentLocation(VMThread* thread, uint8_t* dest, int size);
+```
+
+Takes `size` amount of bytes from the current location the thread is executing, and copies it into `dest`.
 
 Tables
 ------
@@ -883,7 +891,7 @@ These are the base opcodes used by the VM.
 0x06 0x00430720 - 2 offset / getcodeoffset / codeoffset
 0x07 0x00000000
 0x08 0x00430750 - 1 load
-0x09 0x00430800 - 1 move / storepv
+0x09 0x00430800 - 1 copycode
 0x0A 0x00430840 - 1 arg / storevp
 0x0B 0x00430880 - 1 cmd_0b / write
 0x0C 0x004308B0 - 1 cmd_0c / storemulti
