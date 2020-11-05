@@ -1,0 +1,5 @@
+*.o
+*.tmp
+*.bin
+*.dll
+*.map
