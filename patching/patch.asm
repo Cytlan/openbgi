@@ -9,12 +9,9 @@ global _start
 global _execOpcodePatch
 global _initPatch
 
-
 SECTION .patch
 
-; Location of the jump table
-basicInstructionsJumptable equ 0x00488420
-
+; Imports from Tayutama
 GetLastError   equ 0x004800e0
 LoadLibraryA   equ 0x00480100
 GetProcAddress equ 0x00480178
@@ -57,32 +54,36 @@ _initPatch:
 .continue:
 	mov dword [libHandle], EAX
 
-	; Load init() function
-	push libProcInitStr
-	push dword [libHandle]
-	call [GetProcAddress]
-	test EAX, EAX
-	jnz .continue2
-		; Loading routine failed, report error
-		push libProcInitStr
-		jmp reportError
-.continue2:
-	mov dword [libProcInit], EAX
+	; Load functions
+	mov ESI, 0x00
+	.loadLoop:
+		; Get string address
+		mov EBX, [ESI*8+libStrProc]
+
+		; End if NULL
+		test EBX, EBX
+		jz .endLoadLoop
+
+		; procAddr = GetProcAddress(libStrProc[index*2], libHandle)
+		push EBX
+		push dword [libHandle]
+		call [GetProcAddress]
+
+		; Report error, if any
+		test EAX, EAX
+		jnz .continueLoadLoop
+			push EBX
+			jmp reportError
+		.continueLoadLoop:
+
+		; libStrProc[(index*2)+4] = procAddr
+		mov [ESI*8+libStrProc+4], EAX
+		inc ESI
+		jmp .loadLoop
+	.endLoadLoop:
 
 	; Call init() function
 	call [libProcInit]
-
-	; Load executeOpcode() function
-	push libProcExecuteOpcodeStr
-	push dword [libHandle]
-	call [GetProcAddress]
-	test EAX, EAX
-	jnz .continue3
-		; Loading routine failed, report error
-		push libProcExecuteOpcodeStr
-		jmp reportError
-.continue3:
-	mov dword [libProcExecuteOpcode], EAX
 
 	ret
 
@@ -116,15 +117,55 @@ reportError:
 	call [ExitProcess]
 	ret
 
+; BGI_ReadCode8
+jmp_BGI_ReadCode8:
+	jmp [libProcBGI_ReadCode8]
+
+; BGI_ReadCode16
+jmp_BGI_ReadCode16:
+	jmp [libProcBGI_ReadCode16]
+
+; BGI_ReadCode32
+jmp_BGI_ReadCode32:
+	jmp [libProcBGI_ReadCode32]
+
 ; DLL loading
 libHandle:               dd 0
 libName:                 db "patch.dll", 0x00
-libProcInitStr:          db "init", 0x00
-libProcExecuteOpcodeStr: db "executeOpcode", 0x00
 
-; DLL functions
-libProcInit:          dd 0
-libProcExecuteOpcode: dd 0
+; Function names
+libProcInitStr:           db "init", 0x00
+libProcExecuteOpcodeStr:  db "executeOpcode", 0x00
+libProcBGI_ReadCode8Str:  db "BGI_ReadCode8", 0x00
+libProcBGI_ReadCode16Str: db "BGI_ReadCode16", 0x00
+libProcBGI_ReadCode32Str: db "BGI_ReadCode32", 0x00
+libProcBGI_PopStackStr:   db "BGI_PopStack", 0x00
+libProcBGI_PushStackStr:  db "BGI_PushStack", 0x00
+
+libStrProc:
+	dd libProcInitStr
+	libProcInit: dd 0
+
+	dd libProcExecuteOpcodeStr
+	libProcExecuteOpcode: dd 0
+
+	dd libProcBGI_ReadCode8Str
+	libProcBGI_ReadCode8: dd 0
+
+	dd libProcBGI_ReadCode16Str
+	libProcBGI_ReadCode16: dd 0
+
+	dd libProcBGI_ReadCode32Str
+	libProcBGI_ReadCode32: dd 0
+
+	dd libProcBGI_PopStackStr
+	libProcBGI_PopStack: dd 0
+
+	dd libProcBGI_PushStackStr
+	libProcBGI_PushStack: dd 0
+
+	; End if imports
+	dd 0
 
 ; Error message generation
 hexChar:  db "0123456789ABCDEF"
