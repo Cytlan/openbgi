@@ -53,9 +53,9 @@ echo "Added section at $SECTIONADDR"
 
 # Assemble our files
 echo "Assembling"
-nasm -o patch.o -f elf32 patch.asm || exit 1
-nasm -o init_jmp.o -f elf32 init_jmp.asm || exit 1
-nasm -o execution_jmp.o -f elf32 execution_jmp.asm || exit 1
+nasm -o patch.o -f elf32 patch.asm || exit 1                 # Code to go into the code cave
+nasm -o init_jmp.o -f elf32 init_jmp.asm || exit 1           # Patch to jump into the init routine of our code cave (Which in turn loads our DLL)
+nasm -o execution_jmp.o -f elf32 execution_jmp.asm || exit 1 # Patch to jump into the executeOpcode routine of our cove cave (Which in turn calls into the DLL)
 
 # Linking
 echo "Linking"
