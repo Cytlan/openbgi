@@ -117,18 +117,6 @@ reportError:
 	call [ExitProcess]
 	ret
 
-; BGI_ReadCode8
-jmp_BGI_ReadCode8:
-	jmp [libProcBGI_ReadCode8]
-
-; BGI_ReadCode16
-jmp_BGI_ReadCode16:
-	jmp [libProcBGI_ReadCode16]
-
-; BGI_ReadCode32
-jmp_BGI_ReadCode32:
-	jmp [libProcBGI_ReadCode32]
-
 ; DLL loading
 libHandle:               dd 0
 libName:                 db "patch.dll", 0x00

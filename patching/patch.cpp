@@ -68,28 +68,55 @@ typedef struct VMProgramList
 
 int(**opcodeJumptable)(VMThread_t* vmThread) = (int(**)(VMThread_t*))0x00488420;
 
-typedef enum LogType
+typedef struct LogOperation
 {
-	TYPE_NONE = 0,
-	TYPE_OPCODE,     // 1
-	TYPE_OPCODE_RES, // 2
-	TYPE_READ8,      // 3
-	TYPE_READ16,     // 4
-	TYPE_READ32,     // 5
-	TYPE_POP,        // 6
-	TYPE_PUSH        // 7
-} LOG_TYPE;
-
-typedef struct LogOperations
-{
-	LOG_TYPE type;
-	uint32_t data;
-} LogOperations_t;
+	uint8_t opcode;
+	uint8_t res;
+	uint8_t thread;
+	uint16_t numStackIn;
+	uint16_t numStackOut;
+	uint16_t numBytesIn;
+	uint32_t pc;
+	uint32_t stackIn[512];
+	uint32_t stackOut[512];
+	uint8_t bytesIn[1024];
+} __attribute__((__packed__)) LogOperation_t;
 
 bool inInstruction = false;
 int numOperations = 0;
-LogOperations_t operations[1024];
+LogOperation_t operation;
 FILE* logFile;
+
+uint8_t buf[4096];
+
+int buildBuffer()
+{
+	int index = 0;
+
+	buf[index++] = operation.opcode;
+	buf[index++] = operation.res;
+	buf[index++] = operation.thread;
+
+	*(uint16_t*)(&buf[index]) = operation.numStackIn; index += 2;
+	*(uint16_t*)(&buf[index]) = operation.numStackOut; index += 2;
+	*(uint16_t*)(&buf[index]) = operation.numBytesIn; index += 2;
+
+	*(uint32_t*)(&buf[index]) = operation.pc; index += 4;
+
+	for(int i = 0; i < operation.numStackIn; i++)
+	{
+		*(uint32_t*)(&buf[index]) = operation.stackIn[i]; index += 4;
+	}
+	for(int i = 0; i < operation.numStackOut; i++)
+	{
+		*(uint32_t*)(&buf[index]) = operation.stackOut[i]; index += 4;
+	}
+	for(int i = 0; i < operation.numBytesIn; i++)
+	{
+		buf[index++] = operation.bytesIn[i];
+	}
+	return index;
+}
 
 // This should be called as soon as possible in WinMain
 extern "C" void init()
@@ -109,22 +136,23 @@ extern "C" int executeOpcode(int opcode, VMThread_t* vmThread)
 	numOperations = 0;
 
 	// Log opcode
-	operations[numOperations].type = TYPE_OPCODE;
-	operations[numOperations].data = opcode;
-	numOperations++;
+	operation.opcode = opcode;
+	operation.pc = vmThread->instructionPointer;
+	operation.thread = vmThread->threadId;
+	operation.numStackIn = 0;
+	operation.numStackOut = 0;
+	operation.numBytesIn = 0;
 
 	// Execute opcode
 	int res = opcodeJumptable[opcode](vmThread);
 
-	// Log result
-	operations[numOperations].type = TYPE_OPCODE_RES;
-	operations[numOperations].data = res;
-	numOperations++;
+	operation.res = res;
 
 	inInstruction = false;
 
 	// Write log file
-	fwrite(&operations[0], sizeof(LogOperations_t), numOperations, logFile);
+	int size = buildBuffer();
+	fwrite(&buf[0], 1, size, logFile);
 
 	return res;
 }
@@ -137,9 +165,11 @@ extern "C" __thiscall char BGI_ReadCode8(VMThread_t* vmThread)
 	vmThread->programCounter++;
 
 	// Log data
-	operations[numOperations].type = TYPE_READ8;
-	operations[numOperations].data = data;
-	numOperations++;
+	if(inInstruction)
+	{
+		operation.bytesIn[operation.numBytesIn++] = 1;
+		operation.bytesIn[operation.numBytesIn++] = data;
+	}
 
 	return data;
 }
@@ -151,9 +181,12 @@ extern "C" __thiscall short BGI_ReadCode16(VMThread_t* vmThread)
 	short data = *(short*)(vmThread->codeSpace + vmThread->programCounter);
 	vmThread->programCounter += 2;
 
-	operations[numOperations].type = TYPE_READ16;
-	operations[numOperations].data = data;
-	numOperations++;
+	if(inInstruction)
+	{
+		operation.bytesIn[operation.numBytesIn++] = 2;
+		*(uint16_t*)(&operation.bytesIn[operation.numBytesIn]) = data;
+		operation.numBytesIn += 2;
+	}
 
 	return data;
 }
@@ -166,9 +199,12 @@ extern "C" __thiscall int BGI_ReadCode32(VMThread_t* vmThread)
 	vmThread->programCounter += 4;
 
 	// Log data
-	operations[numOperations].type = TYPE_READ32;
-	operations[numOperations].data = data;
-	numOperations++;
+	if(inInstruction)
+	{
+		operation.bytesIn[operation.numBytesIn++] = 4;
+		*(uint32_t*)(&operation.bytesIn[operation.numBytesIn]) = data;
+		operation.numBytesIn += 4;
+	}
 
 	return data;
 }
@@ -184,9 +220,10 @@ extern "C" __thiscall int BGI_PopStack(VMThread *vmThread)
 	int data = vmThread->stack[vmThread->stackPointer];
 
 	// Log data
-	operations[numOperations].type = TYPE_POP;
-	operations[numOperations].data = data;
-	numOperations++;
+	if(inInstruction)
+	{
+		operation.stackIn[operation.numStackIn++] = data;
+	}
 
 	return data;
 }
@@ -197,9 +234,10 @@ extern "C" __thiscall void BGI_PushStack(VMThread* vmThread, int data)
 	vmThread->stack[vmThread->stackPointer++] = data;
 
 	// Log data
-	operations[numOperations].type = TYPE_PUSH;
-	operations[numOperations].data = data;
-	numOperations++;
+	if(inInstruction)
+	{
+		operation.stackOut[operation.numStackOut++] = data;
+	}
 
 	// Stack overflow
 	if(vmThread->stackPointer >= vmThread->stackSize)
