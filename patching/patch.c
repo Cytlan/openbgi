@@ -1,86 +1,15 @@
 //
-// DLL to be called into from the patch assembly
+// Code that is called into from patches in the game and
+// code that pokes around at the internals of the game.
 //
-#include <windows.h>
-#include <stdint.h>
-#include <stdio.h>
 
-struct VMMemory;
-struct VMThread;
-struct VMUnknownStruct;
-struct VMProgramList;
-
-typedef struct VMMemory
-{
-    int isAllocated;
-    uint8_t* mem;
-    int size;
-} VMMemory_t;
-
-typedef struct VMThread
-{
-    uint32_t programId;
-    uint32_t threadId;
-    struct VMThread* prevVMState;
-    uint32_t flags;
-    uint32_t stackPointer;
-    uint32_t instructionPointer;
-    uint32_t programCounter;
-    uint32_t basePointer;
-    uint32_t stackSize;
-    struct VMMemory* stackMemConfig;
-    uint32_t* stack;
-    uint32_t codeSpaceSize;
-    struct VMMemory* codeSpaceMemConfig;
-    uint8_t* codeSpace;
-    struct VMProgramList* programList;
-    uint32_t programCount;
-    uint32_t codeSpaceTop;
-    uint32_t localMemSize;
-    struct VMMemory* localMemConfig;
-    uint8_t* localMem;
-    struct VMUnknownStruct* unknownStruct;
-    int (*field_0x54)(int);
-    uint32_t field_0x58;
-    uint32_t field_0x5c;
-    uint32_t field_0x60;
-} VMThread_t;
-
-typedef struct VMUnknownStruct
-{
-    int field_0x0;
-    uint8_t * buf;
-    int field_0x8;
-    int field_0xc;
-    struct VMMemory * mem;
-    int field_0x14;
-    int field_0x18;
-    int field_0x1c;
-} VMUnknownStruct_t;
-
-typedef struct VMProgramList
-{
-    char* filename;
-    int size;
-    int location;
-    struct VMProgramList* prevProgram;
-} VMProgramList_t;
+#include "patch.h"
 
 int(**opcodeJumptable)(VMThread_t* vmThread) = (int(**)(VMThread_t*))0x00488420;
 
-typedef struct LogOperation
-{
-	uint8_t opcode;
-	uint8_t res;
-	uint8_t thread;
-	uint16_t numStackIn;
-	uint16_t numStackOut;
-	uint16_t numBytesIn;
-	uint32_t pc;
-	uint32_t stackIn[512];
-	uint32_t stackOut[512];
-	uint8_t bytesIn[1024];
-} __attribute__((__packed__)) LogOperation_t;
+VMThread_t** gVMThread = (VMThread_t**)0x0049d2f8;
+VMThread_t* gLastExecutedVMThread = NULL;
+int* bgiThreadCount = (int*)0x004994f4;
 
 bool inInstruction = false;
 int numOperations = 0;
@@ -118,8 +47,94 @@ int buildBuffer()
 	return index;
 }
 
+void printThreadInfo(char* out, VMThread_t* thread)
+{
+	sprintf(out,
+		"programId          %.8LX\n"
+		"threadId           %.8LX\n"
+		"prevVMState        %.8LX\n"
+		"flags              %.8LX\n"
+		"stackPointer       %.8LX\n"
+		"instructionPointer %.8LX\n"
+		"programCounter     %.8LX\n"
+		"basePointer        %.8LX\n"
+		"stackSize          %.8LX\n"
+		"stackMemConfig     %.8LX\n"
+		"stack              %.8LX\n"
+		"codeSpaceSize      %.8LX\n"
+		"codeSpaceMemConfig %.8LX\n"
+		"codeSpace          %.8LX\n"
+		"programList        %.8LX\n"
+		"programCount       %.8LX\n"
+		"codeSpaceTop       %.8LX\n"
+		"localMemSize       %.8LX\n"
+		"localMemConfig     %.8LX\n"
+		"localMem           %.8LX\n"
+		"unknownStruct      %.8LX\n"
+		"field_0x54         %.8LX\n"
+		"field_0x58         %.8LX\n"
+		"field_0x5c         %.8LX\n"
+		"field_0x60         %.8LX\n",
+		(uint32_t)thread->programId,
+		(uint32_t)thread->threadId,
+		(uint32_t)thread->prevVMState,
+		(uint32_t)thread->flags,
+		(uint32_t)thread->stackPointer,
+		(uint32_t)thread->instructionPointer,
+		(uint32_t)thread->programCounter,
+		(uint32_t)thread->basePointer,
+		(uint32_t)thread->stackSize,
+		(uint32_t)thread->stackMemConfig,
+		(uint32_t)thread->stack,
+		(uint32_t)thread->codeSpaceSize,
+		(uint32_t)thread->codeSpaceMemConfig,
+		(uint32_t)thread->codeSpace,
+		(uint32_t)thread->programList,
+		(uint32_t)thread->programCount,
+		(uint32_t)thread->codeSpaceTop,
+		(uint32_t)thread->localMemSize,
+		(uint32_t)thread->localMemConfig,
+		(uint32_t)thread->localMem,
+		(uint32_t)thread->unknownStruct,
+		(uint32_t)thread->field_0x54,
+		(uint32_t)thread->field_0x58,
+		(uint32_t)thread->field_0x5c,
+		(uint32_t)thread->field_0x60
+	);
+}
+
+uint32_t getThreadIP(int threadId)
+{
+	if(!gVMThread)
+		return 0;
+	int count = 0;
+	VMThread_t* t = *gVMThread;
+	while(t)
+	{
+		if(count == threadId)
+			return t->instructionPointer;
+		count++;
+		t = t->prevVMState;
+	}
+	return 0;
+}
+
+int countThreads()
+{
+	if(!gVMThread)
+		return 0;
+	int count = 0;
+	VMThread_t* t = *gVMThread;
+	while(t)
+	{
+		count++;
+		t = t->prevVMState;
+	}
+	return count;
+}
+
 // This should be called as soon as possible in WinMain
-extern "C" void init()
+void init()
 {
 	logFile = fopen("execution.log", "wb");
 	if(logFile == NULL)
@@ -130,8 +145,10 @@ extern "C" void init()
 }
 
 // Called whenever the VM tries to execute an instruction
-extern "C" int executeOpcode(int opcode, VMThread_t* vmThread)
+int executeOpcode(int opcode, VMThread_t* vmThread)
 {
+	gLastExecutedVMThread = vmThread;
+
 	inInstruction = true;
 	numOperations = 0;
 
@@ -151,14 +168,14 @@ extern "C" int executeOpcode(int opcode, VMThread_t* vmThread)
 	inInstruction = false;
 
 	// Write log file
-	int size = buildBuffer();
-	fwrite(&buf[0], 1, size, logFile);
+	//int size = buildBuffer();
+	//fwrite(&buf[0], 1, size, logFile);
 
 	return res;
 }
 
 // Read 1 immediate byte from the code
-extern "C" __thiscall char BGI_ReadCode8(VMThread_t* vmThread)
+__thiscall char BGI_ReadCode8(VMThread_t* vmThread)
 {
 	// Read data from code space
 	char data = vmThread->codeSpace[vmThread->programCounter];
@@ -175,7 +192,7 @@ extern "C" __thiscall char BGI_ReadCode8(VMThread_t* vmThread)
 }
 
 // Read 2 immediate bytes from the code
-extern "C" __thiscall short BGI_ReadCode16(VMThread_t* vmThread)
+__thiscall short BGI_ReadCode16(VMThread_t* vmThread)
 {
 	// Read data from code space
 	short data = *(short*)(vmThread->codeSpace + vmThread->programCounter);
@@ -192,7 +209,7 @@ extern "C" __thiscall short BGI_ReadCode16(VMThread_t* vmThread)
 }
 
 // Read 4 immediate bytes from the code
-extern "C" __thiscall int BGI_ReadCode32(VMThread_t* vmThread)
+__thiscall int BGI_ReadCode32(VMThread_t* vmThread)
 {
 	// Read data from code space
 	int data = *(int*)(vmThread->codeSpace + vmThread->programCounter);
@@ -209,7 +226,7 @@ extern "C" __thiscall int BGI_ReadCode32(VMThread_t* vmThread)
 	return data;
 }
 
-extern "C" __thiscall int BGI_PopStack(VMThread *vmThread)
+__thiscall int BGI_PopStack(VMThread_t *vmThread)
 {
 	// Stack underflow
 	if(vmThread->stackPointer == 0)
@@ -228,7 +245,7 @@ extern "C" __thiscall int BGI_PopStack(VMThread *vmThread)
 	return data;
 }
 
-extern "C" __thiscall void BGI_PushStack(VMThread* vmThread, int data)
+__thiscall void BGI_PushStack(VMThread_t* vmThread, int data)
 {
 	// Write data to stack
 	vmThread->stack[vmThread->stackPointer++] = data;
@@ -243,4 +260,3 @@ extern "C" __thiscall void BGI_PushStack(VMThread* vmThread, int data)
 	if(vmThread->stackPointer >= vmThread->stackSize)
 		vmThread->stackPointer = 0;
 }
-

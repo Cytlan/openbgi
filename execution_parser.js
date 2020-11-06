@@ -282,12 +282,12 @@ while(index < 1024)
 function printLog(log)
 {
 	let opcode = opcodes[log.opcode]
-	if(!opcode)
-		throw new Error('Unknown opcode: 0x'+toHex8(log.opcode)+' ('+log.opcode+')')
+	//if(!opcode)
+	//	throw new Error('Unknown opcode: 0x'+toHex8(log.opcode)+' ('+log.opcode+')')
 	let stackIn = log.stackIn.join(', ')
 	let stackOut = log.stackOut.join(', ')
 	let bytes = log.bytesIn.join(', ')
-	console.log('0x'+toHex8(log.opcode)+' '+opcode.mnemonic+'('+bytes+') ['+stackIn+' → '+stackOut+']')
+	console.log('0x'+toHex8(log.opcode)+' '+(opcode ? opcode.mnemonic : 'UNKNOWN')+'('+bytes+') ['+stackIn+' → '+stackOut+']')
 }
 
 console.log(block)
