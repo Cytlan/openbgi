@@ -11,6 +11,8 @@ VMThread_t** gVMThread = (VMThread_t**)0x0049d2f8;
 VMThread_t* gLastExecutedVMThread = NULL;
 int* bgiThreadCount = (int*)0x004994f4;
 
+int gHaltExecution = 0;
+
 bool inInstruction = false;
 int numOperations = 0;
 LogOperation_t operation;
@@ -160,8 +162,19 @@ int executeOpcode(int opcode, VMThread_t* vmThread)
 	operation.numStackOut = 0;
 	operation.numBytesIn = 0;
 
-	// Execute opcode
-	int res = opcodeJumptable[opcode](vmThread);
+	int res;
+
+	if(gHaltExecution)
+	{
+		res = 1;
+		vmThread->instructionPointer--;
+		vmThread->programCounter--;
+	}
+	else
+	{
+		// Execute opcode
+		res = opcodeJumptable[opcode](vmThread);
+	}
 
 	operation.res = res;
 
