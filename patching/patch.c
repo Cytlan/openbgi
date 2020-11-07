@@ -12,6 +12,8 @@ VMThread_t* gLastExecutedVMThread = NULL;
 int* bgiThreadCount = (int*)0x004994f4;
 
 int gHaltExecution = 0;
+int gStepExecution = 0;
+int gStepThread = 0;
 
 bool inInstruction = false;
 int numOperations = 0;
@@ -162,15 +164,28 @@ int executeOpcode(int opcode, VMThread_t* vmThread)
 	operation.numStackOut = 0;
 	operation.numBytesIn = 0;
 
+	bool doRun = true;
 	int res;
 
 	if(gHaltExecution)
 	{
-		res = 1;
-		vmThread->instructionPointer--;
-		vmThread->programCounter--;
+		if(gStepExecution && vmThread->threadId == gStepThread)
+		{
+			doRun = true;
+			gStepExecution = 0;
+			gStepThread = 0;
+		}
+		else
+		{
+			// Pretend the current thread yielded
+			doRun = false;
+			res = 1;
+			vmThread->instructionPointer--; // Correct the counters, so that we don't skip the real
+			vmThread->programCounter--;     // instruction when we begin execution again.
+		}
 	}
-	else
+
+	if(doRun)
 	{
 		// Execute opcode
 		res = opcodeJumptable[opcode](vmThread);

@@ -10,6 +10,7 @@
 #define ID_BUTTON_DUMP_CODE    9001
 #define ID_BUTTON_DUMP_LOCAL   9002
 #define ID_BUTTON_HALT         9003
+#define ID_BUTTON_STEP         9004
 
 HMODULE gDllHModule;
 HWND gDebugHWND;
@@ -25,6 +26,7 @@ HWND gDumpStackButton;
 HWND gDumpCodeButton;
 HWND gDumpLocalButton;
 HWND gHaltButton;
+HWND gStepButton;
 
 // Thread list
 HWND gThreadListBox;
@@ -201,6 +203,12 @@ bool dumpLocal()
 	return true;
 }
 
+void doHaltExecution(int stopped)
+{
+	gHaltExecution = stopped;
+	SetWindowTextA(gHaltButton, stopped ? "Run" : "Halt");
+}
+
 LRESULT WINAPI DLLWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 	switch(msg)
@@ -243,16 +251,14 @@ LRESULT WINAPI DLLWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 					break;
 
 				case ID_BUTTON_HALT:
-					if(gHaltExecution)
-					{
-						gHaltExecution = 0;	
-						SetWindowTextA(gHaltButton, "Halt");
-					}
-					else
-					{
-						gHaltExecution = 1;
-						SetWindowTextA(gHaltButton, "Run");
-					}
+					doHaltExecution(gHaltExecution ^ 1);
+					break;
+
+				case ID_BUTTON_STEP:
+					if(!gHaltExecution)
+						doHaltExecution(1);
+					gStepThread = curThreadPtr->threadId;
+					gStepExecution = 1;
 					break;
 
 				case ID_THREAD_LIST_BOX:
@@ -362,6 +368,21 @@ void updateVMInfo(VMThread_t* thread)
 	memcpy(&curThreadCopy, thread, sizeof(VMThread_t));
 }
 
+HWND makeButton(char* title, int x, int y, int width, int height, int id)
+{
+	HWND button = CreateWindow(
+		"BUTTON", title,
+		WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+		x, y,
+		width, height,
+		gDebugHWND,
+		(HMENU)id,
+		NULL, NULL
+	);
+	SendMessage(button, WM_SETFONT, (WPARAM)hFont, true);
+	return button;
+}
+
 bool createDebugWindow()
 {
 	if(initialised)
@@ -448,49 +469,17 @@ bool createDebugWindow()
 	//
 	// Create buttons
 	//
-	gDumpStackButton = CreateWindow(
-		"BUTTON", "Dump Stack",
-		WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-		10, 310,
-		100, 30,
-		gDebugHWND,
-		(HMENU)ID_BUTTON_DUMP_STACK,
-		NULL, NULL
-	);
-	SendMessage(gDumpStackButton, WM_SETFONT, (WPARAM)hFont, true);
-
-	gDumpCodeButton = CreateWindow(
-		"BUTTON", "Dump Code",
-		WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-		10, 350,
-		100, 30,
-		gDebugHWND,
-		(HMENU)ID_BUTTON_DUMP_CODE,
-		NULL, NULL
-	);
-	SendMessage(gDumpCodeButton, WM_SETFONT, (WPARAM)hFont, true);
-
-	gDumpLocalButton = CreateWindow(
-		"BUTTON", "Dump Local",
-		WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-		10, 390,
-		100, 30,
-		gDebugHWND,
-		(HMENU)ID_BUTTON_DUMP_LOCAL,
-		NULL, NULL
-	);
-	SendMessage(gDumpLocalButton, WM_SETFONT, (WPARAM)hFont, true);
-
-	gHaltButton = CreateWindow(
-		"BUTTON", "Halt",
-		WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-		10, 430,
-		100, 30,
-		gDebugHWND,
-		(HMENU)ID_BUTTON_HALT,
-		NULL, NULL
-	);
-	SendMessage(gHaltButton, WM_SETFONT, (WPARAM)hFont, true);
+	int btnY = 310;
+	gDumpStackButton = makeButton("Dump Stack", 10, btnY, 100, 30, ID_BUTTON_DUMP_STACK);
+	btnY += 40;
+	gDumpLocalButton = makeButton("Dump Code",  10, btnY, 100, 30, ID_BUTTON_DUMP_CODE);
+	btnY += 40;
+	gDumpLocalButton = makeButton("Dump Local", 10, btnY, 100, 30, ID_BUTTON_DUMP_LOCAL);
+	btnY += 40;
+	gHaltButton      = makeButton("Halt",       10, btnY, 100, 30, ID_BUTTON_HALT);
+	btnY += 40;
+	gStepButton      = makeButton("Step",       10, btnY, 100, 30, ID_BUTTON_STEP);
+	btnY += 40;
 
 	//
 	// Create thread list

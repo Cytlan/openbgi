@@ -86,6 +86,8 @@ extern VMThread_t* gLastExecutedVMThread;
 extern HMODULE gDllHModule;
 
 extern int gHaltExecution;
+extern int gStepExecution;
+extern int gStepThread;
 
 int buildBuffer();
 int countThreads();
