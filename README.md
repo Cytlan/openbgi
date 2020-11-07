@@ -14,6 +14,22 @@ Technical documentation
 
 You can find technical information about the engine in the `Technical.md` file. Note that this is still a work in progress, and the file will change as we learn more about the engine.
 
+Debugger
+--------
+
+To help reverse-engineering the game, we have created a debugging tool for the engine. After patching the game, the debugger is loaded and allows us to inspect threads, halt the execution and single-step through the program.
+
+On the TODO list for the debugger: Disassembly, as well as a memory inspector for the stack and local memory.
+
+![Screenshot of the debugger as of 2020-11-07](debugger.png)
+
+Help wanted
+-----------
+
+Currently, I have no idea what original BGI scripts look like. Eventually we'd like to create a decompiler for the scripts, and knowing what they look like would be very helpful in creating a similar-looking result.
+
+If you have a copy of the development tools, please send Cytlan (`Cytlan#5147` on Discord) a screenshot or two of some code, so that we can get an idea of what we should try to emulate.
+
 Getting started
 ---------------
 
