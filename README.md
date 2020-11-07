@@ -19,7 +19,7 @@ Debugger
 
 To help reverse-engineering the game, we have created a debugging tool for the engine. After patching the game, the debugger is loaded and allows us to inspect threads, halt the execution and single-step through the program.
 
-On the TODO list for the debugger: Disassembly, as well as a memory inspector for the stack and local memory.
+On the TODO list for the debugger: Disassembly, code injection.
 
 ![Screenshot of the debugger as of 2020-11-07](debugger.png)
 
