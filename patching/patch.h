@@ -22,7 +22,7 @@ typedef struct VMThread
 {
     uint32_t programId;
     uint32_t threadId;
-    struct VMThread* prevVMState;
+    struct VMThread* nextThread;
     uint32_t flags;
     uint32_t stackPointer;
     uint32_t instructionPointer;
@@ -88,6 +88,7 @@ extern HMODULE gDllHModule;
 int buildBuffer();
 int countThreads();
 uint32_t getThreadIP(int threadId);
+void updateVMInfo(VMThread_t* thread);
 
 // Called from assembly
 void init();

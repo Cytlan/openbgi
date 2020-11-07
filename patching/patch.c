@@ -52,7 +52,7 @@ void printThreadInfo(char* out, VMThread_t* thread)
 	sprintf(out,
 		"programId          %.8LX\n"
 		"threadId           %.8LX\n"
-		"prevVMState        %.8LX\n"
+		"nextThread         %.8LX\n"
 		"flags              %.8LX\n"
 		"stackPointer       %.8LX\n"
 		"instructionPointer %.8LX\n"
@@ -77,7 +77,7 @@ void printThreadInfo(char* out, VMThread_t* thread)
 		"field_0x60         %.8LX\n",
 		(uint32_t)thread->programId,
 		(uint32_t)thread->threadId,
-		(uint32_t)thread->prevVMState,
+		(uint32_t)thread->nextThread,
 		(uint32_t)thread->flags,
 		(uint32_t)thread->stackPointer,
 		(uint32_t)thread->instructionPointer,
@@ -114,7 +114,7 @@ uint32_t getThreadIP(int threadId)
 		if(count == threadId)
 			return t->instructionPointer;
 		count++;
-		t = t->prevVMState;
+		t = t->nextThread;
 	}
 	return 0;
 }
@@ -128,7 +128,7 @@ int countThreads()
 	while(t)
 	{
 		count++;
-		t = t->prevVMState;
+		t = t->nextThread;
 	}
 	return count;
 }
