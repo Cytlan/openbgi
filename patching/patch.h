@@ -109,6 +109,7 @@ void fatalError(char* error);
 
 // Debugging
 bool createDebugWindow();
+void disassembleProgram(VMProgramList_t* program);
 
 // Windows stuff
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved);

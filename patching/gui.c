@@ -28,6 +28,14 @@ HWND gDumpLocalButton;
 HWND gHaltButton;
 HWND gStepButton;
 
+// Disassembly
+HWND gDisassemblyList;
+HWND gDisassemblyScrollbar;
+HWND gLocalMemoryList;
+HWND gLocalMemoryScrollbar;
+HWND gStackList;
+HWND gStackScrollbar;
+
 // Thread list
 HWND gThreadListBox;
 VMThread_t curThreadCopy;    // Copy of the thread to prevent redraw of unchanged fields (can cause flickering otherwise)
@@ -107,6 +115,104 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     return true;
 }
 
+uint8_t memoryViewBuffer[0x100];
+off_t memoryOffset;
+uint32_t prevMemorySize = -1;
+void updateMemoryList(VMThread_t* thread)
+{
+	uint8_t* ptr = thread->localMem + memoryOffset;
+
+	if(thread->localMemSize != prevMemorySize)
+	{
+		prevMemorySize = thread->localMemSize;
+		SCROLLINFO s;
+		s.cbSize = sizeof(SCROLLINFO);
+		s.fMask = SIF_ALL;
+		s.nMin = 0;
+		s.nMax = prevMemorySize/16;
+		s.nPage = 16;
+		s.nPos = 0;
+		s.nTrackPos = 0;
+		SetScrollInfo(gLocalMemoryScrollbar, SB_CTL, &s, true);
+	}
+
+	char memStr[64];
+	int size = thread->localMemSize / 16;
+	if(size > 0x10)
+		size = 0x10;
+
+	// No local memory
+	if(size == 0)
+	{
+		SendMessage(gLocalMemoryList, LB_RESETCONTENT, 0, 0);
+		return;
+	}
+
+	// Memory has not changed, no need to update.
+	//if(memcmp(ptr, &memoryViewBuffer[0], size*16) == 0)
+	//	return;
+
+	SendMessage(gLocalMemoryList, LB_RESETCONTENT, 0, 0);
+	memcpy(&memoryViewBuffer[0], ptr, size*16);
+
+	for(int i = 0; i < size; i++)
+	{
+		uint8_t* ptr = &memoryViewBuffer[i*16];
+		sprintf(
+			&memStr[0],
+			"%.8LX: %.2X%.2X%.2X%.2X %.2X%.2X%.2X%.2X %.2X%.2X%.2X%.2X %.2X%.2X%.2X%.2X",
+			memoryOffset+(i*16),
+			ptr[0],  ptr[1],  ptr[2],  ptr[3],
+			ptr[4],  ptr[5],  ptr[6],  ptr[7],
+			ptr[8],  ptr[9],  ptr[10], ptr[11],
+			ptr[12], ptr[13], ptr[14], ptr[15]
+		);
+		SendMessage(gLocalMemoryList, LB_INSERTSTRING, i, (WPARAM)&memStr[0]);
+	}
+}
+
+uint32_t prevStackSize = -1;
+void updateStackList(VMThread_t* thread)
+{
+	SendMessage(gStackList, LB_RESETCONTENT, 0, 0);
+	
+	// Set scrollbar size
+	if(thread->stackPointer != prevStackSize)
+	{
+		prevStackSize = thread->stackPointer;
+		SCROLLINFO s;
+		s.cbSize = sizeof(SCROLLINFO);
+		s.fMask = SIF_ALL;
+		s.nMin = 0;
+		s.nMax = prevStackSize;
+		s.nPage = 34;
+		s.nPos = 0;
+		s.nTrackPos = 0;
+		SetScrollInfo(gStackScrollbar, SB_CTL, &s, true);
+	}
+
+	// Don't attempt to add any stack elements if there are none
+	if(thread->stackSize == 0)
+		return;
+	
+	uint32_t stackPointer = thread->stackPointer;
+	char memStr[32];
+	for(int i = 0; i < 34; i++)
+	{
+		sprintf(
+			&memStr[0],
+			"%.8LX: %.8LX",
+			stackPointer,
+			thread->stack[stackPointer]
+		);
+		SendMessage(gStackList, LB_INSERTSTRING, i, (WPARAM)&memStr[0]);
+		if(stackPointer == 0)
+			break;
+		stackPointer--;
+	}
+
+}
+
 void updateWindow()
 {
 	if(*gVMThread)
@@ -167,6 +273,8 @@ void updateWindow()
 	if(curThreadPtr)
 	{
 		updateVMInfo(curThreadPtr);
+		updateMemoryList(curThreadPtr);
+		updateStackList(curThreadPtr);
 	}
 }
 
@@ -269,7 +377,7 @@ LRESULT WINAPI DLLWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 							int index = SendMessage(gThreadListBox, LB_GETCARETINDEX, 0, 0);
 							curThreadPtr = threadList[index];
 							if(curThreadPtr)
-								updateVMInfo(curThreadPtr);
+								updateWindow();
 							break;
 						}
 					}
@@ -294,7 +402,7 @@ void createValueLabel(int x, int* y, HWND* label, HWND* value, char* text)
 	*value = CreateWindowA(
 		"static", "?",
 		WS_CHILD | WS_VISIBLE,
-		x+200, *y, 100, 16,
+		x+200, *y, 70, 16,
 		gDebugHWND, (HMENU)1, NULL, NULL
 	);
 	if(!*label || !*value)
@@ -416,7 +524,7 @@ bool createDebugWindow()
 		"Debugger",
 		WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT, CW_USEDEFAULT,
-		800, 600,
+		1000, 600,
 		NULL, NULL,
 		gDllHModule, NULL
 	);
@@ -432,7 +540,7 @@ bool createDebugWindow()
 		false, false, false,
 		ANSI_CHARSET,
 		OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
-		FIXED_PITCH | FF_MODERN, "Tahoma"
+		FIXED_PITCH | FF_MODERN, NULL
 	);
 	SendMessage(gDebugHWND, WM_SETFONT, (WPARAM)hFont, true);
 
@@ -494,6 +602,69 @@ bool createDebugWindow()
 		NULL, NULL
 	);
 	SendMessage(gThreadListBox, WM_SETFONT, (WPARAM)hFont, true);
+
+	// Memory view
+	gLocalMemoryList = CreateWindow(
+		"LISTBOX", NULL,
+		WS_VISIBLE | WS_CHILD | LBS_STANDARD | LBS_NOTIFY | WS_VSCROLL,
+		400, 298,
+		380, 258,
+		gDebugHWND,
+		(HMENU)ID_THREAD_LIST_BOX,
+		NULL, NULL
+	);
+	SendMessage(gLocalMemoryList, WM_SETFONT, (WPARAM)hFont, true);
+	gLocalMemoryScrollbar = CreateWindow(
+		"SCROLLBAR", NULL,
+		WS_VISIBLE | WS_CHILD | SBS_VERT,
+		400+380, 298,
+		18, 258,
+		gDebugHWND,
+		(HMENU)ID_THREAD_LIST_BOX,
+		NULL, NULL
+	);
+	
+	// Stack view
+	gStackList = CreateWindow(
+		"LISTBOX", NULL,
+		WS_VISIBLE | WS_CHILD | LBS_STANDARD | LBS_NOTIFY | WS_VSCROLL,
+		803, 10,
+		150, 546,
+		gDebugHWND,
+		(HMENU)ID_THREAD_LIST_BOX,
+		NULL, NULL
+	);
+	SendMessage(gStackList, WM_SETFONT, (WPARAM)hFont, true);
+	gStackScrollbar = CreateWindow(
+		"SCROLLBAR", NULL,
+		WS_VISIBLE | WS_CHILD | SBS_VERT,
+		803+150, 10,
+		18, 546,
+		gDebugHWND,
+		(HMENU)ID_THREAD_LIST_BOX,
+		NULL, NULL
+	);
+
+	// Disassembly view
+	gDisassemblyList = CreateWindow(
+		"LISTBOX", NULL,
+		WS_VISIBLE | WS_CHILD | LBS_STANDARD | LBS_NOTIFY | WS_VSCROLL,
+		400, 10,
+		380, 258,
+		gDebugHWND,
+		(HMENU)ID_THREAD_LIST_BOX,
+		NULL, NULL
+	);
+	SendMessage(gDisassemblyList, WM_SETFONT, (WPARAM)hFont, true);
+	gDisassemblyScrollbar = CreateWindow(
+		"SCROLLBAR", NULL,
+		WS_VISIBLE | WS_CHILD | SBS_VERT,
+		400+380, 10,
+		18, 258,
+		gDebugHWND,
+		(HMENU)ID_THREAD_LIST_BOX,
+		NULL, NULL
+	);
 
 	//
 	// Show window
