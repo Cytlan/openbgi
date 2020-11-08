@@ -4,13 +4,19 @@
 
 #include "patch.h"
 
-#define ID_WINDOW_UPDATE_TIMER 1001
-#define ID_THREAD_LIST_BOX     2000
-#define ID_BUTTON_DUMP_STACK   9000
-#define ID_BUTTON_DUMP_CODE    9001
-#define ID_BUTTON_DUMP_LOCAL   9002
-#define ID_BUTTON_HALT         9003
-#define ID_BUTTON_STEP         9004
+#define ID_WINDOW_UPDATE_TIMER   1001
+#define ID_THREAD_LIST_BOX       2000
+#define ID_MEMORY_LIST_BOX       2001
+#define ID_STACK_LIST_BOX        2002
+#define ID_DISASSEMBLY_LIST_BOX  2003
+#define ID_MEMORY_SCROLLBAR      3001
+#define ID_STACK_SCROLLBAR       3002
+#define ID_DISASSEMBLY_SCROLLBAR 3003
+#define ID_BUTTON_DUMP_STACK     9000
+#define ID_BUTTON_DUMP_CODE      9001
+#define ID_BUTTON_DUMP_LOCAL     9002
+#define ID_BUTTON_HALT           9003
+#define ID_BUTTON_STEP           9004
 
 HMODULE gDllHModule;
 HWND gDebugHWND;
@@ -42,6 +48,115 @@ VMThread_t curThreadCopy;    // Copy of the thread to prevent redraw of unchange
 VMThread_t* curThreadPtr;    // Pointer to the actual thread being displayed
 VMThread_t* threadList[256]; // Threads as show in the thread list
 int gThreadListCount = 0;    // Number of threads in the list
+
+// Program name
+HWND gProgramLabel;
+
+struct ThreadList;
+typedef struct ThreadList
+{
+	VMThread_t* thread;
+	uint32_t threadId;
+	struct ThreadList* next;
+	struct ThreadList* prev;
+} ThreadList_t;
+
+ThreadList_t vmThreads;
+ThreadList_t* lastThread;
+Disasm_t* disassembly;
+
+void freeThreadEntry(ThreadList_t* entry)
+{
+	// Remove from list
+	if(entry->next)
+		entry->next->prev = entry->prev;
+	if(entry->prev)
+		entry->prev->next = entry->next;
+	if(entry == lastThread)
+		lastThread = entry->prev;
+	free(entry);
+}
+
+ThreadList_t* addThreadEntry(VMThread_t* t)
+{
+	ThreadList_t* newEntry = (ThreadList_t*)malloc(sizeof(ThreadList_t));
+	lastThread->next = newEntry;
+	newEntry->prev = lastThread;
+	newEntry->next = NULL;
+	newEntry->thread = t;
+	newEntry->threadId = t->threadId;
+	return newEntry;
+}
+
+void updateThreadLists()
+{
+	if(!*gVMThread) return;
+
+	// First time updating?
+	if(vmThreads.thread == NULL)
+	{
+		vmThreads.thread = *gVMThread;
+		vmThreads.threadId = vmThreads.thread->threadId;
+		vmThreads.next = NULL;
+		vmThreads.prev = NULL;
+		lastThread = &vmThreads;
+	}
+
+	ThreadList_t* l;
+	VMThread_t* t;
+
+	// Check that no threads were deleted
+	l = &vmThreads;
+	while(l)
+	{
+		bool found = false;
+		t = *gVMThread;
+		while(t)
+		{
+			if(l->thread == t && l->threadId == t->threadId)
+			{
+				found = true;
+				break;
+			}
+			t = t->nextThread;
+		}
+		ThreadList_t* n = l->next;
+		if(!found)
+		{
+			// This entry was deleted.
+			freeThreadEntry(l);
+		}
+		l = n;
+	}
+
+	// Check for new threads
+	t = *gVMThread;
+	while(t)
+	{
+		bool found = false;
+		l = &vmThreads;
+		ThreadList_t* entry;
+		while(l)
+		{
+			if(l->thread == t && l->threadId == t->threadId)
+			{
+				entry = l;
+				found = true;
+				break;
+			}
+			l = l->next;
+		}
+		VMThread_t* n = t->nextThread;
+		if(!found)
+		{
+			// This entry is new.
+			l = addThreadEntry(t);
+		}
+		// Disassemble any new programs that may have appeared
+		//disassemblePrograms(l);
+		t = n;
+	}
+}
 
 struct VMThreadLabels
 {
@@ -120,14 +235,27 @@ off_t memoryOffset;
 uint32_t prevMemorySize = -1;
 void updateMemoryList(VMThread_t* thread)
 {
-	uint8_t* ptr = thread->localMem + memoryOffset;
+	int size = thread->localMemSize / 16;
+	if(size > 0x10)
+		size = 0x10;
 
+	// No local memory
+	if(size == 0)
+		SendMessage(gLocalMemoryList, LB_RESETCONTENT, 0, 0);
+
+	SCROLLINFO s;
+	s.cbSize = sizeof(SCROLLINFO);
+	s.fMask = SIF_POS;
+	GetScrollInfo(gLocalMemoryScrollbar, SB_CTL, &s);
+	off_t newOffset = s.nPos * 16;
+
+	uint8_t* ptr = thread->localMem + newOffset;
+
+	// Memory size changed
 	if(thread->localMemSize != prevMemorySize)
 	{
 		prevMemorySize = thread->localMemSize;
-		SCROLLINFO s;
-		s.cbSize = sizeof(SCROLLINFO);
-		s.fMask = SIF_ALL;
+		s.fMask = SIF_PAGE | SIF_RANGE;
 		s.nMin = 0;
 		s.nMax = prevMemorySize/16;
 		s.nPage = 16;
@@ -135,22 +263,13 @@ void updateMemoryList(VMThread_t* thread)
 		s.nTrackPos = 0;
 		SetScrollInfo(gLocalMemoryScrollbar, SB_CTL, &s, true);
 	}
+	// Memory has not changed, no need to update.
+	else if(size == 0 || (newOffset == memoryOffset && memcmp(ptr, &memoryViewBuffer[0], size*16) == 0))
+		return;
+
+	memoryOffset = newOffset;
 
 	char memStr[64];
-	int size = thread->localMemSize / 16;
-	if(size > 0x10)
-		size = 0x10;
-
-	// No local memory
-	if(size == 0)
-	{
-		SendMessage(gLocalMemoryList, LB_RESETCONTENT, 0, 0);
-		return;
-	}
-
-	// Memory has not changed, no need to update.
-	//if(memcmp(ptr, &memoryViewBuffer[0], size*16) == 0)
-	//	return;
 
 	SendMessage(gLocalMemoryList, LB_RESETCONTENT, 0, 0);
 	memcpy(&memoryViewBuffer[0], ptr, size*16);
@@ -176,26 +295,36 @@ void updateStackList(VMThread_t* thread)
 {
 	SendMessage(gStackList, LB_RESETCONTENT, 0, 0);
 	
+	SCROLLINFO s;
+	s.cbSize = sizeof(SCROLLINFO);
+	s.fMask = SIF_POS;
+	GetScrollInfo(gStackScrollbar, SB_CTL, &s);
+
 	// Set scrollbar size
 	if(thread->stackPointer != prevStackSize)
 	{
-		prevStackSize = thread->stackPointer;
-		SCROLLINFO s;
-		s.cbSize = sizeof(SCROLLINFO);
-		s.fMask = SIF_ALL;
+		int diff = thread->stackPointer - prevStackSize;
+		if(!s.nPos || diff + s.nPos < 0)
+			s.nPos = 0;
+		else
+			s.nPos += diff;
+		s.fMask = SIF_PAGE | SIF_RANGE | SIF_POS;
 		s.nMin = 0;
-		s.nMax = prevStackSize;
+		s.nMax = thread->stackPointer;
 		s.nPage = 34;
-		s.nPos = 0;
 		s.nTrackPos = 0;
 		SetScrollInfo(gStackScrollbar, SB_CTL, &s, true);
+		prevStackSize = thread->stackPointer;
 	}
 
 	// Don't attempt to add any stack elements if there are none
 	if(thread->stackSize == 0)
 		return;
-	
+
 	uint32_t stackPointer = thread->stackPointer;
+	
+	stackPointer += thread->stackSize - s.nPos;
+
 	char memStr[32];
 	for(int i = 0; i < 34; i++)
 	{
@@ -210,11 +339,71 @@ void updateStackList(VMThread_t* thread)
 			break;
 		stackPointer--;
 	}
+}
 
+VMProgramList_t* getCurrentProgram(VMThread_t* thread)
+{
+	VMProgramList_t* p = thread->programList;
+	while(p)
+	{
+		if(thread->instructionPointer >= p->location &&
+		   thread->instructionPointer < p->location + p->size)
+			return p;
+		p = p->prevProgram;
+	}
+	return NULL;
+}
+
+DisasmLine_t* findCurrentLine(VMThread_t* thread, Disasm_t* disasm)
+{
+	uint32_t ppos = thread->programCounter;
+	DisasmLine_t* start = disasm->disasm;
+	DisasmLine_t* cur = disasm->disasm;
+	int count = 0;
+	while(cur)
+	{
+		if(cur->location == ppos)
+			break;
+		count++;
+		if(count > 7)
+			start = start->next;
+		cur = cur->next;
+	}
+	return start;
+}
+
+void updateDisassembly(VMThread_t* curThreadPtr)
+{
+	VMProgramList_t* p = getCurrentProgram(curThreadPtr);
+	SendMessage(gDisassemblyList, LB_RESETCONTENT, 0, 0);
+	if(p == NULL)
+	{
+		return;
+	}
+	if(!disassembly || disassembly->program != p)
+	{
+		if(disassembly)
+			freeDisassemblies(disassembly);
+		disassembly = disassembleProgram(curThreadPtr, p);
+	}
+
+	uint32_t ppos = curThreadPtr->programCounter;
+	DisasmLine_t* line = findCurrentLine(curThreadPtr, disassembly);
+	int highlight = 0;
+	for(int i = 0; i < 16; i++)
+	{
+		if(!line) break;
+		SendMessage(gDisassemblyList, LB_INSERTSTRING, i, (WPARAM)line->str);
+		if(line->location == ppos)
+			highlight = i;
+		line = line->next;
+	}
+	SendMessage(gDisassemblyList, LB_SETCURSEL, highlight, 0);
 }
 
 void updateWindow()
 {
+	//updateThreadLists();
 	if(*gVMThread)
 	{
 		bool mustUpdate = false;
@@ -275,6 +464,7 @@ void updateWindow()
 		updateVMInfo(curThreadPtr);
 		updateMemoryList(curThreadPtr);
 		updateStackList(curThreadPtr);
+		updateDisassembly(curThreadPtr);
 	}
 }
 
@@ -384,6 +574,60 @@ LRESULT WINAPI DLLWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 			}
 			break;
 
+		case WM_VSCROLL:
+		{
+			SCROLLINFO si;
+			si.cbSize = sizeof(si);
+			si.fMask = SIF_ALL;
+			GetScrollInfo((HWND)lParam, SB_CTL, &si);
+
+			// Save the position for comparison later on.
+			int yPos = si.nPos;
+			switch (LOWORD(wParam))
+			{
+				// User clicked the top arrow.
+				case SB_LINEUP:
+					si.nPos -= 1;
+					break;
+
+				// User clicked the bottom arrow.
+				case SB_LINEDOWN:
+					si.nPos += 1;
+					break;
+
+				// User clicked the scroll bar shaft above the scroll box.
+				case SB_PAGEUP:
+					si.nPos -= si.nPage;
+					break;
+
+				// User clicked the scroll bar shaft below the scroll box.
+				case SB_PAGEDOWN:
+					si.nPos += si.nPage;
+					break;
+
+				// User dragged the scroll box.
+				case SB_THUMBTRACK:
+					si.nPos = si.nTrackPos;
+					break;
+
+				default:
+					break;
+			}
+
+			// Set the position and then retrieve it. Due to adjustments
+			// by Windows it may not be the same as the value set.
+			si.fMask = SIF_POS;
+			SetScrollInfo((HWND)lParam, SB_CTL, &si, TRUE);
+			GetScrollInfo((HWND)lParam, SB_CTL, &si);
+
+			// If the position has changed, scroll window and update it.
+			if(si.nPos != yPos)
+			{
+				
+			}
+			break;
+		}
+
 		default:
 			return DefWindowProc(hwnd, msg, wParam, lParam);
 	}
@@ -472,6 +716,23 @@ void updateVMInfo(VMThread_t* thread)
 	if(curThreadCopy.field_0x60 != thread->field_0x60)
 		updateValue(vmInfo.field_0x60Value,         (uint32_t)thread->field_0x60);
 
+	// Find program name
+	char* programName = NULL;
+	VMProgramList_t* program = thread->programList;
+	while(program)
+	{
+		if(program->location <= thread->instructionPointer &&
+		   program->location + program->size >= thread->instructionPointer)
+		{
+			programName = program->filename;
+			break;
+		}
+		program = program->prevProgram;
+	}
+	char pStr[128];
+	snprintf(&pStr[0], 128, "Program: %s", programName ? programName : "?");
+	SetWindowTextA(gProgramLabel, &pStr[0]);
+
 	// Copy the current state of the thread
 	memcpy(&curThreadCopy, thread, sizeof(VMThread_t));
 }
@@ -548,31 +809,39 @@ bool createDebugWindow()
 	// Create thread info fields
 	//
 	int y = 10;
-	createValueLabel(120, &y, &vmInfo.programIdLabel,          &vmInfo.programIdValue,          "programId"); 
-	createValueLabel(120, &y, &vmInfo.threadIdLabel,           &vmInfo.threadIdValue,           "threadId"); 
-	createValueLabel(120, &y, &vmInfo.nextThreadLabel,         &vmInfo.nextThreadValue,        "nextThread"); 
-	createValueLabel(120, &y, &vmInfo.flagsLabel,              &vmInfo.flagsValue,              "flags"); 
-	createValueLabel(120, &y, &vmInfo.stackPointerLabel,       &vmInfo.stackPointerValue,       "stackPointer"); 
-	createValueLabel(120, &y, &vmInfo.instructionPointerLabel, &vmInfo.instructionPointerValue, "instructionPointer"); 
-	createValueLabel(120, &y, &vmInfo.programCounterLabel,     &vmInfo.programCounterValue,     "programCounter"); 
-	createValueLabel(120, &y, &vmInfo.basePointerLabel,        &vmInfo.basePointerValue,        "basePointer"); 
-	createValueLabel(120, &y, &vmInfo.stackSizeLabel,          &vmInfo.stackSizeValue,          "stackSize"); 
-	createValueLabel(120, &y, &vmInfo.stackMemConfigLabel,     &vmInfo.stackMemConfigValue,     "stackMemConfig"); 
-	createValueLabel(120, &y, &vmInfo.stackLabel,              &vmInfo.stackValue,              "stack"); 
-	createValueLabel(120, &y, &vmInfo.codeSpaceSizeLabel,      &vmInfo.codeSpaceSizeValue,      "codeSpaceSize"); 
-	createValueLabel(120, &y, &vmInfo.codeSpaceMemConfigLabel, &vmInfo.codeSpaceMemConfigValue, "codeSpaceMemConfig"); 
-	createValueLabel(120, &y, &vmInfo.codeSpaceLabel,          &vmInfo.codeSpaceValue,          "codeSpace"); 
-	createValueLabel(120, &y, &vmInfo.programListLabel,        &vmInfo.programListValue,        "programList"); 
-	createValueLabel(120, &y, &vmInfo.programCountLabel,       &vmInfo.programCountValue,       "programCount"); 
-	createValueLabel(120, &y, &vmInfo.codeSpaceTopLabel,       &vmInfo.codeSpaceTopValue,       "codeSpaceTop"); 
-	createValueLabel(120, &y, &vmInfo.localMemSizeLabel,       &vmInfo.localMemSizeValue,       "localMemSize"); 
-	createValueLabel(120, &y, &vmInfo.localMemConfigLabel,     &vmInfo.localMemConfigValue,     "localMemConfig"); 
-	createValueLabel(120, &y, &vmInfo.localMemLabel,           &vmInfo.localMemValue,           "localMem"); 
-	createValueLabel(120, &y, &vmInfo.unknownStructLabel,      &vmInfo.unknownStructValue,      "unknownStruct"); 
-	createValueLabel(120, &y, &vmInfo.field_0x54Label,         &vmInfo.field_0x54Value,         "field_0x54"); 
-	createValueLabel(120, &y, &vmInfo.field_0x58Label,         &vmInfo.field_0x58Value,         "field_0x58"); 
-	createValueLabel(120, &y, &vmInfo.field_0x5cLabel,         &vmInfo.field_0x5cValue,         "field_0x5c"); 
-	createValueLabel(120, &y, &vmInfo.field_0x60Label,         &vmInfo.field_0x60Value,         "field_0x60"); 
+	createValueLabel(120, &y, &vmInfo.programIdLabel,          &vmInfo.programIdValue,          "programId");
+	createValueLabel(120, &y, &vmInfo.threadIdLabel,           &vmInfo.threadIdValue,           "threadId");
+	createValueLabel(120, &y, &vmInfo.nextThreadLabel,         &vmInfo.nextThreadValue,         "nextThread");
+	createValueLabel(120, &y, &vmInfo.flagsLabel,              &vmInfo.flagsValue,              "flags");
+	createValueLabel(120, &y, &vmInfo.stackPointerLabel,       &vmInfo.stackPointerValue,       "stackPointer");
+	createValueLabel(120, &y, &vmInfo.instructionPointerLabel, &vmInfo.instructionPointerValue, "instructionPointer");
+	createValueLabel(120, &y, &vmInfo.programCounterLabel,     &vmInfo.programCounterValue,     "programCounter");
+	createValueLabel(120, &y, &vmInfo.basePointerLabel,        &vmInfo.basePointerValue,        "basePointer");
+	createValueLabel(120, &y, &vmInfo.stackSizeLabel,          &vmInfo.stackSizeValue,          "stackSize");
+	createValueLabel(120, &y, &vmInfo.stackMemConfigLabel,     &vmInfo.stackMemConfigValue,     "stackMemConfig");
+	createValueLabel(120, &y, &vmInfo.stackLabel,              &vmInfo.stackValue,              "stack");
+	createValueLabel(120, &y, &vmInfo.codeSpaceSizeLabel,      &vmInfo.codeSpaceSizeValue,      "codeSpaceSize");
+	createValueLabel(120, &y, &vmInfo.codeSpaceMemConfigLabel, &vmInfo.codeSpaceMemConfigValue, "codeSpaceMemConfig");
+	createValueLabel(120, &y, &vmInfo.codeSpaceLabel,          &vmInfo.codeSpaceValue,          "codeSpace");
+	createValueLabel(120, &y, &vmInfo.programListLabel,        &vmInfo.programListValue,        "programList");
+	createValueLabel(120, &y, &vmInfo.programCountLabel,       &vmInfo.programCountValue,       "programCount");
+	createValueLabel(120, &y, &vmInfo.codeSpaceTopLabel,       &vmInfo.codeSpaceTopValue,       "codeSpaceTop");
+	createValueLabel(120, &y, &vmInfo.localMemSizeLabel,       &vmInfo.localMemSizeValue,       "localMemSize");
+	createValueLabel(120, &y, &vmInfo.localMemConfigLabel,     &vmInfo.localMemConfigValue,     "localMemConfig");
+	createValueLabel(120, &y, &vmInfo.localMemLabel,           &vmInfo.localMemValue,           "localMem");
+	createValueLabel(120, &y, &vmInfo.unknownStructLabel,      &vmInfo.unknownStructValue,      "unknownStruct");
+	createValueLabel(120, &y, &vmInfo.field_0x54Label,         &vmInfo.field_0x54Value,         "field_0x54");
+	createValueLabel(120, &y, &vmInfo.field_0x58Label,         &vmInfo.field_0x58Value,         "field_0x58");
+	createValueLabel(120, &y, &vmInfo.field_0x5cLabel,         &vmInfo.field_0x5cValue,         "field_0x5c");
+	createValueLabel(120, &y, &vmInfo.field_0x60Label,         &vmInfo.field_0x60Value,         "field_0x60");
+
+	gProgramLabel = CreateWindowA(
+		"static", "Program: ?",
+		WS_CHILD | WS_VISIBLE,
+		120, y, 270, 16,
+		gDebugHWND, (HMENU)1, NULL, NULL
+	);
+	SendMessage(gProgramLabel, WM_SETFONT, (WPARAM)hFont, true);
 
 	//
 	// Create buttons
@@ -599,7 +868,7 @@ bool createDebugWindow()
 		100, 300,
 		gDebugHWND,
 		(HMENU)ID_THREAD_LIST_BOX,
-		NULL, NULL
+		gDllHModule, NULL
 	);
 	SendMessage(gThreadListBox, WM_SETFONT, (WPARAM)hFont, true);
 
@@ -610,8 +879,8 @@ bool createDebugWindow()
 		400, 298,
 		380, 258,
 		gDebugHWND,
-		(HMENU)ID_THREAD_LIST_BOX,
-		NULL, NULL
+		(HMENU)ID_MEMORY_LIST_BOX,
+		gDllHModule, NULL
 	);
 	SendMessage(gLocalMemoryList, WM_SETFONT, (WPARAM)hFont, true);
 	gLocalMemoryScrollbar = CreateWindow(
@@ -620,8 +889,8 @@ bool createDebugWindow()
 		400+380, 298,
 		18, 258,
 		gDebugHWND,
-		(HMENU)ID_THREAD_LIST_BOX,
-		NULL, NULL
+		(HMENU)ID_MEMORY_SCROLLBAR,
+		gDllHModule, NULL
 	);
 	
 	// Stack view
@@ -631,8 +900,8 @@ bool createDebugWindow()
 		803, 10,
 		150, 546,
 		gDebugHWND,
-		(HMENU)ID_THREAD_LIST_BOX,
-		NULL, NULL
+		(HMENU)ID_STACK_LIST_BOX,
+		gDllHModule, NULL
 	);
 	SendMessage(gStackList, WM_SETFONT, (WPARAM)hFont, true);
 	gStackScrollbar = CreateWindow(
@@ -641,8 +910,8 @@ bool createDebugWindow()
 		803+150, 10,
 		18, 546,
 		gDebugHWND,
-		(HMENU)ID_THREAD_LIST_BOX,
-		NULL, NULL
+		(HMENU)ID_STACK_SCROLLBAR,
+		gDllHModule, NULL
 	);
 
 	// Disassembly view
@@ -652,8 +921,8 @@ bool createDebugWindow()
 		400, 10,
 		380, 258,
 		gDebugHWND,
-		(HMENU)ID_THREAD_LIST_BOX,
-		NULL, NULL
+		(HMENU)ID_DISASSEMBLY_LIST_BOX,
+		gDllHModule, NULL
 	);
 	SendMessage(gDisassemblyList, WM_SETFONT, (WPARAM)hFont, true);
 	gDisassemblyScrollbar = CreateWindow(
@@ -662,8 +931,8 @@ bool createDebugWindow()
 		400+380, 10,
 		18, 258,
 		gDebugHWND,
-		(HMENU)ID_THREAD_LIST_BOX,
-		NULL, NULL
+		(HMENU)ID_DISASSEMBLY_SCROLLBAR,
+		gDllHModule, NULL
 	);
 
 	//
