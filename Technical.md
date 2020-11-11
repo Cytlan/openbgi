@@ -144,6 +144,21 @@ An `offset` is an address that is relative to certain addresses in memory. Most 
 
 Many opcodes accept an arbitrary VM address which is resolved to a memory location in the interpreter's process space. When an `address` is resolved into a memory address like this, we call it a `pointer` which is is treated differently than an `address`.
 
+Command line arguments
+----------------------
+
+The engine accepts 2 command line arguments:
+* 1 - ARC file to look for `ipl._bp` (Initial Program Load) in.
+* 2 - Execution flag
+
+The execution flag is a bit odd, but it can be 1 of 2 values:
+* `"Execute as a launcher."`
+* `"Do not use mutex."`
+
+The flag will set `gCmdFlagExecuteAsLauncher` or `gCmdFlagDoNotUseMutex` respectively.
+
+The `gCmdFlagExecuteAsLauncher` flag is accessible to the VM, which mainly seems to be used to execute the installer. (See: sys.islauncher)
+
 Opcodes
 -------
 

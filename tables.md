@@ -47,7 +47,7 @@ Bx |    |    |    |    |    |    |    |    |    |    |    |    |    |    |    |
 Cx |    |    |    |    |    |    |    |    |    |    |    |    |    |    |    |
 Dx |    |    |    |    |    |    |    |    |    |    |    |    |    |    |    |
 Ex |    |    |    |    |    |    |    |    |    |    |    |    |    |    |    |
-Fx |    |    |    |    |    |    |    |    |    |    |    |    |    |    |    |
+Fx |    |    |    |    |    |    |    |    |    |    |    |    |    | [islauncher](opcodes/80FD_sys.islauncher.md) |    |
 
 System instructions 1
 ---------------------

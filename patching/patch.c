@@ -11,7 +11,7 @@ VMThread_t** gVMThread = (VMThread_t**)0x0049d2f8;
 VMThread_t* gLastExecutedVMThread = NULL;
 int* bgiThreadCount = (int*)0x004994f4;
 
-int gHaltExecution = 0;
+int gHaltExecution = 1;
 int gStepExecution = 0;
 int gStepThread = 0;
 
@@ -140,12 +140,12 @@ int countThreads()
 // This should be called as soon as possible in WinMain
 void init()
 {
-	logFile = fopen("execution.log", "wb");
-	if(logFile == NULL)
-	{
-		MessageBoxA(NULL, "Failed to create execution log file", "Error", 0);
-		ExitProcess(1);
-	}
+	//logFile = fopen("execution.log", "wb");
+	//if(logFile == NULL)
+	//{
+	//	MessageBoxA(NULL, "Failed to create execution log file", "Error", 0);
+	//	ExitProcess(1);
+	//}
 }
 
 // Called whenever the VM tries to execute an instruction

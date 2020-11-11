@@ -318,12 +318,12 @@ void updateStackList(VMThread_t* thread)
 	}
 
 	// Don't attempt to add any stack elements if there are none
-	if(thread->stackSize == 0)
+	if(thread->stackSize == 0 || thread->stackPointer == 0)
 		return;
 
-	uint32_t stackPointer = thread->stackPointer;
+	uint32_t stackPointer = thread->stackPointer - 1;
 	
-	stackPointer += thread->stackSize - s.nPos;
+	stackPointer += s.nPos;
 
 	char memStr[32];
 	for(int i = 0; i < 34; i++)
@@ -346,8 +346,8 @@ VMProgramList_t* getCurrentProgram(VMThread_t* thread)
 	VMProgramList_t* p = thread->programList;
 	while(p)
 	{
-		if(thread->instructionPointer >= p->location &&
-		   thread->instructionPointer < p->location + p->size)
+		if(thread->programCounter >= p->location &&
+		   thread->programCounter < p->location + p->size)
 			return p;
 		p = p->prevProgram;
 	}
@@ -395,7 +395,7 @@ void updateDisassembly(VMThread_t* curThreadPtr)
 		if(!line) break;
 		SendMessage(gDisassemblyList, LB_INSERTSTRING, i, (WPARAM)line->str);
 		if(line->location == ppos)
-			highlight = i;
+			highlight = i + 1;
 		line = line->next;
 	}
 	SendMessage(gDisassemblyList, LB_SETCURSEL, highlight, 0);
@@ -853,7 +853,7 @@ bool createDebugWindow()
 	btnY += 40;
 	gDumpLocalButton = makeButton("Dump Local", 10, btnY, 100, 30, ID_BUTTON_DUMP_LOCAL);
 	btnY += 40;
-	gHaltButton      = makeButton("Halt",       10, btnY, 100, 30, ID_BUTTON_HALT);
+	gHaltButton      = makeButton(gHaltExecution ? "Run" : "Halt", 10, btnY, 100, 30, ID_BUTTON_HALT);
 	btnY += 40;
 	gStepButton      = makeButton("Step",       10, btnY, 100, 30, ID_BUTTON_STEP);
 	btnY += 40;
