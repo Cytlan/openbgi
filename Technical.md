@@ -34,80 +34,62 @@ The engine is not properly sandboxed, and script files are able to access memory
 
 The VM uses a flat memory space which is shared by both the code and the stack.
 
-The VM operates in the memory spaces of:
-* 0x00000000 to 0x00FFFFFF (gGlobalMemory - Global memory?)
-* 0x10000000 to 0x12FFFFFF Local thread code and memory
-* 0x40000000 to 0x40FFFFFF ????
+The memory map of the VM can differ from version to version, so you cannot make any assumptions about which range of memory is dedicated to which purpose.
 
-Any attempt at accessing memory outside this region will crash the VM.
+#### Local Memory
 
-Note: It is entierly possible to access unallocated memory. Especially the 0x00000000 to 0x00FFFFFF range is dangerous, as there is no checks performed to make sure only allocated memory is accessed.
+Local memory is an area of thread memory which is used for local temporary memory.
 
-#### Base
+Functions are expected to add however many bytes of local memory they want to reserve to the `memPtr` register, and likewise subtract the same value from `memPtr` when the function returns.
 
-The "base" is basically the VM's own memory, and it acts similarily to the stack, except you can't push or pull from it.
+This is usually done like this:
+```
+    ; Allocate 256 bytes of local memory
+    memptr
+    push 0x100
+    add
+    storememptr
+```
 
-This memory space is used to store variables and other things the running code needs, and can be thought of as the running code's local scope.
+Using the `memptr offset` instruction with an operand will result in the full virtual address to the local memory offset being pushed onto the stack.
 
-The code is expected to increase the base pointer with how many bytes it wants to allocate for its own local use, and access it using the baseptr opcode.
-
-The base is assigned the address space from 0x10000000 to 0x10FFFFFF.
+For example:
+```
+   memptr 0x100 ; This will push 0x12000100 in BGI v1.69
+```
 
 #### Code
 
-The code resides in the address space of 0x11000000 to 0x11FFFFFF.
+Code space is managed like a stack, and it's possible to push and pop programs to/from the code space using the `sys` instructions.
 
-Code space is managed like a stack, and it's possible to push and pop programs to/from the code space.
+`sys.loadcode` pushes a code block to the code area.
+`sys.unloadcode` pops the most recently added code block from the code area.
 
-loadcode pushes a code block to the code area.
-unloadcode pops the most recently added code block from the code area.
-
-#### Memory
-
-Local memory resides in 0x12000000 to 0x12FFFFFF. Not much is known about local memory right now.
+The `codeptr` instruction behaves the same way as `memptr`, except for the code space.
 
 #### Stack
 
-The VM is a stack machine. That means for every operation, it has to either push or pop the stack. For example, if you push 0x01 and 0x01 to the stack and execute an add instruction, the add instruction will pop the 2 top-most values off the stack, add them together and finally push the result back onto the stack.
+The VM is a stack machine. That means for every operation, it has to either push or pop the stack. For example, if you `push8 0x01` and `push8 0x01` to the stack and execute the `add` instruction, the add instruction will pop the 2 top-most values off the stack, add them together and finally push the result back onto the stack.
 
-It's a bit strage to describe the arguments each operation takes due to the FILO nature of a stack, but for convenience and consistency, the data on the top of the stack is always referred to as the first argument, the element under the top element is the 2nd argument and so on.
-
-The "top of the stack" is always the last element that was pushed onto the stack.
-
-The stack pointer itself is inaccessible to the code running in the VM.
-
-In addition to values that have been push'd and pop'd, the stack contain a few elements pushed by the VM itself to keep track of where we are in execution. It seems like it uses the bottom-most 8 values of the stack for this purpose.
-
-The value in stack[1] seems to be pointing to the end of the code space. If an attempt is made to jump to an address over the address in state[1], the VM vill crash with the error message "IPにコード領域のサイズを超える値 $%X が設定されました" ("The value $%X that exceeds the size of the code area is set in the IP")
-
-The value in stack[7] might be a pointer to the next stack frame. If the current basepointer is less than 4 bytes away from the value in stack[7], and error will be thrown: "スタック領域が不足していま" ("Insufficient stack space")
-
-Notes:
-
-* The bottom 8 values might not be part of the stack at all, and we may have misinterpreted the stack pointer location.
-* Does the stack pointer decrement or incrememnt when something it pushed onti it? For now, the assumption is that its decremented.
-
-#### Call stack
-
-When calling subroutines, the return address is pushed onto a separate callstack. This stack is inaccessible to the program.
+It's a bit strage to describe the arguments each operation takes due to the FILO nature of a stack, but for convenience and consistency, the data on the top of the stack is always referred to as the first argument, the element under the top element is the 2nd argument and so on. The stack pointer itself is *incremented* after something is pushed onto the stack, and *decrements* before a value is popped from the stack. The stack pointer will always point to the first available stack slot. The stack pointer itself is inaccessible to the code running in the VM.
 
 #### Registers
 
 Like most stack machines, BGI does not utilise a lot of registers. The only useful registers to keep in mind are:
 
-##### PC
+##### ProgramCounter
 
 PC stands for Program Counter, and points to the next instruction to be executed by the virtual machine. It's incremented by the number of bytes the instruction executed consumes, as expected.
 
 You can write to this register using the jmp opcodes, but you cannot read from it.
 
-##### SP
+##### StackPointer
 
-SP means Stack Pointer, and points to the next available slot in the stack. The stack grows upwards. That means for every item that's pushed onto the stack, the stack pointer is decremented. When pop'ing, the stack pointer is incremented.
+This register points to the next available slot in the stack. The stack grows downwards. That means for every item that's pushed onto the stack, the stack pointer is incremented. When pop'ing, the stack pointer is decremented before reading.
 
-##### BP
+##### MemPtr
 
-BP is Base Pointer, and is used for locally scoped variables variables.
+MemPtr, or Local Memory Pointer, is used to keep track of how much of the local memory space is used.
 
 #### Signed values
 
@@ -394,11 +376,11 @@ JumpToMe:
 
 Pushes the current PC address on the call stack, then pops 1 argument off the stack and jumps to it.
 
-Can give the following error: "スタック領域が不足していま" ("Insufficient stack space")
+The return address is written to `memptr`, and `memPtr` is incremented by 4.
 
 #### 0x17 - ret
 
-Pops an address from the call stack and jumps to it.
+Reads the return address from `memptr - 4` and jumps to that location. `memptr` is decremented by 4.
 
 #### 0x20 - add
 
