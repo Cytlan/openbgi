@@ -27,7 +27,7 @@ typedef struct VMThread
 	uint32_t stackPointer;
 	uint32_t instructionPointer;
 	uint32_t programCounter;
-	uint32_t basePointer;
+	uint32_t memPtr;
 	uint32_t stackSize;
 	struct VMMemory* stackMemConfig;
 	uint32_t* stack;
@@ -80,6 +80,16 @@ typedef struct LogOperation
 	uint32_t stackOut[512];
 	uint8_t bytesIn[1024];
 } __attribute__((__packed__)) LogOperation_t;
+
+typedef struct BGIOpcode
+{
+	char* mnemonic;
+	int numOperands;
+	char operands[4];
+} BGIOpcode_t;
+
+extern BGIOpcode_t basicInstructions[256];
+extern BGIOpcode_t sys0Instructions[256];
 
 struct DisasmLine;
 typedef struct DisasmLine

@@ -26,9 +26,9 @@ BGIOpcode_t basicInstructions[256] =
 	},
 	// 0x03 ----
 	{},
-	// 0x04 baseptr
+	// 0x04 memptr
 	{
-		.mnemonic = "baseptr",
+		.mnemonic = "memptr",
 		.numOperands = 1,
 		.operands = {2,0,0,0}
 	},
@@ -58,9 +58,9 @@ BGIOpcode_t basicInstructions[256] =
 		.numOperands = 1,
 		.operands = {1,0,0,0}
 	},
-	// 0x0A write
+	// 0x0A writemem
 	{
-		.mnemonic = "write",
+		.mnemonic = "writemem",
 		.numOperands = 1,
 		.operands = {1,0,0,0}
 	},
@@ -82,13 +82,13 @@ BGIOpcode_t basicInstructions[256] =
 	{},
 	// 0x0F -----
 	{},
-	// 0x10 loadbase
+	// 0x10 memptr
 	{
-		.mnemonic = "loadbase"
+		.mnemonic = "memptr"
 	},
-	// 0x11 storebase
+	// 0x11 storememptr
 	{
-		.mnemonic = "storebase"
+		.mnemonic = "storememptr"
 	},
 	// 0x12 -----
 	{},
@@ -341,7 +341,9 @@ BGIOpcode_t basicInstructions[256] =
 		.mnemonic = "memorychecking"
 	},
 	// 0x75 -----
-	{},
+	{
+		.mnemonic = "addmemboundary"
+	},
 	// 0x76 -----
 	{},
 	// 0x77 -----

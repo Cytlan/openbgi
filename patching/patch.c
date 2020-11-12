@@ -61,7 +61,7 @@ void printThreadInfo(char* out, VMThread_t* thread)
 		"stackPointer       %.8LX\n"
 		"instructionPointer %.8LX\n"
 		"programCounter     %.8LX\n"
-		"basePointer        %.8LX\n"
+		"memPtr             %.8LX\n"
 		"stackSize          %.8LX\n"
 		"stackMemConfig     %.8LX\n"
 		"stack              %.8LX\n"
@@ -86,7 +86,7 @@ void printThreadInfo(char* out, VMThread_t* thread)
 		(uint32_t)thread->stackPointer,
 		(uint32_t)thread->instructionPointer,
 		(uint32_t)thread->programCounter,
-		(uint32_t)thread->basePointer,
+		(uint32_t)thread->memPtr,
 		(uint32_t)thread->stackSize,
 		(uint32_t)thread->stackMemConfig,
 		(uint32_t)thread->stack,

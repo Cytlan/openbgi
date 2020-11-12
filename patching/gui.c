@@ -174,8 +174,8 @@ struct VMThreadLabels
 	HWND instructionPointerValue;
 	HWND programCounterLabel;
 	HWND programCounterValue;
-	HWND basePointerLabel;
-	HWND basePointerValue;
+	HWND memPtrLabel;
+	HWND memPtrValue;
 	HWND stackSizeLabel;
 	HWND stackSizeValue;
 	HWND stackMemConfigLabel;
@@ -679,8 +679,8 @@ void updateVMInfo(VMThread_t* thread)
 		updateValue(vmInfo.instructionPointerValue, (uint32_t)thread->instructionPointer);
 	if(curThreadCopy.programCounter != thread->programCounter)
 		updateValue(vmInfo.programCounterValue,     (uint32_t)thread->programCounter);
-	if(curThreadCopy.basePointer != thread->basePointer)
-		updateValue(vmInfo.basePointerValue,        (uint32_t)thread->basePointer);
+	if(curThreadCopy.memPtr != thread->memPtr)
+		updateValue(vmInfo.memPtrValue,             (uint32_t)thread->memPtr);
 	if(curThreadCopy.stackSize != thread->stackSize)
 		updateValue(vmInfo.stackSizeValue,          (uint32_t)thread->stackSize);
 	if(curThreadCopy.stackMemConfig != thread->stackMemConfig)
@@ -816,7 +816,7 @@ bool createDebugWindow()
 	createValueLabel(120, &y, &vmInfo.stackPointerLabel,       &vmInfo.stackPointerValue,       "stackPointer");
 	createValueLabel(120, &y, &vmInfo.instructionPointerLabel, &vmInfo.instructionPointerValue, "instructionPointer");
 	createValueLabel(120, &y, &vmInfo.programCounterLabel,     &vmInfo.programCounterValue,     "programCounter");
-	createValueLabel(120, &y, &vmInfo.basePointerLabel,        &vmInfo.basePointerValue,        "basePointer");
+	createValueLabel(120, &y, &vmInfo.memPtrLabel,             &vmInfo.memPtrValue,             "memPtr");
 	createValueLabel(120, &y, &vmInfo.stackSizeLabel,          &vmInfo.stackSizeValue,          "stackSize");
 	createValueLabel(120, &y, &vmInfo.stackMemConfigLabel,     &vmInfo.stackMemConfigValue,     "stackMemConfig");
 	createValueLabel(120, &y, &vmInfo.stackLabel,              &vmInfo.stackValue,              "stack");

@@ -36,7 +36,7 @@ cp $BACKUPFILE $EXEFILE
 
 # Build DLL
 echo "Compile DLL"
-i686-w64-mingw32-gcc-win32 -O3 -Wl,--export-all-symbols -shared -o patch.dll patch.c debug.c gui.c disassembler.c -lgdi32 -static-libgcc || exit 1
+i686-w64-mingw32-gcc-win32 -O3 -Wl,--export-all-symbols -shared -o patch.dll patch.c debug.c gui.c disassembler.c disasm_basic.c disasm_sys0.c -lgdi32 -static-libgcc || exit 1
 cp patch.dll $EXEDIR/patch.dll 
 
 # Add a new code cave section to the executable

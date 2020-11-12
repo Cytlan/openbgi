@@ -8,7 +8,7 @@ BGIOpcode_t sys0Instructions[256] =
 {
 	// 0x00 ----
 	{
-		.mnemonic = NULL,
+		.mnemonic = "srand",
 		.numOperands = 0,
 		.operands = {0,0,0,0}
 	},
@@ -536,7 +536,7 @@ BGIOpcode_t sys0Instructions[256] =
 	},
 	// 0x58 ----
 	{
-		.mnemonic = NULL,
+		.mnemonic = "settimer?",
 		.numOperands = 0,
 		.operands = {0,0,0,0}
 	},
@@ -632,7 +632,7 @@ BGIOpcode_t sys0Instructions[256] =
 	},
 	// 0x68 ----
 	{
-		.mnemonic = NULL,
+		.mnemonic = "capturecloseevent?", // PTR_DAT_0048e39c = &DAT_004c058c
 		.numOperands = 0,
 		.operands = {0,0,0,0}
 	},
@@ -680,7 +680,7 @@ BGIOpcode_t sys0Instructions[256] =
 	},
 	// 0x70 ----
 	{
-		.mnemonic = NULL,
+		.mnemonic = "alloc0x70", // Allocates memory into DAT_004bd43c
 		.numOperands = 0,
 		.operands = {0,0,0,0}
 	},
