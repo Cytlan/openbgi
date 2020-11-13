@@ -62,7 +62,7 @@ Disasm_t* disassembleProgram(VMThread_t* thread, VMProgramList_t* program)
 		BGIOpcode_t* opcode = &basicInstructions[bytecode];
 		if(opcode->mnemonic == NULL)
 		{
-			snprintf(&str[0], 256, "    .db 0x%.2X", bytecode);
+			snprintf(&str[0], 256, "  %.8LX: .db 0x%.2X", pos, bytecode);
 			cur = addLine(cur, pos, 0, &str[0]);
 			continue;
 		}
@@ -74,7 +74,7 @@ Disasm_t* disassembleProgram(VMThread_t* thread, VMProgramList_t* program)
 			if(jmpOp > 0x05)
 				jmpOp = 0x06;
 			char* opStr = jmpOps[jmpOp];
-			snprintf(&str[0], 256, "    %s", opStr);
+			snprintf(&str[0], 256, "  %.8LX: %s", pos, opStr);
 			cur = addLine(cur, pos, 0, &str[0]);
 			continue;
 		}
@@ -95,7 +95,12 @@ Disasm_t* disassembleProgram(VMThread_t* thread, VMProgramList_t* program)
 		int sPos = 0;
 		fmt[sPos++] = ' ';
 		fmt[sPos++] = ' ';
-		fmt[sPos++] = ' ';
+		fmt[sPos++] = '%';
+		fmt[sPos++] = '.';
+		fmt[sPos++] = '8';
+		fmt[sPos++] = 'L';
+		fmt[sPos++] = 'X';
+		fmt[sPos++] = ':';
 		fmt[sPos++] = ' ';
 		fmt[sPos++] = '%';
 		fmt[sPos++] = 's';
@@ -150,11 +155,11 @@ Disasm_t* disassembleProgram(VMThread_t* thread, VMProgramList_t* program)
 		fmt[sPos++] = 0;
 		
 		if(multibyteOpcode && multibyteOpcode->mnemonic)
-			snprintf(&str[0], 256, fmt, opcode->mnemonic, multibyteOpcode->mnemonic, operands[0], operands[1], operands[2], operands[3]);
+			snprintf(&str[0], 256, fmt, pos, opcode->mnemonic, multibyteOpcode->mnemonic, operands[0], operands[1], operands[2], operands[3]);
 		else if(multibyteOpcode && !multibyteOpcode->mnemonic)
-			snprintf(&str[0], 256, fmt, opcode->mnemonic, multibyteBytecode, operands[0], operands[1], operands[2], operands[3]);
+			snprintf(&str[0], 256, fmt, pos, opcode->mnemonic, multibyteBytecode, operands[0], operands[1], operands[2], operands[3]);
 		else
-			snprintf(&str[0], 256, fmt, opcode->mnemonic, operands[0], operands[1], operands[2], operands[3]);
+			snprintf(&str[0], 256, fmt, pos, opcode->mnemonic, operands[0], operands[1], operands[2], operands[3]);
 		cur = addLine(cur, pos, 0, &str[0]);
 
 		if(pos >= end)

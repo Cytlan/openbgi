@@ -17,11 +17,13 @@
 #define ID_BUTTON_DUMP_LOCAL     9002
 #define ID_BUTTON_HALT           9003
 #define ID_BUTTON_STEP           9004
+#define ID_BUTTON_BREAKPOINTS    9005
 
 HMODULE gDllHModule;
-HWND gDebugHWND;
+HWND gDebuggerWindow;
 ATOM gHWndClassAtom;
-HFONT hFont;
+HFONT gFont;
+
 bool initialised = false;
 
 HWND gGUIThreadCount;
@@ -33,6 +35,7 @@ HWND gDumpCodeButton;
 HWND gDumpLocalButton;
 HWND gHaltButton;
 HWND gStepButton;
+HWND gBreakpointsButton;
 
 // Disassembly
 HWND gDisassemblyList;
@@ -559,6 +562,10 @@ LRESULT WINAPI DLLWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 					gStepExecution = 1;
 					break;
 
+				case ID_BUTTON_BREAKPOINTS:
+					showBreakpointsWindow();
+					break;
+
 				case ID_THREAD_LIST_BOX:
 					switch(HIWORD(wParam))
 					{
@@ -571,6 +578,7 @@ LRESULT WINAPI DLLWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 							break;
 						}
 					}
+					break;
 			}
 			break;
 
@@ -641,18 +649,18 @@ void createValueLabel(int x, int* y, HWND* label, HWND* value, char* text)
 		"static", text,
 		WS_CHILD | WS_VISIBLE,
 		x, *y, 200, 16,
-		gDebugHWND, (HMENU)1, NULL, NULL
+		gDebuggerWindow, (HMENU)1, NULL, NULL
 	);
 	*value = CreateWindowA(
 		"static", "?",
 		WS_CHILD | WS_VISIBLE,
 		x+200, *y, 70, 16,
-		gDebugHWND, (HMENU)1, NULL, NULL
+		gDebuggerWindow, (HMENU)1, NULL, NULL
 	);
 	if(!*label || !*value)
 		fatalError(text);
-	SendMessage(*label, WM_SETFONT, (WPARAM)hFont, true);
-	SendMessage(*value, WM_SETFONT, (WPARAM)hFont, true);
+	SendMessage(*label, WM_SETFONT, (WPARAM)gFont, true);
+	SendMessage(*value, WM_SETFONT, (WPARAM)gFont, true);
 	*y += 16;
 }
 
@@ -737,18 +745,18 @@ void updateVMInfo(VMThread_t* thread)
 	memcpy(&curThreadCopy, thread, sizeof(VMThread_t));
 }
 
-HWND makeButton(char* title, int x, int y, int width, int height, int id)
+HWND makeButton(char* title, HWND wnd, int x, int y, int width, int height, int id)
 {
 	HWND button = CreateWindow(
 		"BUTTON", title,
 		WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
 		x, y,
 		width, height,
-		gDebugHWND,
+		wnd,
 		(HMENU)id,
-		NULL, NULL
+		gDllHModule, NULL
 	);
-	SendMessage(button, WM_SETFONT, (WPARAM)hFont, true);
+	SendMessage(button, WM_SETFONT, (WPARAM)gFont, true);
 	return button;
 }
 
@@ -779,7 +787,7 @@ bool createDebugWindow()
 		return false;
 	}
 
-	gDebugHWND = CreateWindowExA(
+	gDebuggerWindow = CreateWindowExA(
 		0,
 		(LPCSTR)gHWndClassAtom,
 		"Debugger",
@@ -789,21 +797,22 @@ bool createDebugWindow()
 		NULL, NULL,
 		gDllHModule, NULL
 	);
-	if(!gDebugHWND)
+	if(!gDebuggerWindow)
 	{
 		fatalError("CreateWindowExA");
 		return false;
 	}
 
-	hFont = CreateFontA(
+	gFont = CreateFontA(
 		16, 0,
-		0, 0, FW_DONTCARE,
+		0, 0, FW_REGULAR,
 		false, false, false,
 		ANSI_CHARSET,
 		OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
 		FIXED_PITCH | FF_MODERN, NULL
 	);
-	SendMessage(gDebugHWND, WM_SETFONT, (WPARAM)hFont, true);
+	SendMessage(gDebuggerWindow, WM_SETFONT, (WPARAM)gFont, true);
+
 
 	//
 	// Create thread info fields
@@ -839,117 +848,125 @@ bool createDebugWindow()
 		"static", "Program: ?",
 		WS_CHILD | WS_VISIBLE,
 		120, y, 270, 16,
-		gDebugHWND, (HMENU)1, NULL, NULL
+		gDebuggerWindow, (HMENU)1, NULL, NULL
 	);
-	SendMessage(gProgramLabel, WM_SETFONT, (WPARAM)hFont, true);
+	SendMessage(gProgramLabel, WM_SETFONT, (WPARAM)gFont, true);
 
 	//
 	// Create buttons
 	//
 	int btnY = 310;
-	gDumpStackButton = makeButton("Dump Stack", 10, btnY, 100, 30, ID_BUTTON_DUMP_STACK);
+	gDumpStackButton   = makeButton("Dump Stack",  gDebuggerWindow, 10, btnY, 100, 30, ID_BUTTON_DUMP_STACK);
 	btnY += 40;
-	gDumpLocalButton = makeButton("Dump Code",  10, btnY, 100, 30, ID_BUTTON_DUMP_CODE);
+	gDumpLocalButton   = makeButton("Dump Code",   gDebuggerWindow, 10, btnY, 100, 30, ID_BUTTON_DUMP_CODE);
 	btnY += 40;
-	gDumpLocalButton = makeButton("Dump Local", 10, btnY, 100, 30, ID_BUTTON_DUMP_LOCAL);
+	gDumpLocalButton   = makeButton("Dump Local",  gDebuggerWindow, 10, btnY, 100, 30, ID_BUTTON_DUMP_LOCAL);
 	btnY += 40;
-	gHaltButton      = makeButton(gHaltExecution ? "Run" : "Halt", 10, btnY, 100, 30, ID_BUTTON_HALT);
+	gHaltButton        = makeButton(gHaltExecution ? "Run" : "Halt", gDebuggerWindow, 10, btnY, 100, 30, ID_BUTTON_HALT);
 	btnY += 40;
-	gStepButton      = makeButton("Step",       10, btnY, 100, 30, ID_BUTTON_STEP);
+	gStepButton        = makeButton("Step",        gDebuggerWindow, 10, btnY, 100, 30, ID_BUTTON_STEP);
+	btnY += 40;
+	gBreakpointsButton = makeButton("Breakpoints", gDebuggerWindow, 10, btnY, 100, 30, ID_BUTTON_BREAKPOINTS);
 	btnY += 40;
 
 	//
 	// Create thread list
 	//
-	gThreadListBox = CreateWindow(
+	gThreadListBox = CreateWindowEx(
+		WS_EX_CLIENTEDGE,
 		"LISTBOX", NULL,
 		WS_VISIBLE | WS_CHILD | LBS_STANDARD | LBS_NOTIFY,
 		10, 10,
 		100, 300,
-		gDebugHWND,
+		gDebuggerWindow,
 		(HMENU)ID_THREAD_LIST_BOX,
 		gDllHModule, NULL
 	);
-	SendMessage(gThreadListBox, WM_SETFONT, (WPARAM)hFont, true);
+	SendMessage(gThreadListBox, WM_SETFONT, (WPARAM)gFont, true);
 
 	// Memory view
-	gLocalMemoryList = CreateWindow(
+	gLocalMemoryList = CreateWindowEx(
+		WS_EX_CLIENTEDGE,
 		"LISTBOX", NULL,
 		WS_VISIBLE | WS_CHILD | LBS_STANDARD | LBS_NOTIFY | WS_VSCROLL,
 		400, 298,
-		380, 258,
-		gDebugHWND,
+		380, 262,
+		gDebuggerWindow,
 		(HMENU)ID_MEMORY_LIST_BOX,
 		gDllHModule, NULL
 	);
-	SendMessage(gLocalMemoryList, WM_SETFONT, (WPARAM)hFont, true);
+	SendMessage(gLocalMemoryList, WM_SETFONT, (WPARAM)gFont, true);
 	gLocalMemoryScrollbar = CreateWindow(
 		"SCROLLBAR", NULL,
 		WS_VISIBLE | WS_CHILD | SBS_VERT,
 		400+380, 298,
-		18, 258,
-		gDebugHWND,
+		18, 262,
+		gDebuggerWindow,
 		(HMENU)ID_MEMORY_SCROLLBAR,
 		gDllHModule, NULL
 	);
 	
 	// Stack view
-	gStackList = CreateWindow(
+	gStackList = CreateWindowEx(
+		WS_EX_CLIENTEDGE,
 		"LISTBOX", NULL,
 		WS_VISIBLE | WS_CHILD | LBS_STANDARD | LBS_NOTIFY | WS_VSCROLL,
 		803, 10,
-		150, 546,
-		gDebugHWND,
+		150, 550,
+		gDebuggerWindow,
 		(HMENU)ID_STACK_LIST_BOX,
 		gDllHModule, NULL
 	);
-	SendMessage(gStackList, WM_SETFONT, (WPARAM)hFont, true);
+	SendMessage(gStackList, WM_SETFONT, (WPARAM)gFont, true);
 	gStackScrollbar = CreateWindow(
 		"SCROLLBAR", NULL,
 		WS_VISIBLE | WS_CHILD | SBS_VERT,
 		803+150, 10,
-		18, 546,
-		gDebugHWND,
+		18, 550,
+		gDebuggerWindow,
 		(HMENU)ID_STACK_SCROLLBAR,
 		gDllHModule, NULL
 	);
 
 	// Disassembly view
-	gDisassemblyList = CreateWindow(
+	gDisassemblyList = CreateWindowEx(
+		WS_EX_CLIENTEDGE,
 		"LISTBOX", NULL,
 		WS_VISIBLE | WS_CHILD | LBS_STANDARD | LBS_NOTIFY | WS_VSCROLL,
 		400, 10,
-		380, 258,
-		gDebugHWND,
+		380, 262,
+		gDebuggerWindow,
 		(HMENU)ID_DISASSEMBLY_LIST_BOX,
 		gDllHModule, NULL
 	);
-	SendMessage(gDisassemblyList, WM_SETFONT, (WPARAM)hFont, true);
+	SendMessage(gDisassemblyList, WM_SETFONT, (WPARAM)gFont, true);
 	gDisassemblyScrollbar = CreateWindow(
 		"SCROLLBAR", NULL,
 		WS_VISIBLE | WS_CHILD | SBS_VERT,
 		400+380, 10,
-		18, 258,
-		gDebugHWND,
+		18, 262,
+		gDebuggerWindow,
 		(HMENU)ID_DISASSEMBLY_SCROLLBAR,
 		gDllHModule, NULL
 	);
 
+	createBreakpointsWindow();
+
 	//
 	// Show window
 	//
-    ShowWindow(gDebugHWND, SW_SHOW);
-    UpdateWindow(gDebugHWND);
+    ShowWindow(gDebuggerWindow, SW_SHOW);
+    UpdateWindow(gDebuggerWindow);
 
     // A timer to regularily look for state updates
-    SetTimer(gDebugHWND, ID_WINDOW_UPDATE_TIMER, 100, NULL);
+    SetTimer(gDebuggerWindow, ID_WINDOW_UPDATE_TIMER, 100, NULL);
 
     initialised = true;
 }
 
 void shutdownDebugger()
 {
-    DestroyWindow(gDebugHWND);
+    DestroyWindow(gDebuggerWindow);
     UnregisterClassA((LPCSTR)gHWndClassAtom, gDllHModule);
 }
 

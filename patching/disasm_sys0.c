@@ -680,7 +680,7 @@ BGIOpcode_t sys0Instructions[256] =
 	},
 	// 0x70 ----
 	{
-		.mnemonic = "alloc0x70", // Allocates memory into DAT_004bd43c
+		.mnemonic = "allocglobalmem", // Allocates memory into gGlobalMem
 		.numOperands = 0,
 		.operands = {0,0,0,0}
 	},

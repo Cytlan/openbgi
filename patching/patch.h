@@ -6,67 +6,77 @@
 #ifndef _PATCH_H_
 #define _PATCH_H_
 
-struct VMMemory;
-struct VMThread;
-struct VMUnknownStruct;
-struct VMProgramList;
+// -----------------------------------------------------------------------------
+//
+// BGI Structs (Exported from Ghidra)
+//
+// -----------------------------------------------------------------------------
+typedef struct VMMemory VMMemory_t;
+typedef struct VMThread VMThread_t;
+typedef struct VMUnknownStruct VMUnknownStruct_t;
+typedef struct VMProgramList VMProgramList_t;
 
-typedef struct VMMemory
+struct VMMemory
 {
 	int isAllocated;
 	uint8_t* mem;
 	int size;
-} VMMemory_t;
+};
 
-typedef struct VMThread
+struct VMThread
 {
 	uint32_t programId;
 	uint32_t threadId;
-	struct VMThread* nextThread;
+	VMThread_t* nextThread;
 	uint32_t flags;
 	uint32_t stackPointer;
 	uint32_t instructionPointer;
 	uint32_t programCounter;
 	uint32_t memPtr;
 	uint32_t stackSize;
-	struct VMMemory* stackMemConfig;
+	VMMemory_t* stackMemConfig;
 	uint32_t* stack;
 	uint32_t codeSpaceSize;
-	struct VMMemory* codeSpaceMemConfig;
+	VMMemory_t* codeSpaceMemConfig;
 	uint8_t* codeSpace;
-	struct VMProgramList* programList;
+	VMProgramList_t* programList;
 	uint32_t programCount;
 	uint32_t codeSpaceTop;
 	uint32_t localMemSize;
-	struct VMMemory* localMemConfig;
+	VMMemory_t* localMemConfig;
 	uint8_t* localMem;
-	struct VMUnknownStruct* unknownStruct;
+	VMUnknownStruct_t* unknownStruct;
 	int (*field_0x54)(int);
 	uint32_t field_0x58;
 	uint32_t field_0x5c;
 	uint32_t field_0x60;
-} VMThread_t;
+};
 
-typedef struct VMUnknownStruct
+struct VMUnknownStruct
 {
 	int field_0x0;
-	uint8_t * buf;
+	uint8_t* buf;
 	int field_0x8;
 	int field_0xc;
-	struct VMMemory * mem;
+	VMMemory_t* mem;
 	int field_0x14;
 	int field_0x18;
 	int field_0x1c;
-} VMUnknownStruct_t;
+};
 
-typedef struct VMProgramList
+struct VMProgramList
 {
 	char* filename;
 	int size;
 	int location;
-	struct VMProgramList* prevProgram;
-} VMProgramList_t;
+	VMProgramList_t* prevProgram;
+};
 
+// -----------------------------------------------------------------------------
+//
+// Debugger structs
+//
+// -----------------------------------------------------------------------------
 typedef struct LogOperation
 {
 	uint8_t opcode;
@@ -81,6 +91,22 @@ typedef struct LogOperation
 	uint8_t bytesIn[1024];
 } __attribute__((__packed__)) LogOperation_t;
 
+typedef struct Breakpoint Breakpoint_t;
+struct Breakpoint
+{
+	bool inUse;
+	int type;
+	bool enabled;
+	char name[64];
+	uint32_t value;
+};
+extern Breakpoint_t gBreakpoints[32];
+
+// -----------------------------------------------------------------------------
+//
+// Disassembler
+//
+// -----------------------------------------------------------------------------
 typedef struct BGIOpcode
 {
 	char* mnemonic;
@@ -88,20 +114,17 @@ typedef struct BGIOpcode
 	char operands[4];
 } BGIOpcode_t;
 
-extern BGIOpcode_t basicInstructions[256];
-extern BGIOpcode_t sys0Instructions[256];
-
-struct DisasmLine;
-typedef struct DisasmLine
+typedef struct DisasmLine DisasmLine_t;
+struct DisasmLine
 {
 	char* str;
 	uint32_t location;
 	int isLabel;
-	struct DisasmLine* next;
-} DisasmLine_t;
+	DisasmLine_t* next;
+};
 
-struct Disasm;
-typedef struct Disasm
+typedef struct Disasm Disasm_t;
+struct Disasm
 {
 	VMThread_t* thread;
 	VMProgramList_t* program;
@@ -109,17 +132,37 @@ typedef struct Disasm
 	uint32_t location;
 	uint32_t size;
 	DisasmLine_t* disasm;
-	struct Disasm* next;
-} Disasm_t;
+	Disasm_t* next;
+};
 
+// -----------------------------------------------------------------------------
+//
+// Debugger globals
+//
+// -----------------------------------------------------------------------------
+// Windows
+extern HMODULE gDllHModule;
+extern HWND gDebuggerWindow;
+extern HFONT gFont;
+
+// Debugger
 extern VMThread_t** gVMThread;
 extern VMThread_t* gLastExecutedVMThread;
-extern HMODULE gDllHModule;
 
+// Execution control
 extern int gHaltExecution;
 extern int gStepExecution;
 extern int gStepThread;
 
+// Disassembler
+extern BGIOpcode_t basicInstructions[256];
+extern BGIOpcode_t sys0Instructions[256];
+
+// -----------------------------------------------------------------------------
+//
+// Debugger funcs
+//
+// -----------------------------------------------------------------------------
 int buildBuffer();
 int countThreads();
 uint32_t getThreadIP(int threadId);
@@ -137,12 +180,21 @@ __thiscall void BGI_PushStack(VMThread_t* vmThread, int data);
 // Misc
 void shutdownDebugger();
 void fatalError(char* error);
+HWND makeButton(char* title, HWND wnd, int x, int y, int width, int height, int id);
 
 // Debugging
 bool createDebugWindow();
 Disasm_t* disassembleProgram(VMThread_t* thread, VMProgramList_t* program);
 void freeDisassemblies(Disasm_t* disasm);
 
+// Breakpoints
+bool createBreakpointsWindow();
+void disableBreakpointsInputs();
+void showBreakpointsWindow();
+void hideBreakpointsWindow();
+void populateBreakpointList();
+void setBreakpointsWindow(Breakpoint_t* breakpoint);
+Breakpoint_t* getFreeBreakpoint();
 
 // Windows stuff
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved);
