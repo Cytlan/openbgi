@@ -6,71 +6,7 @@
 #ifndef _PATCH_H_
 #define _PATCH_H_
 
-// -----------------------------------------------------------------------------
-//
-// BGI Structs (Exported from Ghidra)
-//
-// -----------------------------------------------------------------------------
-typedef struct VMMemory VMMemory_t;
-typedef struct VMThread VMThread_t;
-typedef struct VMUnknownStruct VMUnknownStruct_t;
-typedef struct VMProgramList VMProgramList_t;
-
-struct VMMemory
-{
-	int isAllocated;
-	uint8_t* mem;
-	int size;
-};
-
-struct VMThread
-{
-	uint32_t programId;
-	uint32_t threadId;
-	VMThread_t* nextThread;
-	uint32_t flags;
-	uint32_t stackPointer;
-	uint32_t instructionPointer;
-	uint32_t programCounter;
-	uint32_t memPtr;
-	uint32_t stackSize;
-	VMMemory_t* stackMemConfig;
-	uint32_t* stack;
-	uint32_t codeSpaceSize;
-	VMMemory_t* codeSpaceMemConfig;
-	uint8_t* codeSpace;
-	VMProgramList_t* programList;
-	uint32_t programCount;
-	uint32_t codeSpaceTop;
-	uint32_t localMemSize;
-	VMMemory_t* localMemConfig;
-	uint8_t* localMem;
-	VMUnknownStruct_t* unknownStruct;
-	int (*field_0x54)(int);
-	uint32_t field_0x58;
-	uint32_t field_0x5c;
-	uint32_t field_0x60;
-};
-
-struct VMUnknownStruct
-{
-	int field_0x0;
-	uint8_t* buf;
-	int field_0x8;
-	int field_0xc;
-	VMMemory_t* mem;
-	int field_0x14;
-	int field_0x18;
-	int field_0x1c;
-};
-
-struct VMProgramList
-{
-	char* filename;
-	int size;
-	int location;
-	VMProgramList_t* prevProgram;
-};
+#include "bgi.h"
 
 // -----------------------------------------------------------------------------
 //
@@ -160,6 +96,15 @@ extern BGIOpcode_t sys0Instructions[256];
 
 // -----------------------------------------------------------------------------
 //
+// VM funcs
+//
+// -----------------------------------------------------------------------------
+
+typedef VMThread_t* (__thiscall *BGI_AllocateVMThread_)(VMThread_t* parent, int stackSize, unsigned int codeSpaceSize, unsigned int localMemSize);
+#define BGI_AllocateVMThread ((BGI_AllocateVMThread_)0x0042e030)
+
+// -----------------------------------------------------------------------------
+//
 // Debugger funcs
 //
 // -----------------------------------------------------------------------------
@@ -171,11 +116,6 @@ void updateVMInfo(VMThread_t* thread);
 // Called from assembly
 void init();
 int executeOpcode(int opcode, VMThread_t* vmThread);
-__thiscall char BGI_ReadCode8(VMThread_t* vmThread);
-__thiscall short BGI_ReadCode16(VMThread_t* vmThread);
-__thiscall int BGI_ReadCode32(VMThread_t* vmThread);
-__thiscall int BGI_PopStack(VMThread_t* vmThread);
-__thiscall void BGI_PushStack(VMThread_t* vmThread, int data);
 
 // Misc
 void shutdownDebugger();
@@ -196,8 +136,13 @@ void populateBreakpointList();
 void setBreakpointsWindow(Breakpoint_t* breakpoint);
 Breakpoint_t* getFreeBreakpoint();
 
+// Switch opcodes to our re-implementations
+void overrideVMOpcodes();
+
 // Windows stuff
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved);
 LRESULT WINAPI DLLWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+
 
 #endif

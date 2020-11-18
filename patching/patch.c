@@ -5,12 +5,6 @@
 
 #include "patch.h"
 
-int(**opcodeJumptable)(VMThread_t* vmThread) = (int(**)(VMThread_t*))0x00488420;
-
-VMThread_t** gVMThread = (VMThread_t**)0x0049d2f8;
-VMThread_t* gLastExecutedVMThread = NULL;
-int* bgiThreadCount = (int*)0x004994f4;
-
 int gHaltExecution = 1;
 int gStepExecution = 0;
 int gStepThread = 0;
@@ -146,6 +140,8 @@ void init()
 	//	MessageBoxA(NULL, "Failed to create execution log file", "Error", 0);
 	//	ExitProcess(1);
 	//}
+
+	overrideVMOpcodes();
 }
 
 // Called whenever the VM tries to execute an instruction
@@ -202,89 +198,11 @@ int executeOpcode(int opcode, VMThread_t* vmThread)
 	return res;
 }
 
-// Read 1 immediate byte from the code
-__thiscall char BGI_ReadCode8(VMThread_t* vmThread)
+// Switch opcodes to our re-implementations
+void overrideVMOpcodes()
 {
-	// Read data from code space
-	char data = vmThread->codeSpace[vmThread->programCounter];
-	vmThread->programCounter++;
-
-	// Log data
-	if(inInstruction)
-	{
-		operation.bytesIn[operation.numBytesIn++] = 1;
-		operation.bytesIn[operation.numBytesIn++] = data;
-	}
-
-	return data;
-}
-
-// Read 2 immediate bytes from the code
-__thiscall short BGI_ReadCode16(VMThread_t* vmThread)
-{
-	// Read data from code space
-	short data = *(short*)(vmThread->codeSpace + vmThread->programCounter);
-	vmThread->programCounter += 2;
-
-	if(inInstruction)
-	{
-		operation.bytesIn[operation.numBytesIn++] = 2;
-		*(uint16_t*)(&operation.bytesIn[operation.numBytesIn]) = data;
-		operation.numBytesIn += 2;
-	}
-
-	return data;
-}
-
-// Read 4 immediate bytes from the code
-__thiscall int BGI_ReadCode32(VMThread_t* vmThread)
-{
-	// Read data from code space
-	int data = *(int*)(vmThread->codeSpace + vmThread->programCounter);
-	vmThread->programCounter += 4;
-
-	// Log data
-	if(inInstruction)
-	{
-		operation.bytesIn[operation.numBytesIn++] = 4;
-		*(uint32_t*)(&operation.bytesIn[operation.numBytesIn]) = data;
-		operation.numBytesIn += 4;
-	}
-
-	return data;
-}
-
-__thiscall int BGI_PopStack(VMThread_t *vmThread)
-{
-	// Stack underflow
-	if(vmThread->stackPointer == 0)
-		vmThread->stackPointer = vmThread->stackSize;
-	vmThread->stackPointer--;
-
-	// Read data from stack
-	int data = vmThread->stack[vmThread->stackPointer];
-
-	// Log data
-	if(inInstruction)
-	{
-		operation.stackIn[operation.numStackIn++] = data;
-	}
-
-	return data;
-}
-
-__thiscall void BGI_PushStack(VMThread_t* vmThread, int data)
-{
-	// Write data to stack
-	vmThread->stack[vmThread->stackPointer++] = data;
-
-	// Log data
-	if(inInstruction)
-	{
-		operation.stackOut[operation.numStackOut++] = data;
-	}
-
-	// Stack overflow
-	if(vmThread->stackPointer >= vmThread->stackSize)
-		vmThread->stackPointer = 0;
+	opcodeJumptable[0x00] = op_push8;
+	opcodeJumptable[0x01] = op_push16;
+	opcodeJumptable[0x02] = op_push32;
+	opcodeJumptable[0x04] = op_memptr;
 }

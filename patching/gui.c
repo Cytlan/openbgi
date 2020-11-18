@@ -260,7 +260,7 @@ void updateMemoryList(VMThread_t* thread)
 		prevMemorySize = thread->localMemSize;
 		s.fMask = SIF_PAGE | SIF_RANGE;
 		s.nMin = 0;
-		s.nMax = prevMemorySize/16;
+		s.nMax = (prevMemorySize/16) - 1;
 		s.nPage = 16;
 		s.nPos = 0;
 		s.nTrackPos = 0;
@@ -512,6 +512,7 @@ void doHaltExecution(int stopped)
 
 LRESULT WINAPI DLLWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+	VMThread_t* myThread;
 	switch(msg)
 	{
 		case WM_DESTROY:
