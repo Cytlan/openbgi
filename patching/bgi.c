@@ -120,14 +120,35 @@ uint32_t BGI_GetMemPointer(VMThread_t* thread)
 	return thread->memPtr;
 }
 
+void BGI_SetMemPointer(VMThread_t* thread, uint32_t newPtr)
+{
+	thread->memPtr = newPtr;
+}
+
+uint32_t BGI_GetLocalMemSize(VMThread_t* thread)
+{
+	return thread->localMemSize;
+}
+
 uint32_t BGI_GetInstructionPointer(VMThread_t* thread)
 {
 	return thread->instructionPointer;
 }
 
+void BGI_SetInstructionPointer(VMThread_t* thread, uint32_t address)
+{
+	thread->instructionPointer = address;
+	thread->programCounter = address;
+}
+
 uint8_t* BGI_GetCodeSpace(VMThread_t* thread)
 {
 	return thread->codeSpace;
+}
+
+uint32_t BGI_GetCodeSpaceSize(VMThread_t* thread)
+{
+	return thread->codeSpaceSize;
 }
 
 uint8_t* BGI_GetLocalMem(VMThread_t* thread)

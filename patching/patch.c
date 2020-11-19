@@ -198,9 +198,27 @@ int executeOpcode(int opcode, VMThread_t* vmThread)
 	return res;
 }
 
+void haltExecution(VMThread_t* thread)
+{
+	curThreadPtr = thread;
+	doHaltExecution(1);
+}
+
+int __cdecl op_unknown(VMThread_t* thread)
+{
+	uint8_t opcode = thread->codeSpace[thread->instructionPointer];
+	printf("Undefined opcode: 0x%.2X (%d) at address %.8LX\n", opcode, opcode, thread->instructionPointer);
+	thread->instructionPointer--;
+	thread->programCounter--;
+	haltExecution(thread);
+}
+
 // Switch opcodes to our re-implementations
 void overrideVMOpcodes()
 {
+	//for(int i = 0; i < 0x100; i++)
+	//	opcodeJumptable[i] = op_unknown;
+
 	opcodeJumptable[0x00] = op_push8;
 	opcodeJumptable[0x01] = op_push16;
 	opcodeJumptable[0x02] = op_push32;
@@ -209,4 +227,13 @@ void overrideVMOpcodes()
 	opcodeJumptable[0x06] = op_codeoffset;
 	opcodeJumptable[0x08] = op_readmem;
 	opcodeJumptable[0x09] = op_writecopy;
+	opcodeJumptable[0x0A] = op_write;
+	opcodeJumptable[0x0B] = op_unknown; // TODO: op_copycode
+	opcodeJumptable[0x0C] = op_copystack;
+	opcodeJumptable[0x10] = op_memptr2;
+	opcodeJumptable[0x11] = op_storememptr;
+	opcodeJumptable[0x14] = op_jmp;
+	opcodeJumptable[0x15] = op_cjmp;
+	opcodeJumptable[0x20] = op_add;
+	//opcodeJumptable[0x80] = op_sys0;
 }

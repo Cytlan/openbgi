@@ -404,6 +404,7 @@ void updateDisassembly(VMThread_t* curThreadPtr)
 	SendMessage(gDisassemblyList, LB_SETCURSEL, highlight, 0);
 }
 
+VMThread_t* prevSelectedThread = NULL;
 void updateWindow()
 {
 	//updateThreadLists();
@@ -425,7 +426,8 @@ void updateWindow()
 			thread = thread->nextThread;
 		}
 		// If the total count has changed, we must redraw
-		mustUpdate = mustUpdate || oldCount != gThreadListCount;
+		mustUpdate = mustUpdate || oldCount != gThreadListCount || prevSelectedThread != curThreadPtr;
+		prevSelectedThread = curThreadPtr;
 
 		// Re-draw the list if anything has changed
 		if(mustUpdate)

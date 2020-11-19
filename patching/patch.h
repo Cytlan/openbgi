@@ -84,6 +84,7 @@ extern HFONT gFont;
 // Debugger
 extern VMThread_t** gVMThread;
 extern VMThread_t* gLastExecutedVMThread;
+extern VMThread_t* curThreadPtr;
 
 // Execution control
 extern int gHaltExecution;
