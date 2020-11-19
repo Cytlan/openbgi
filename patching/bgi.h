@@ -37,6 +37,7 @@ uint8_t* BGI_GetCodeSpace(VMThread_t* thread);
 uint8_t* BGI_GetLocalMem(VMThread_t* thread);
 uint8_t* BGI_GetUnknownStuctMem(VMThread_t* thread, uint32_t address);
 uint8_t* BGI_GetAuxMemory(int slot);
+void BGI_WriteIntToMemory(uint8_t* ptr, int intSize, uint32_t data);
 
 // Note: Must be __cdecl
 int __cdecl op_push8(VMThread_t* thread);      // 0x00
@@ -46,6 +47,7 @@ int __cdecl op_memptr(VMThread_t* thread);     // 0x04
 int __cdecl op_codeptr(VMThread_t* thread);    // 0x05
 int __cdecl op_codeoffset(VMThread_t* thread); // 0x06
 int __cdecl op_readmem(VMThread_t* thread);    // 0x08
+int __cdecl op_writecopy(VMThread_t* thread);  // 0x09
 
 //
 // Allocated memory

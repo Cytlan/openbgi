@@ -146,3 +146,19 @@ uint8_t* BGI_GetAuxMemory(int slot)
 		return NULL;
 	return gAuxMemory[slot];
 }
+
+void BGI_WriteIntToMemory(uint8_t* ptr, int intSize, uint32_t data)
+{
+	if(intSize == 0)
+	{
+		*ptr = (uint8_t)data;
+	}
+	else if(intSize == 1)
+	{
+		*(uint16_t*)ptr = (uint16_t)data;
+	}
+	else if(intSize == 2)
+	{
+		*(uint32_t*)ptr = (uint32_t)data;
+	}
+}

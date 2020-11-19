@@ -112,3 +112,25 @@ int op_readmem(VMThread_t* thread)
 
 	return 0;
 }
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  writecopy
+// Opcode:    0x09
+// Stack in:     2
+// Stack out:    2
+// Bytes:        1
+// -----------------------------------------------------------------------------
+int op_writecopy(VMThread_t* thread)
+{
+	uint32_t data = BGI_PopStack(thread);
+	uint8_t* ptr = BGI_PopAndResolveAddress(thread);
+	int intSize = BGI_ReadCode8(thread);
+	
+	// Write to mem
+	BGI_WriteIntToMemory(ptr, intSize, data);
+
+	// Push data back onto the stack
+	BGI_PushStack(thread, data);
+
+	return 0;
+}
