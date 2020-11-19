@@ -60,6 +60,17 @@ int __cdecl op_storememptr(VMThread_t* thread); // 0x11
 int __cdecl op_jmp(VMThread_t* thread);         // 0x14
 int __cdecl op_cjmp(VMThread_t* thread);        // 0x15
 int __cdecl op_add(VMThread_t* thread);         // 0x20
+int __cdecl op_sub(VMThread_t* thread);         // 0x21
+int __cdecl op_mul(VMThread_t* thread);         // 0x22
+int __cdecl op_div(VMThread_t* thread);         // 0x23
+int __cdecl op_mod(VMThread_t* thread);         // 0x24
+int __cdecl op_and(VMThread_t* thread);         // 0x25
+int __cdecl op_or(VMThread_t* thread);          // 0x26
+int __cdecl op_xor(VMThread_t* thread);         // 0x27
+int __cdecl op_not(VMThread_t* thread);         // 0x28
+int __cdecl op_shl(VMThread_t* thread);         // 0x29
+int __cdecl op_shr(VMThread_t* thread);         // 0x2A
+int __cdecl op_sar(VMThread_t* thread);         // 0x2B
 int __cdecl op_sys0(VMThread_t* thread);        // 0x80
 
 //

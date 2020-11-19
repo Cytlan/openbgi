@@ -286,7 +286,179 @@ int op_cjmp(VMThread_t* thread)
 // -----------------------------------------------------------------------------
 int op_add(VMThread_t* thread)
 {
-	BGI_PushStack(thread, BGI_PopStack(thread) + BGI_PopStack(thread));
+	uint32_t right = BGI_PopStack(thread);
+	uint32_t left = BGI_PopStack(thread);
+	BGI_PushStack(thread, left + right);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  sub
+// Opcode:    0x21
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_sub(VMThread_t* thread)
+{
+	uint32_t right = BGI_PopStack(thread);
+	uint32_t left = BGI_PopStack(thread);
+	BGI_PushStack(thread, left - right);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  mul
+// Opcode:    0x22
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_mul(VMThread_t* thread)
+{
+	uint32_t right = BGI_PopStack(thread);
+	uint32_t left = BGI_PopStack(thread);
+	BGI_PushStack(thread, left * right);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  div
+// Opcode:    0x23
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_div(VMThread_t* thread)
+{
+	int32_t right = BGI_PopStack(thread);
+	int32_t left = BGI_PopStack(thread);
+	if(right == 0)
+		BGI_PushStack(thread, -1);
+	else
+		BGI_PushStack(thread, left / right);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  mod
+// Opcode:    0x24
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_mod(VMThread_t* thread)
+{
+	int32_t right = BGI_PopStack(thread);
+	int32_t left = BGI_PopStack(thread);
+	if(right == 0)
+		BGI_PushStack(thread, -1);
+	else
+		BGI_PushStack(thread, left % right);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  and
+// Opcode:    0x25
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_and(VMThread_t* thread)
+{
+	uint32_t right = BGI_PopStack(thread);
+	uint32_t left = BGI_PopStack(thread);
+	BGI_PushStack(thread, left & right);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  or
+// Opcode:    0x26
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_or(VMThread_t* thread)
+{
+	uint32_t right = BGI_PopStack(thread);
+	uint32_t left = BGI_PopStack(thread);
+	BGI_PushStack(thread, left | right);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  xor
+// Opcode:    0x27
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_xor(VMThread_t* thread)
+{
+	uint32_t right = BGI_PopStack(thread);
+	uint32_t left = BGI_PopStack(thread);
+	BGI_PushStack(thread, left ^ right);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  not
+// Opcode:    0x28
+// Stack in:     1
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_not(VMThread_t* thread)
+{
+	uint32_t value = BGI_PopStack(thread);
+	BGI_PushStack(thread, ~value);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  shl
+// Opcode:    0x29
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_shl(VMThread_t* thread)
+{
+	uint32_t right = BGI_PopStack(thread);
+	uint32_t left = BGI_PopStack(thread);
+	BGI_PushStack(thread, left << (right & 0x1F));
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  shr
+// Opcode:    0x2A
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_shr(VMThread_t* thread)
+{
+	uint32_t right = BGI_PopStack(thread);
+	uint32_t left = BGI_PopStack(thread);
+	BGI_PushStack(thread, left >> (right & 0x1F));
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  sar
+// Opcode:    0x2B
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_sar(VMThread_t* thread)
+{
+	int32_t right = BGI_PopStack(thread);
+	int32_t left = BGI_PopStack(thread);
+	BGI_PushStack(thread, left >> (right & 0x1F));
 	return 0;
 }
 

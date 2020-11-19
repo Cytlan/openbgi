@@ -235,5 +235,16 @@ void overrideVMOpcodes()
 	opcodeJumptable[0x14] = op_jmp;
 	opcodeJumptable[0x15] = op_cjmp;
 	opcodeJumptable[0x20] = op_add;
+	opcodeJumptable[0x21] = op_sub;
+	opcodeJumptable[0x22] = op_mul;
+	opcodeJumptable[0x23] = op_div;
+	opcodeJumptable[0x24] = op_mod;
+	opcodeJumptable[0x25] = op_and;
+	opcodeJumptable[0x26] = op_or;
+	opcodeJumptable[0x27] = op_xor;
+	opcodeJumptable[0x28] = op_not;
+	opcodeJumptable[0x29] = op_shl;
+	opcodeJumptable[0x2A] = op_shr;
+	opcodeJumptable[0x2B] = op_sar;
 	//opcodeJumptable[0x80] = op_sys0;
 }
