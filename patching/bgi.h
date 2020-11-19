@@ -71,6 +71,12 @@ int __cdecl op_not(VMThread_t* thread);         // 0x28
 int __cdecl op_shl(VMThread_t* thread);         // 0x29
 int __cdecl op_shr(VMThread_t* thread);         // 0x2A
 int __cdecl op_sar(VMThread_t* thread);         // 0x2B
+int __cdecl op_eq(VMThread_t* thread);          // 0x30
+int __cdecl op_neq(VMThread_t* thread);         // 0x31
+int __cdecl op_leq(VMThread_t* thread);         // 0x32
+int __cdecl op_geq(VMThread_t* thread);         // 0x33
+int __cdecl op_le(VMThread_t* thread);          // 0x34
+int __cdecl op_ge(VMThread_t* thread);          // 0x35
 int __cdecl op_sys0(VMThread_t* thread);        // 0x80
 
 //

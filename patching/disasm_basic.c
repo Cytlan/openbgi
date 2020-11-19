@@ -194,11 +194,11 @@ BGIOpcode_t basicInstructions[256] =
 	},
 	// 0x32 geq
 	{
-		.mnemonic = "geq"
+		.mnemonic = "leq"
 	},
 	// 0x33 leq
 	{
-		.mnemonic = "leq"
+		.mnemonic = "geq"
 	},
 	// 0x34 ge
 	{
