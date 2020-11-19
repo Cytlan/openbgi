@@ -205,4 +205,7 @@ void overrideVMOpcodes()
 	opcodeJumptable[0x01] = op_push16;
 	opcodeJumptable[0x02] = op_push32;
 	opcodeJumptable[0x04] = op_memptr;
+	opcodeJumptable[0x05] = op_codeptr;
+	opcodeJumptable[0x06] = op_codeoffset;
+	opcodeJumptable[0x08] = op_readmem;
 }

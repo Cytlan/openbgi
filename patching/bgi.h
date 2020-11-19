@@ -10,6 +10,7 @@
 #define _BGI_H_
 
 #define BGI_MEMORY_OFFSET 0x12000000
+#define BGI_CODE_OFFSET   0x10000000
 
 //
 // Forward declarations - Structs
@@ -28,12 +29,23 @@ short __thiscall BGI_ReadCode16(VMThread_t* vmThread);
 int   __thiscall BGI_ReadCode32(VMThread_t* vmThread);
 int   __thiscall BGI_PopStack(VMThread_t* vmThread);
 void  __thiscall BGI_PushStack(VMThread_t* vmThread, int data);
+uint8_t* BGI_PopAndResolveAddress(VMThread_t* thread);
+uint8_t* BGI_ResolveAddr(uint32_t address, VMThread_t* thread);
+uint32_t BGI_GetMemPointer(VMThread_t* thread);
+uint32_t BGI_GetInstructionPointer(VMThread_t* thread);
+uint8_t* BGI_GetCodeSpace(VMThread_t* thread);
+uint8_t* BGI_GetLocalMem(VMThread_t* thread);
+uint8_t* BGI_GetUnknownStuctMem(VMThread_t* thread, uint32_t address);
+uint8_t* BGI_GetAuxMemory(int slot);
 
 // Note: Must be __cdecl
-int __cdecl op_push8(VMThread_t* thread);  // 0x00
-int __cdecl op_push16(VMThread_t* thread); // 0x01
-int __cdecl op_push32(VMThread_t* thread); // 0x02
-int __cdecl op_memptr(VMThread_t* thread); // 0x04
+int __cdecl op_push8(VMThread_t* thread);      // 0x00
+int __cdecl op_push16(VMThread_t* thread);     // 0x01
+int __cdecl op_push32(VMThread_t* thread);     // 0x02
+int __cdecl op_memptr(VMThread_t* thread);     // 0x04
+int __cdecl op_codeptr(VMThread_t* thread);    // 0x05
+int __cdecl op_codeoffset(VMThread_t* thread); // 0x06
+int __cdecl op_readmem(VMThread_t* thread);    // 0x08
 
 //
 // Allocated memory
@@ -107,5 +119,8 @@ extern int(**opcodeJumptable)(VMThread_t* thread);
 extern VMThread_t** gVMThread;
 extern VMThread_t* gLastExecutedVMThread;
 extern int* bgiThreadCount;
+
+#define gAuxMemory ((uint8_t**)0x004beac0)    // Pointer to array of uint8_t* pointers (uint8_t* gAuxMemory[])
+#define gGlobalMem (*((uint8_t**)0x004bd43c)) // Pointer to uint8_t* array (uint8_t* gGlobalMem)
 
 #endif
