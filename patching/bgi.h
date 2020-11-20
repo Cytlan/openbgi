@@ -77,6 +77,9 @@ int __cdecl op_leq(VMThread_t* thread);         // 0x32
 int __cdecl op_geq(VMThread_t* thread);         // 0x33
 int __cdecl op_le(VMThread_t* thread);          // 0x34
 int __cdecl op_ge(VMThread_t* thread);          // 0x35
+int __cdecl op_dnotzero(VMThread_t* thread);    // 0x38
+int __cdecl op_dnotzero2(VMThread_t* thread);   // 0x39
+int __cdecl op_iszero(VMThread_t* thread);      // 0x3A
 int __cdecl op_sys0(VMThread_t* thread);        // 0x80
 
 //

@@ -252,5 +252,8 @@ void overrideVMOpcodes()
 	opcodeJumptable[0x33] = op_geq;
 	opcodeJumptable[0x34] = op_le;
 	opcodeJumptable[0x35] = op_ge;
+	opcodeJumptable[0x38] = op_dnotzero;
+	opcodeJumptable[0x39] = op_dnotzero2;
+	opcodeJumptable[0x3A] = op_iszero;
 	//opcodeJumptable[0x80] = op_sys0;
 }

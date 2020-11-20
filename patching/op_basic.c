@@ -553,6 +553,61 @@ int op_ge(VMThread_t* thread)
 }
 
 // -----------------------------------------------------------------------------
+// Mnemonic:  dnotzero
+// Opcode:    0x38
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_dnotzero(VMThread_t* thread)
+{
+	// Why does this exist? The result is the same as op_dnotzero2
+	uint32_t right = BGI_PopStack(thread);
+	uint32_t left = BGI_PopStack(thread);
+
+	// If not zero, push 1, otherwise push 0
+	if((left != 0) && (right != 0))
+		BGI_PushStack(thread, 1);
+	else
+		BGI_PushStack(thread, 0);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  dnotzero2
+// Opcode:    0x39
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_dnotzero2(VMThread_t* thread)
+{
+	// Why does this exist? The result is the same as op_dnotzero
+	uint32_t right = BGI_PopStack(thread);
+	uint32_t left = BGI_PopStack(thread);
+
+	// If zero, push 0, otherwise push 1
+	if((left == 0) && (right == 0))
+		BGI_PushStack(thread, 0);
+	else
+		BGI_PushStack(thread, 1);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  iszero
+// Opcode:    0x3A
+// Stack in:     1
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_iszero(VMThread_t* thread)
+{
+	BGI_PushStack(thread, BGI_PopStack(thread) == 0);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
 // Mnemonic:  sys
 // Opcode:    0x80
 // Stack in:     ?
