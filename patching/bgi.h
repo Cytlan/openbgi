@@ -80,6 +80,8 @@ int __cdecl op_ge(VMThread_t* thread);          // 0x35
 int __cdecl op_dnotzero(VMThread_t* thread);    // 0x38
 int __cdecl op_dnotzero2(VMThread_t* thread);   // 0x39
 int __cdecl op_iszero(VMThread_t* thread);      // 0x3A
+int __cdecl op_ternary(VMThread_t* thread);     // 0x40
+int __cdecl op_muldiv(VMThread_t* thread);      // 0x42
 int __cdecl op_sys0(VMThread_t* thread);        // 0x80
 
 //

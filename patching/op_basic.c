@@ -608,6 +608,49 @@ int op_iszero(VMThread_t* thread)
 }
 
 // -----------------------------------------------------------------------------
+// Mnemonic:  ternary
+// Opcode:    0x40
+// Stack in:     3
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_ternary(VMThread_t* thread)
+{
+	uint32_t falseVal = BGI_PopStack(thread);
+	uint32_t trueVal = BGI_PopStack(thread);
+	uint32_t compare = BGI_PopStack(thread);
+	
+	if(compare)
+		BGI_PushStack(thread, trueVal);
+	else
+		BGI_PushStack(thread, falseVal);
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  muldiv
+// Opcode:    0x42
+// Stack in:     3
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_muldiv(VMThread_t* thread)
+{
+	int32_t divisor = BGI_PopStack(thread);
+	int32_t multiplier = BGI_PopStack(thread);
+	int32_t multiplicand = BGI_PopStack(thread);
+
+	int64_t tmp = (int64_t)multiplicand * (int64_t)multiplier;
+	if(divisor == 0)
+		BGI_PushStack(thread, -1);
+	else
+		BGI_PushStack(thread, (int32_t)(tmp / (int64_t)divisor));
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
 // Mnemonic:  sys
 // Opcode:    0x80
 // Stack in:     ?
