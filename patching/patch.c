@@ -257,5 +257,7 @@ void overrideVMOpcodes()
 	opcodeJumptable[0x3A] = op_iszero;
 	opcodeJumptable[0x40] = op_ternary;
 	opcodeJumptable[0x42] = op_muldiv;
+	opcodeJumptable[0x48] = op_sin;
+	opcodeJumptable[0x49] = op_cos;
 	//opcodeJumptable[0x80] = op_sys0;
 }

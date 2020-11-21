@@ -651,6 +651,42 @@ int op_muldiv(VMThread_t* thread)
 }
 
 // -----------------------------------------------------------------------------
+// Mnemonic:  sin
+// Opcode:    0x48
+// Stack in:     1
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_sin(VMThread_t* thread)
+{
+	int32_t angle = BGI_PopStack(thread);
+
+	double tmp = sin((double)angle * ((M_PI / 180.0l) / 65536.0l));
+
+	BGI_PushStack(thread, (int32_t)(tmp * 65536.0l));
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  cos
+// Opcode:    0x49
+// Stack in:     1
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_cos(VMThread_t* thread)
+{
+	int32_t angle = BGI_PopStack(thread);
+
+	double tmp = cos((double)angle * ((M_PI / 180.0l) / 65536.0l));
+
+	BGI_PushStack(thread, (int32_t)(tmp * 65536.0l));
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
 // Mnemonic:  sys
 // Opcode:    0x80
 // Stack in:     ?
