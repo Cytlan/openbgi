@@ -850,12 +850,20 @@ uint16_t* sjis[256] = {
 	NULL  , NULL  , NULL  , NULL  , NULL  , NULL  , NULL  , NULL  , NULL  , NULL  , sjisFA, sjisFB, sjisFC, NULL  , NULL  , NULL  
 };
 
-uint16_t SjisToUTF16(char* in)
+bool SjisIsTwobyte(uint8_t* in)
 {
-	char c = *in;
+	uint8_t c = *in;
+	if(sjis[c] && c != 0)
+		return true;
+	return false;
+}
+
+uint16_t SjisToUTF16(uint8_t* in)
+{
+	uint8_t c = *in;
 	if(sjis[c] && c != 0)
 	{
-		char d = *(in+1);
+		uint8_t d = *(in+1);
 		return sjis[c][d];
 	}
 	return sjis[0][c];
