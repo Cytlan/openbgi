@@ -141,6 +141,11 @@ void init()
 	//	ExitProcess(1);
 	//}
 
+	// Unicode, please
+	SetConsoleOutputCP(CP_UTF8);
+	_setmode(_fileno(stdout), _O_U8TEXT);
+	_setmode(_fileno(stderr), _O_U8TEXT);
+
 	overrideVMOpcodes();
 }
 
@@ -259,5 +264,13 @@ void overrideVMOpcodes()
 	opcodeJumptable[0x42] = op_muldiv;
 	opcodeJumptable[0x48] = op_sin;
 	opcodeJumptable[0x49] = op_cos;
+	opcodeJumptable[0x60] = op_memcpy;
+	opcodeJumptable[0x61] = op_memclr;
+	opcodeJumptable[0x62] = op_memset;
+	opcodeJumptable[0x63] = op_memcmp;
+	opcodeJumptable[0x67] = op_strreplace;
+	opcodeJumptable[0x68] = op_strlen;
+	opcodeJumptable[0x69] = op_streq;
+	opcodeJumptable[0x6A] = op_strcpy;
 	//opcodeJumptable[0x80] = op_sys0;
 }

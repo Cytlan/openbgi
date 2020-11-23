@@ -84,6 +84,14 @@ int __cdecl op_ternary(VMThread_t* thread);     // 0x40
 int __cdecl op_muldiv(VMThread_t* thread);      // 0x42
 int __cdecl op_sin(VMThread_t* thread);         // 0x48
 int __cdecl op_cos(VMThread_t* thread);         // 0x49
+int __cdecl op_memcpy(VMThread_t* thread);      // 0x60
+int __cdecl op_memclr(VMThread_t* thread);      // 0x61
+int __cdecl op_memset(VMThread_t* thread);      // 0x62
+int __cdecl op_memcmp(VMThread_t* thread);      // 0x63
+int __cdecl op_strreplace(VMThread_t* thread);  // 0x67
+int __cdecl op_strlen(VMThread_t* thread);      // 0x68
+int __cdecl op_streq(VMThread_t* thread);       // 0x69
+int __cdecl op_strcpy(VMThread_t* thread);      // 0x6A
 int __cdecl op_sys0(VMThread_t* thread);        // 0x80
 
 //

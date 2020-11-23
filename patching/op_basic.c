@@ -4,6 +4,7 @@
 
 #include "bgi.h"
 #include "patch.h"
+#include "debug.h"
 
 // -----------------------------------------------------------------------------
 // Mnemonic:  push8
@@ -682,6 +683,204 @@ int op_cos(VMThread_t* thread)
 	double tmp = cos((double)angle * ((M_PI / 180.0l) / 65536.0l));
 
 	BGI_PushStack(thread, (int32_t)(tmp * 65536.0l));
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  memcpy
+// Opcode:    0x60
+// Stack in:     3
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_memcpy(VMThread_t* thread)
+{
+	uint32_t size = BGI_PopStack(thread);
+	uint8_t* src = BGI_PopAndResolveAddress(thread);
+	uint8_t* dst = BGI_PopAndResolveAddress(thread);
+
+	memcpy(dst, src, size);
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  memclr
+// Opcode:    0x61
+// Stack in:     2
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_memclr(VMThread_t* thread)
+{
+	uint32_t size = BGI_PopStack(thread);
+	uint8_t* ptr = BGI_PopAndResolveAddress(thread);
+
+	memset(ptr, 0, size);
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  memset
+// Opcode:    0x62
+// Stack in:     3
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_memset(VMThread_t* thread)
+{
+	uint32_t val = BGI_PopStack(thread);
+	uint32_t size = BGI_PopStack(thread);
+	uint8_t* ptr = BGI_PopAndResolveAddress(thread);
+
+	memset(ptr, (uint8_t)val, size);
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  memcmp
+// Opcode:    0x63
+// Stack in:     3
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_memcmp(VMThread_t* thread)
+{
+	uint32_t size = BGI_PopStack(thread);
+	uint8_t* src = BGI_PopAndResolveAddress(thread);
+	uint8_t* dst = BGI_PopAndResolveAddress(thread);
+
+	if(memcmp(dst, src, size) == 0)
+		BGI_PushStack(thread, 1);
+	else
+		BGI_PushStack(thread, 0);
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  strreplace
+// Opcode:    0x67
+// Stack in:     4
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+// TODO: Find some code that uses this opcode... I have no idea what I'm looking for.
+/*
+bool BGI_IsDoubleByteSJIS(char c)
+{
+	if((c < 0x80 || c > 0x9F) && c < 0xE0)
+		return false;
+	return true;
+}
+
+int BGI_CopySJISChar(uint32_t* dst, char* src)
+{ 
+	if(BGI_IsDoubleByteSJIS(*src))
+	{
+		*dst = *(uint16_t*)src & 0xFFFF;
+		return 1;
+	}
+	*dst = *src & 0xFF;
+	return 0;
+}
+
+int BGI_Strunkonwn(char* a, char* search)
+{
+	int searchLen = strlen(search);
+	uint32_t* buf = (char*)malloc(searchLen * sizeof(uint32_t));
+
+	char* ptr = search;
+
+	int len = 0;
+	char c = *ptr;
+	while(c)
+	{
+		if(BGI_CopySJISChar(buf++, ptr++))
+			ptr++;
+		len++;
+	}
+	char* aPtr = a;
+	c = *aPtr;
+	while(c)
+	{
+
+	}
+}
+
+uint8_t* BGI_Strreplace(char* a, char* b, char* search, char* d)
+{
+	int searchLen = strlen(search);
+	int dLen = strlen(d);
+
+	int len = BGI_Strunkonwn(b, search);
+}
+*/
+
+int op_strreplace(VMThread_t* thread)
+{
+	uint8_t* d = BGI_PopAndResolveAddress(thread);
+	uint8_t* c = BGI_PopAndResolveAddress(thread);
+	uint8_t* b = BGI_PopAndResolveAddress(thread);
+	uint8_t* a = BGI_PopAndResolveAddress(thread);
+
+	printf("op_strreplace: a: %.8X, b: %.8X, c: %.8X, d: %.8X\n", a, b, c, d);
+
+	//uint8_t* res = BGI_Strreplace(a, b, c, d);
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  strlen
+// Opcode:    0x68
+// Stack in:     1
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+
+int op_strlen(VMThread_t* thread)
+{
+	uint8_t* str = BGI_PopAndResolveAddress(thread);
+
+	BGI_PushStack(thread, strlen(str));
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  streq
+// Opcode:    0x69
+// Stack in:     2
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_streq(VMThread_t* thread)
+{
+	uint8_t* strA = BGI_PopAndResolveAddress(thread);
+	uint8_t* strB = BGI_PopAndResolveAddress(thread);
+
+	BGI_PushStack(thread, strcmp(strA, strB) == 0);
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  strcpu
+// Opcode:    0x6A
+// Stack in:     2
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_strcpy(VMThread_t* thread)
+{
+	uint8_t* right = BGI_PopAndResolveAddress(thread);
+	uint8_t* left = BGI_PopAndResolveAddress(thread);
+
+	Debug_PrintfSJIS(L"strcpy", right);
+
+	strcpy(left, right);
 
 	return 0;
 }
