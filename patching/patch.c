@@ -3,6 +3,9 @@
 // code that pokes around at the internals of the game.
 //
 
+#include <fcntl.h>
+#include <io.h>
+
 #include "patch.h"
 
 int gHaltExecution = 1;
