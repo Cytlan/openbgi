@@ -65,6 +65,7 @@ int UTF16ToUTF8Strlen(uint16_t* str)
 	while(c)
 	{
 		int uLen = UTF16ToUTF8Length(c);
+		len += uLen;
 
 		// Skip trailing surrogate
 		if(uLen == 4)
