@@ -41,6 +41,7 @@ i686-w64-mingw32-gcc-win32 -O3 -Wl,--export-all-symbols -shared -o patch.dll \
     op_basic.c op_sys0.c \
     disassembler.c disasm_basic.c disasm_sys0.c \
     bgi.c \
+    sjis.c \
     -lgdi32 -static-libgcc || exit 1
 cp patch.dll $EXEDIR/patch.dll 
 
