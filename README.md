@@ -25,6 +25,9 @@ The DLL further patches the engine and redirects opcodes to our reimplemented op
 
 The strategy is just to implement an opcode, run the game and see if it crashes. It's a pretty crude technique, but it'll work for now.
 
+Milestones reached:
+* Reimplemented enough basic opcodes for Tayutama to run.
+
 Debugger
 --------
 

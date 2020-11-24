@@ -282,3 +282,76 @@ void BGI_Sprintf(char* dst, char* fmt, VMThread_t* thread)
 	}
 	printf("dst: %s, fmt: %s, Number of arguments: %d\n", dst, fmt, argCount);
 }
+
+bool BGI_IsDoubleByteSJIS(char c)
+{
+	if((c < 0x80 || c > 0x9F) && c < 0xE0)
+		return false;
+	return true;
+}
+
+void BGI_StrToLowerCase(char* ptr)
+{
+	char c = *ptr;
+	while(c)
+	{
+		if(BGI_IsDoubleByteSJIS(c))
+			ptr++;
+		else
+		{
+			if(c >= 'A' && c <= 'Z')
+				*ptr |= 0x20;
+		}
+		ptr++;
+		c = *ptr;
+	}
+}
+
+uint16_t delimiters[36] = {
+	0x002C, // ,
+	0x002E, // .
+	0x00A4, // ､
+	0x00A1, // ｡
+	0x003A, // :
+	0x003B, // ;
+	0x003F, // ?
+	0x0021, // !
+	0x00DE, // ﾞ
+	0x00DF, // ﾟ
+	0x00A5, // ･
+	0x8141, // 、
+	0x8142, // 。
+	0x8143, // ，
+	0x8144, // ．
+	0x8146, // ：
+	0x8147, // ；
+	0x8148, // ？
+	0x8149, // ！
+	0x814A, // ゛
+	0x814B, // ゜
+	0x815D, // ‐
+	0x005D, // ]
+	0x007D, // }
+	0x0029, // )
+	0x816A, // ）
+	0x816C, // 〕
+	0x816E, // ］
+	0x8170, // ｝
+	0x8172, // 〉
+	0x8174, // 》
+	0x8176, // 」
+	0x8178, // 』
+	0x817A, // 】
+	0x8165, // ‘
+	0x8167  // “
+};
+
+bool BGI_IsDelimiter(uint16_t c)
+{
+	for(int i = 0; i < 36; i++)
+	{
+		if(c == delimiters[i])
+			return true;
+	}
+	return false;
+}

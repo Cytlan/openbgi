@@ -11,5 +11,6 @@
 
 uint16_t SjisToUTF16(uint8_t* in);
 bool SjisIsTwobyte(uint8_t* in);
+uint16_t SjisGetChar(uint8_t* in, bool* isTwoByte);
 
 #endif

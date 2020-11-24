@@ -940,7 +940,7 @@ int op_strconcat(VMThread_t* thread)
 
 	sprintf(dst, "%s%s", left, right);
 
-	Debug_PrintfSJIS(L"strconcat", dst);
+	//Debug_PrintfSJIS(L"strconcat", dst);
 
 	return 0;
 }
@@ -948,21 +948,39 @@ int op_strconcat(VMThread_t* thread)
 // -----------------------------------------------------------------------------
 // Mnemonic:  getchar
 // Opcode:    0x6C
-// Stack in:     3
-// Stack out:    0
+// Stack in:     1
+// Stack out:    3
 // Bytes:        0
 // -----------------------------------------------------------------------------
 int op_getchar(VMThread_t* thread)
 {
-	// TODO: Find a test case for this
-	printf("getchar\n");
-	return -1;
+	uint8_t* ptr = BGI_PopAndResolveAddress(thread);
+	bool isTwoByte = 0;
+	uint16_t c = SjisGetChar(ptr, &isTwoByte);
+	BGI_PushStack(thread, c);
+	BGI_PushStack(thread, isTwoByte);
+	BGI_PushStack(thread, BGI_IsDelimiter(c));
+	//printf("getchar: Char: %.4X, Two-byte: %c, Delimiter: %c\n", c, isTwoByte ? 'Y' : 'N', BGI_IsDelimiter(c) ? 'Y' : 'N');
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  tolower
+// Opcode:    0x6D
+// Stack in:     1
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_tolower(VMThread_t* thread)
+{
+	uint8_t* ptr = BGI_PopAndResolveAddress(thread);
+	BGI_StrToLowerCase(ptr);
 }
 
 // -----------------------------------------------------------------------------
 // Mnemonic:  sprintf
 // Opcode:    0x6F
-// Stack in:     3
+// Stack in:     2+
 // Stack out:    0
 // Bytes:        0
 // -----------------------------------------------------------------------------
@@ -982,12 +1000,14 @@ int op_sprintf(VMThread_t* thread)
 // -----------------------------------------------------------------------------
 int op_addmemboundary(VMThread_t* thread)
 {
+	// TODO: Finish the functionality of this opcode
+
 	uint8_t* name = BGI_PopAndResolveAddress(thread);
 	uint32_t size = BGI_PopStack(thread);
 	uint32_t start = BGI_PopStack(thread);
 
-	Debug_PrintfSJIS(L"addmemboundary: ", name);
-	wprintf(L"size: %.8X, start: %.8X\n", size, start);
+	//Debug_PrintfSJIS(L"addmemboundary: ", name);
+	//wprintf(L"size: %.8X, start: %.8X\n", size, start);
 
 	BGI_PushStack(thread, 1);
 	return 0;

@@ -9,6 +9,8 @@
 #ifndef _BGI_H_
 #define _BGI_H_
 
+#include "sjis.h"
+
 #define BGI_MEMORY_OFFSET 0x12000000
 #define BGI_CODE_OFFSET   0x10000000
 
@@ -46,6 +48,9 @@ void BGI_WriteIntToMemory(uint8_t* ptr, int intSize, uint32_t data);
 void BGI_WriteReturnAddr(VMThread_t* thread, uint32_t addr);
 uint32_t BGI_ReadReturnAddr(VMThread_t* thread);
 void BGI_Sprintf(char* dst, char* fmt, VMThread_t* thread);
+bool BGI_IsDoubleByteSJIS(char c);
+void BGI_StrToLowerCase(char* ptr);
+bool BGI_IsDelimiter(uint16_t c);
 
 // Note: Must be __cdecl
 int __cdecl op_push8(VMThread_t* thread);          // 0x00
@@ -99,6 +104,7 @@ int __cdecl op_streq(VMThread_t* thread);          // 0x69
 int __cdecl op_strcpy(VMThread_t* thread);         // 0x6A
 int __cdecl op_strconcat(VMThread_t* thread);      // 0x6B
 int __cdecl op_getchar(VMThread_t* thread);        // 0x6C
+int __cdecl op_tolower(VMThread_t* thread);        // 0x6D
 int __cdecl op_sprintf(VMThread_t* thread);        // 0x6F
 int __cdecl op_addmemboundary(VMThread_t* thread); // 0x75
 int __cdecl op_sys0(VMThread_t* thread);           // 0x80

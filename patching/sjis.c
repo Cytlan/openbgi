@@ -868,3 +868,19 @@ uint16_t SjisToUTF16(uint8_t* in)
 	}
 	return sjis[0][c];
 }
+
+uint16_t SjisGetChar(uint8_t* in, bool* isTwoByte)
+{
+	uint16_t c;
+	if(SjisIsTwobyte(in))
+	{
+		c = (*in << 8) | *(in+1);
+		*isTwoByte = true;
+	}
+	else
+	{
+		c = *in;
+		*isTwoByte = false;
+	}
+	return c;
+}

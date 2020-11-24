@@ -283,6 +283,7 @@ void overrideVMOpcodes()
 	opcodeJumptable[0x6A] = op_strcpy;
 	opcodeJumptable[0x6B] = op_strconcat;
 	opcodeJumptable[0x6C] = op_getchar;
+	opcodeJumptable[0x6D] = op_tolower;
 	opcodeJumptable[0x6F] = op_sprintf;
 	opcodeJumptable[0x75] = op_addmemboundary;
 	//opcodeJumptable[0x80] = op_sys0;
