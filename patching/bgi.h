@@ -43,56 +43,65 @@ uint8_t* BGI_GetLocalMem(VMThread_t* thread);
 uint8_t* BGI_GetUnknownStuctMem(VMThread_t* thread, uint32_t address);
 uint8_t* BGI_GetAuxMemory(int slot);
 void BGI_WriteIntToMemory(uint8_t* ptr, int intSize, uint32_t data);
+void BGI_WriteReturnAddr(VMThread_t* thread, uint32_t addr);
+uint32_t BGI_ReadReturnAddr(VMThread_t* thread);
+void BGI_Sprintf(char* dst, char* fmt, VMThread_t* thread);
 
 // Note: Must be __cdecl
-int __cdecl op_push8(VMThread_t* thread);       // 0x00
-int __cdecl op_push16(VMThread_t* thread);      // 0x01
-int __cdecl op_push32(VMThread_t* thread);      // 0x02
-int __cdecl op_memptr(VMThread_t* thread);      // 0x04
-int __cdecl op_codeptr(VMThread_t* thread);     // 0x05
-int __cdecl op_codeoffset(VMThread_t* thread);  // 0x06
-int __cdecl op_readmem(VMThread_t* thread);     // 0x08
-int __cdecl op_writecopy(VMThread_t* thread);   // 0x09
-int __cdecl op_write(VMThread_t* thread);       // 0x0A
-int __cdecl op_copystack(VMThread_t* thread);   // 0x0C
-int __cdecl op_memptr2(VMThread_t* thread);     // 0x10
-int __cdecl op_storememptr(VMThread_t* thread); // 0x11
-int __cdecl op_jmp(VMThread_t* thread);         // 0x14
-int __cdecl op_cjmp(VMThread_t* thread);        // 0x15
-int __cdecl op_add(VMThread_t* thread);         // 0x20
-int __cdecl op_sub(VMThread_t* thread);         // 0x21
-int __cdecl op_mul(VMThread_t* thread);         // 0x22
-int __cdecl op_div(VMThread_t* thread);         // 0x23
-int __cdecl op_mod(VMThread_t* thread);         // 0x24
-int __cdecl op_and(VMThread_t* thread);         // 0x25
-int __cdecl op_or(VMThread_t* thread);          // 0x26
-int __cdecl op_xor(VMThread_t* thread);         // 0x27
-int __cdecl op_not(VMThread_t* thread);         // 0x28
-int __cdecl op_shl(VMThread_t* thread);         // 0x29
-int __cdecl op_shr(VMThread_t* thread);         // 0x2A
-int __cdecl op_sar(VMThread_t* thread);         // 0x2B
-int __cdecl op_eq(VMThread_t* thread);          // 0x30
-int __cdecl op_neq(VMThread_t* thread);         // 0x31
-int __cdecl op_leq(VMThread_t* thread);         // 0x32
-int __cdecl op_geq(VMThread_t* thread);         // 0x33
-int __cdecl op_le(VMThread_t* thread);          // 0x34
-int __cdecl op_ge(VMThread_t* thread);          // 0x35
-int __cdecl op_dnotzero(VMThread_t* thread);    // 0x38
-int __cdecl op_dnotzero2(VMThread_t* thread);   // 0x39
-int __cdecl op_iszero(VMThread_t* thread);      // 0x3A
-int __cdecl op_ternary(VMThread_t* thread);     // 0x40
-int __cdecl op_muldiv(VMThread_t* thread);      // 0x42
-int __cdecl op_sin(VMThread_t* thread);         // 0x48
-int __cdecl op_cos(VMThread_t* thread);         // 0x49
-int __cdecl op_memcpy(VMThread_t* thread);      // 0x60
-int __cdecl op_memclr(VMThread_t* thread);      // 0x61
-int __cdecl op_memset(VMThread_t* thread);      // 0x62
-int __cdecl op_memcmp(VMThread_t* thread);      // 0x63
-int __cdecl op_strreplace(VMThread_t* thread);  // 0x67
-int __cdecl op_strlen(VMThread_t* thread);      // 0x68
-int __cdecl op_streq(VMThread_t* thread);       // 0x69
-int __cdecl op_strcpy(VMThread_t* thread);      // 0x6A
-int __cdecl op_sys0(VMThread_t* thread);        // 0x80
+int __cdecl op_push8(VMThread_t* thread);          // 0x00
+int __cdecl op_push16(VMThread_t* thread);         // 0x01
+int __cdecl op_push32(VMThread_t* thread);         // 0x02
+int __cdecl op_memptr(VMThread_t* thread);         // 0x04
+int __cdecl op_codeptr(VMThread_t* thread);        // 0x05
+int __cdecl op_codeoffset(VMThread_t* thread);     // 0x06
+int __cdecl op_readmem(VMThread_t* thread);        // 0x08
+int __cdecl op_writecopy(VMThread_t* thread);      // 0x09
+int __cdecl op_write(VMThread_t* thread);          // 0x0A
+int __cdecl op_copystack(VMThread_t* thread);      // 0x0C
+int __cdecl op_memptr2(VMThread_t* thread);        // 0x10
+int __cdecl op_storememptr(VMThread_t* thread);    // 0x11
+int __cdecl op_jmp(VMThread_t* thread);            // 0x14
+int __cdecl op_cjmp(VMThread_t* thread);           // 0x15
+int __cdecl op_call(VMThread_t* thread);           // 0x16
+int __cdecl op_ret(VMThread_t* thread);            // 0x17
+int __cdecl op_add(VMThread_t* thread);            // 0x20
+int __cdecl op_sub(VMThread_t* thread);            // 0x21
+int __cdecl op_mul(VMThread_t* thread);            // 0x22
+int __cdecl op_div(VMThread_t* thread);            // 0x23
+int __cdecl op_mod(VMThread_t* thread);            // 0x24
+int __cdecl op_and(VMThread_t* thread);            // 0x25
+int __cdecl op_or(VMThread_t* thread);             // 0x26
+int __cdecl op_xor(VMThread_t* thread);            // 0x27
+int __cdecl op_not(VMThread_t* thread);            // 0x28
+int __cdecl op_shl(VMThread_t* thread);            // 0x29
+int __cdecl op_shr(VMThread_t* thread);            // 0x2A
+int __cdecl op_sar(VMThread_t* thread);            // 0x2B
+int __cdecl op_eq(VMThread_t* thread);             // 0x30
+int __cdecl op_neq(VMThread_t* thread);            // 0x31
+int __cdecl op_leq(VMThread_t* thread);            // 0x32
+int __cdecl op_geq(VMThread_t* thread);            // 0x33
+int __cdecl op_le(VMThread_t* thread);             // 0x34
+int __cdecl op_ge(VMThread_t* thread);             // 0x35
+int __cdecl op_dnotzero(VMThread_t* thread);       // 0x38
+int __cdecl op_dnotzero2(VMThread_t* thread);      // 0x39
+int __cdecl op_iszero(VMThread_t* thread);         // 0x3A
+int __cdecl op_ternary(VMThread_t* thread);        // 0x40
+int __cdecl op_muldiv(VMThread_t* thread);         // 0x42
+int __cdecl op_sin(VMThread_t* thread);            // 0x48
+int __cdecl op_cos(VMThread_t* thread);            // 0x49
+int __cdecl op_memcpy(VMThread_t* thread);         // 0x60
+int __cdecl op_memclr(VMThread_t* thread);         // 0x61
+int __cdecl op_memset(VMThread_t* thread);         // 0x62
+int __cdecl op_memcmp(VMThread_t* thread);         // 0x63
+int __cdecl op_strreplace(VMThread_t* thread);     // 0x67
+int __cdecl op_strlen(VMThread_t* thread);         // 0x68
+int __cdecl op_streq(VMThread_t* thread);          // 0x69
+int __cdecl op_strcpy(VMThread_t* thread);         // 0x6A
+int __cdecl op_strconcat(VMThread_t* thread);      // 0x6B
+int __cdecl op_getchar(VMThread_t* thread);        // 0x6C
+int __cdecl op_sprintf(VMThread_t* thread);        // 0x6F
+int __cdecl op_addmemboundary(VMThread_t* thread); // 0x75
+int __cdecl op_sys0(VMThread_t* thread);           // 0x80
 
 //
 // Allocated memory

@@ -183,3 +183,102 @@ void BGI_WriteIntToMemory(uint8_t* ptr, int intSize, uint32_t data)
 		*(uint32_t*)ptr = (uint32_t)data;
 	}
 }
+
+void BGI_WriteReturnAddr(VMThread_t* thread, uint32_t addr)
+{
+    *(uint32_t*)(thread->localMem + thread->memPtr) = addr;
+    thread->memPtr += 4;
+}
+
+uint32_t BGI_ReadReturnAddr(VMThread_t* thread)
+{
+	thread->memPtr -= 4;
+	return *(uint32_t *)(thread->localMem + thread->memPtr);
+}
+
+void BGI_Sprintf(char* dst, char* fmt, VMThread_t* thread)
+{
+	uint32_t args[16];
+	int argCount = 0;
+	char* ptr = fmt;
+	char c = *ptr;
+	while(c)
+	{
+		c = *ptr++;
+
+		if(c != '%')
+			continue;
+
+		c = *ptr++;
+		if(!c) break; // Check for string end
+		
+		// Flags
+		while(c == '-' || c == '+' || c == ' ' || c == '#' || c == '0')
+			c = *ptr++;
+		if(!c) break; // Check for string end
+
+		// Width
+		if(c == '*')
+		{
+			// Variable width
+			args[argCount++] = BGI_PopStack(thread);
+			c = *ptr++;
+		}
+		else
+		{
+			while(c >= '0' && c <= '9')
+				c = *ptr++;
+		}
+		if(!c) break; // Check for string end
+
+		// Precision
+		if(c == '.')
+		{
+			c = *ptr++;
+			if(c == '*')
+			{
+				// Variable precision
+				args[argCount++] = BGI_PopStack(thread);
+				c = *ptr++;
+			}
+			else
+			{
+				while(c >= '0' && c <= '9')
+					c = *ptr++;
+			}
+		}
+		if(!c) break; // Check for string end
+
+		// Length
+		while(c == 'h' || c == 'l' || c == 'j' || c == 'z' || c == 't' || c == 'L')
+			c = *ptr++;
+		if(!c) break; // Check for string end
+
+		// Specifier
+		if(c == 's')
+			args[argCount++] = (uint32_t)BGI_PopAndResolveAddress(thread);
+		else
+			args[argCount++] = BGI_PopStack(thread);
+	}
+	switch(argCount)
+	{
+		case 0: sprintf(dst, fmt); break;
+		case 1: sprintf(dst, fmt, args[0]); break;
+		case 2: sprintf(dst, fmt, args[0], args[1]); break;
+		case 3: sprintf(dst, fmt, args[0], args[1], args[2]); break;
+		case 4: sprintf(dst, fmt, args[0], args[1], args[2], args[3]); break;
+		case 5: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4]); break;
+		case 6: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5]); break;
+		case 7: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6]); break;
+		case 8: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]); break;
+		case 9: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]); break;
+		case 10: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]); break;
+		case 11: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]); break;
+		case 12: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]); break;
+		case 13: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]); break;
+		case 14: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]); break;
+		case 15: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]); break;
+		case 16: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]); break;
+	}
+	printf("dst: %s, fmt: %s, Number of arguments: %d\n", dst, fmt, argCount);
+}

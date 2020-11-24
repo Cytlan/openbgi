@@ -277,6 +277,48 @@ int op_cjmp(VMThread_t* thread)
 	return 0;
 }
 
+// -----------------------------------------------------------------------------
+// Mnemonic:  call
+// Opcode:    0x16
+// Stack in:     1
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_call(VMThread_t* thread)
+{
+	uint32_t ptr = BGI_GetMemPointer(thread);
+	uint32_t size = BGI_GetLocalMemSize(thread);
+	if(size <= ptr + 4)
+	{
+		// Out of memory (Tho the engine says スタック領域が不足しています)
+		printf("Error: Out of memory\n");
+		haltExecution(thread);
+		return 0;
+	}
+
+	uint32_t returnPtr = BGI_GetInstructionPointer(thread) + 1;
+	BGI_WriteReturnAddr(thread, returnPtr);
+
+	return op_jmp(thread);
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  ret
+// Opcode:    0x17
+// Stack in:     0
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_ret(VMThread_t* thread)
+{
+	uint32_t memPtr = BGI_GetMemPointer(thread);
+	if(memPtr != 0)
+	{
+		BGI_SetInstructionPointer(thread, BGI_ReadReturnAddr(thread));
+		return 0;
+	}
+	return 4;
+}
 
 // -----------------------------------------------------------------------------
 // Mnemonic:  add
@@ -878,10 +920,76 @@ int op_strcpy(VMThread_t* thread)
 	uint8_t* right = BGI_PopAndResolveAddress(thread);
 	uint8_t* left = BGI_PopAndResolveAddress(thread);
 
-	Debug_PrintfSJIS(L"strcpy", right);
-
 	strcpy(left, right);
 
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  strconcat
+// Opcode:    0x6B
+// Stack in:     3
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_strconcat(VMThread_t* thread)
+{
+	uint8_t* right = BGI_PopAndResolveAddress(thread);
+	uint8_t* left = BGI_PopAndResolveAddress(thread);
+	uint8_t* dst = BGI_PopAndResolveAddress(thread);
+
+	sprintf(dst, "%s%s", left, right);
+
+	Debug_PrintfSJIS(L"strconcat", dst);
+
+	return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  getchar
+// Opcode:    0x6C
+// Stack in:     3
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_getchar(VMThread_t* thread)
+{
+	// TODO: Find a test case for this
+	printf("getchar\n");
+	return -1;
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  sprintf
+// Opcode:    0x6F
+// Stack in:     3
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_sprintf(VMThread_t* thread)
+{
+	uint8_t* fmt = BGI_PopAndResolveAddress(thread);
+	uint8_t* dst = BGI_PopAndResolveAddress(thread);
+	BGI_Sprintf(dst, fmt, thread);
+}
+
+// -----------------------------------------------------------------------------
+// Mnemonic:  addmemboundary
+// Opcode:    0x75
+// Stack in:     3
+// Stack out:    0
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_addmemboundary(VMThread_t* thread)
+{
+	uint8_t* name = BGI_PopAndResolveAddress(thread);
+	uint32_t size = BGI_PopStack(thread);
+	uint32_t start = BGI_PopStack(thread);
+
+	Debug_PrintfSJIS(L"addmemboundary: ", name);
+	wprintf(L"size: %.8X, start: %.8X\n", size, start);
+
+	BGI_PushStack(thread, 1);
 	return 0;
 }
 

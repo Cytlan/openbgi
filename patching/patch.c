@@ -145,9 +145,9 @@ void init()
 	//}
 
 	// Unicode, please
-	SetConsoleOutputCP(CP_UTF8);
-	_setmode(_fileno(stdout), _O_U8TEXT);
-	_setmode(_fileno(stderr), _O_U8TEXT);
+	//SetConsoleOutputCP(CP_UTF8);
+	//_setmode(_fileno(stdout), _O_U8TEXT);
+	//_setmode(_fileno(stderr), _O_U8TEXT);
 
 	overrideVMOpcodes();
 }
@@ -215,7 +215,7 @@ void haltExecution(VMThread_t* thread)
 int __cdecl op_unknown(VMThread_t* thread)
 {
 	uint8_t opcode = thread->codeSpace[thread->instructionPointer];
-	printf("Undefined opcode: 0x%.2X (%d) at address %.8LX\n", opcode, opcode, thread->instructionPointer);
+	wprintf(L"Undefined opcode: 0x%.2X (%d) at address %.8LX\n", opcode, opcode, thread->instructionPointer);
 	thread->instructionPointer--;
 	thread->programCounter--;
 	haltExecution(thread);
@@ -224,8 +224,12 @@ int __cdecl op_unknown(VMThread_t* thread)
 // Switch opcodes to our re-implementations
 void overrideVMOpcodes()
 {
-	//for(int i = 0; i < 0x100; i++)
-	//	opcodeJumptable[i] = op_unknown;
+	for(int i = 0; i < 0x100; i++)
+	{
+		if(i >= 0x80)
+			continue;
+		opcodeJumptable[i] = op_unknown;
+	}
 
 	opcodeJumptable[0x00] = op_push8;
 	opcodeJumptable[0x01] = op_push16;
@@ -242,6 +246,8 @@ void overrideVMOpcodes()
 	opcodeJumptable[0x11] = op_storememptr;
 	opcodeJumptable[0x14] = op_jmp;
 	opcodeJumptable[0x15] = op_cjmp;
+	opcodeJumptable[0x16] = op_call;
+	opcodeJumptable[0x17] = op_ret;
 	opcodeJumptable[0x20] = op_add;
 	opcodeJumptable[0x21] = op_sub;
 	opcodeJumptable[0x22] = op_mul;
@@ -275,5 +281,9 @@ void overrideVMOpcodes()
 	opcodeJumptable[0x68] = op_strlen;
 	opcodeJumptable[0x69] = op_streq;
 	opcodeJumptable[0x6A] = op_strcpy;
+	opcodeJumptable[0x6B] = op_strconcat;
+	opcodeJumptable[0x6C] = op_getchar;
+	opcodeJumptable[0x6F] = op_sprintf;
+	opcodeJumptable[0x75] = op_addmemboundary;
 	//opcodeJumptable[0x80] = op_sys0;
 }
