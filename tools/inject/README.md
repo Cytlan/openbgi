@@ -27,8 +27,4 @@ Order of execution:
 
 Inject was greatly inspired by Risc's use of DLL-injection in [diablo-improvements](https://github.com/r1sc/diablo-improvements).
 
-## Public domain
-
-The source code and any original content of this repository is hereby released into the [public domain].
-
-[public domain]: https://creativecommons.org/publicdomain/zero/1.0/
+Original source: https://github.com/mewrev/inject/
