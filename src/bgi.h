@@ -51,6 +51,7 @@ void BGI_Sprintf(char* dst, char* fmt, VMThread_t* thread);
 bool BGI_IsDoubleByteSJIS(char c);
 void BGI_StrToLowerCase(char* ptr);
 bool BGI_IsDelimiter(uint16_t c);
+void BGI_SetTimer(VMThread_t* thread, int time);
 
 // Note: Must be __cdecl
 int __cdecl op_push8(VMThread_t* thread);          // 0x00
@@ -108,6 +109,8 @@ int __cdecl op_tolower(VMThread_t* thread);        // 0x6D
 int __cdecl op_sprintf(VMThread_t* thread);        // 0x6F
 int __cdecl op_addmemboundary(VMThread_t* thread); // 0x75
 int __cdecl op_sys0(VMThread_t* thread);           // 0x80
+
+int __cdecl op_sys0_settimer(VMThread_t* thread);  // 0x58
 
 //
 // Allocated memory
@@ -180,11 +183,15 @@ struct VMProgramList
 extern int(**opcodeJumptable)(VMThread_t* thread);
 extern VMThread_t** gVMThread;
 extern VMThread_t* gLastExecutedVMThread;
-extern int* bgiThreadCount;
 
 extern int(*sys0Jumptable[0x100])(VMThread_t* thread);
 
 #define gAuxMemory ((uint8_t**)0x004beac0)    // Pointer to array of uint8_t* pointers (uint8_t* gAuxMemory[])
 #define gGlobalMem (*((uint8_t**)0x004bd43c)) // Pointer to uint8_t* array (uint8_t* gGlobalMem)
+
+#define bgiThreadCount (*((volatile int*) 0x004994f4))
+#define gTimerPrecision (*((volatile int*) 0x004c0600))
+
+#define gSys0Jumptable (((int(**)(VMThread_t*)) 0x0048d438))
 
 #endif

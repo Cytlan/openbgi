@@ -1027,10 +1027,12 @@ int op_sys0(VMThread_t* thread)
 	{
 		uint8_t opcode = thread->codeSpace[thread->instructionPointer];
 		printf("Undefined sys0 opcode: 0x%.2X (%d) at address %.8LX\n", sysOpcode, sysOpcode, thread->instructionPointer);
-		thread->instructionPointer -= 2;
-		thread->programCounter -= 2;
-		haltExecution(thread);
-		return 0;
+
+		return gSys0Jumptable[sysOpcode](thread);
+		//thread->instructionPointer -= 2;
+		//thread->programCounter -= 2;
+		//haltExecution(thread);
+		//return 0;
 	}
 	return sys0Jumptable[sysOpcode](thread);
 }

@@ -9,9 +9,12 @@ int(**opcodeJumptable)(VMThread_t* thread) = (int(**)(VMThread_t*))0x00488420;
 
 VMThread_t** gVMThread = (VMThread_t**)0x0049d2f8;
 
-int* bgiThreadCount = (int*)0x004994f4;
+//int* bgiThreadCount = (int*)0x004994f4;
 //extern uint8_t* gAuxMemory[]; // = (uint8_t**)0x004beac0;
 //uint8_t* gAuxMemory = (uint8_t**)0x004beac0;
+
+//asm(".global bgiThreadCount");
+//asm("bgiThreadCount org 0x004994f4");
 
 VMThread_t* gLastExecutedVMThread = NULL;
 
@@ -354,4 +357,17 @@ bool BGI_IsDelimiter(uint16_t c)
 			return true;
 	}
 	return false;
+}
+
+uint32_t BGI_GetSysTime()
+{
+	if(gTimerPrecision)
+		return timeGetTime();
+	else
+		return GetTickCount();
+}
+
+void BGI_SetTimer(VMThread_t* thread, int time)
+{
+	thread->field_0x58 = BGI_GetSysTime() + time;
 }

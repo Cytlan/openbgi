@@ -19,6 +19,20 @@ int op_sys0_islauncher(VMThread_t* thread)
 	return 0;
 }
 
+// -----------------------------------------------------------------------------
+// Mnemonic:  sys.settimer
+// Opcode:    0x58
+// Stack in:     0
+// Stack out:    1
+// Bytes:        0
+// -----------------------------------------------------------------------------
+int op_sys0_settimer(VMThread_t* thread)
+{
+	int32_t time = BGI_PopStack(thread);
+	BGI_SetTimer(thread, time);
+	return 0;
+}
+
 int(*sys0Jumptable[0x100])(VMThread_t* thread) = {
 	// 0x00 - 0x0F
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -31,7 +45,7 @@ int(*sys0Jumptable[0x100])(VMThread_t* thread) = {
 	// 0x40 - 0x4F
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	// 0x50 - 0x5F
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, op_sys0_settimer, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	// 0x60 - 0x6F
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	// 0x70 - 0x7F
