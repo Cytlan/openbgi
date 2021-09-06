@@ -604,12 +604,10 @@ int op_ge(VMThread_t* thread)
 // -----------------------------------------------------------------------------
 int op_dnotzero(VMThread_t* thread)
 {
-	// Why does this exist? The result is the same as op_dnotzero2
 	uint32_t right = BGI_PopStack(thread);
 	uint32_t left = BGI_PopStack(thread);
 
-	// If not zero, push 1, otherwise push 0
-	if((left != 0) && (right != 0))
+	if(left || right)
 		BGI_PushStack(thread, 1);
 	else
 		BGI_PushStack(thread, 0);
@@ -625,15 +623,13 @@ int op_dnotzero(VMThread_t* thread)
 // -----------------------------------------------------------------------------
 int op_dnotzero2(VMThread_t* thread)
 {
-	// Why does this exist? The result is the same as op_dnotzero
 	uint32_t right = BGI_PopStack(thread);
 	uint32_t left = BGI_PopStack(thread);
 
-	// If zero, push 0, otherwise push 1
-	if((left == 0) && (right == 0))
-		BGI_PushStack(thread, 0);
-	else
+	if(left && right)
 		BGI_PushStack(thread, 1);
+	else
+		BGI_PushStack(thread, 0);
 	return 0;
 }
 
