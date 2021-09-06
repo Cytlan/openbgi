@@ -3,6 +3,8 @@ OpenBGI
 
 This project aims to reverse-engineer the Ethornell Buriko General Interpreter (BGI), and create an open source re-implementation of the engine.
 
+We now have a Discord server: https://discord.gg/3zFTJWUNt7
+
 Workflow
 --------
 
@@ -56,4 +58,4 @@ The only supported game right now is `Tayutama Trial`.
 Contact
 -------
 
-You can reach me on Discord: `Cytlan#5147`
+Feel free to join our Discord server: https://discord.gg/3zFTJWUNt7
