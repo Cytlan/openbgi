@@ -14,46 +14,35 @@ The strategy is just to implement an opcode, run the game and see if it crashes.
 
 Milestones reached:
 * Reimplemented enough basic opcodes for Tayutama to run.
+* Standalone engine is being worked on.
 
 Architecture
 ------------
 
-While we're still working on reimplementing opcodes, it doesn't make sense to compile a stand-alone program yet. Therefore our strategy is to hook into an existing engine and redirect functions and opcodes to a shared library instead.
-
-How it works is that we inject a DLL into the game that contains our reimplementation and the debugger. The DLL patches the engine and redirects opcodes to our reimplementations.
-
-Eventually this method will be retired once our code is developed to the point where it can boot a game on its own.
-
-Debugger
---------
-
-To help reverse-engineering the game, we have created a debugging tool for the engine. After patching the game, the debugger is loaded and allows us to inspect threads, halt the execution and single-step through the program.
-
-The debugger window will be the very first window that pops up, and the engine will be started in a *halted* state. Hit the `Run` button to start the game.
-
-![Screenshot of the debugger as of 2020-11-13](debugger.png)
+While we're still working on reimplementing opcodes, but it now makes sense to compile a stand-alone program. Uur strategy is still to hook into an existing engine and redirect functions and opcodes to a shared library, and reimplementing this into the standalone version.
 
 Building
 --------
 
-Despite building a DLL and hooking into a Windows based game, the toolchain currently only supports Linux.
+While cross-platform compatibility is our goal, the build chain currenly is only configured for Linux.
 
 Before you do anything else, you need to install the various tools and dependencies needed:
 ```sh
-apt install build-essential g++-mingw-w64-i686
+apt install build-essential gcc-mingw-w64-i686
 ```
 
-Building the DLL is as simple as running:
+Building the ebgube is as simple as running:
 ```sh
 make
 ```
 
-Finally, run the game with this helper:
+Finally, run the engine in the directory of the game files:
 ```sh
-./run.sh
+cd /path/to/the/game
+/path/to/openbgi
 ```
 
-The only supported game right now is `Tayutama Trial`.
+The engine expect *all* game resources to have been extracted from the game using the `unarc` tool in the `tools` directory. In due time we will support loading directly from unmodified game assets, but for now it helps development to have assets extracted.
 
 Contact
 -------

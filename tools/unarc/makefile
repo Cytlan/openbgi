@@ -5,7 +5,7 @@
 # ------------------------------------------------------------------------------
 
 # Name of the executable
-TARGET      := openbgi
+TARGET      := unarc
 
 # Directories
 SRCDIR      := src
@@ -13,9 +13,6 @@ BUILDDIR    := bin
 
 # C sources
 CSOURCES    := $(shell find $(SRCDIR) -name '*.c')
-
-BUILD_NUMBER_FILE := $(SRCDIR)/build_number.h
-BUMP_SCRIPT       := ./scripts/bump_build_number.sh
 
 # Additional libraries
 LIBRARIES   := 
@@ -29,11 +26,11 @@ INCDIR := src
 # ------------------------------------------------------------------------------
 
 # Compile & Link, Compile, Assemble and Link utilities
-CC = i686-w64-mingw32-gcc
+CC = gcc
 
 # Compiler, assembler and linker options
-CFLAGS = -g
-LDFLAGS = -g
+CFLAGS = -O3 -DSPNG_USE_MINIZ
+LDFLAGS = -O3 -lm
 
 # System utilities
 RM = rm -f
@@ -58,12 +55,12 @@ PATHS = $(sort $(dir $(OBJS)))
 #
 # ------------------------------------------------------------------------------
 
-all: setup clean $(BUILDDIR)/$(TARGET)
+all: setup $(BUILDDIR)/$(TARGET)
 
 setup:
 	mkdir -p $(PATHS)
 
-$(BUILDDIR)/$(TARGET): $(OBJS) $(BUILD_NUMBER_FILE)
+$(BUILDDIR)/$(TARGET): $(OBJS)
 	$(CC) $(OBJS) $(LDFLAGS) -o $(BUILDDIR)/$(TARGET)
 
 $(BUILDDIR)/%.o: $(SRCDIR)/%.c
@@ -73,12 +70,9 @@ $(TOOLS):
 	echo $@
 	$(MAKE) -C $@
 
-$(BUILD_NUMBER_FILE):
-	@$(BUMP_SCRIPT) $(BUILD_NUMBER_FILE)
-
 clean:
 	$(RM) $(OBJS) $(BUILDDIR)/$(TARGET)
 
-.PHONY: all setup $(TOOLS) $(BUILD_NUMBER_FILE)
+.PHONY: all setup $(TOOLS)
 
 # EOF --------------------------------------------------------------------------
