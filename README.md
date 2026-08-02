@@ -56,7 +56,7 @@ The engine expect *all* game resources to have been extracted from the game usin
 Ethornell / Buriko General Interpreter
 --------------------------------------
 
-"Ethornell / Buriko General Interpreter" is most commonly referred to as "BGI".
+"Ethornell / Buriko General Interpreter" is most commonly referred to as "BGI" or "Ethornell".
 
 BGI consists of a stack-based Virtual Machine (VM) plus subsystems for drawing graphics, synthesising graphical effects, playing sound, and reading/writing files.
 
