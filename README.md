@@ -29,11 +29,37 @@ Milestones reached:
 * Reimplemented enough basic opcodes for Tayutama to run.
 * Standalone engine is being worked on.
 
+Goals
+-----
+
+OpenBGI aims to be a cross-platform, highly portable reimplementation of the BGI engine.
+
+Main platforms we want to support:
+* Windows
+* macOS
+* Linux
+* Android
+* WASM (browser)
+* Haiku
+
+If possible, we'd like to support:
+* Switch 1/2
+* PSVita
+* PS4 / PS3 / PS2
+
+For now, the only realistic targets are Windows and Linux.
+
+We want to include tools for translating games, and upscale old games on-the-fly.
+
+Out-of-Scope
+------------
+
+OpenBGI is not a Visual Novel development platform - If you wish to develop a VN on the Ethornell/BGI platform, then you must contact Buriko Co., Ltd.
 
 Building
 --------
 
-While cross-platform compatibility is our goal, the build chain currenly is only configured for Linux.
+While cross-platform compatibility is our goal, the build chain currently is only configured for Linux.
 
 Before you do anything else, you need to install the various tools and dependencies needed:
 ```sh
