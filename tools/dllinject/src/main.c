@@ -177,6 +177,11 @@ int main(int argc, char* argv[]) {
 
     printf("[+] Main thread resumed (suspend count was %lu)\n", resumeResult);
 
+    // Keep attached: wait for the target process to exit
+    // (any printf from the process / DLL will appear here if it shares the console)
+    printf("[*] Waiting for target process to exit...\n");
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
     // Clean up handles (process continues running)
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);

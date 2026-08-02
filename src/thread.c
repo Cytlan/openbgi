@@ -5,6 +5,7 @@
 #include "thread.h"
 #include "engine.h"
 #include "opcodes.h"
+#include "golden_log.h"
 
 char* TLevel[4] = {
 	"",
@@ -28,27 +29,6 @@ uint32_t Thread_LoadCode(Thread_t* thread, uint8_t* code, const char* filename)
 	memcpy(thread->code + thread->codeSpaceUsed, code + programOffset, programSize);
 	thread->codeSpaceUsed += programSize;
 	thread->programCount++;
-
-/*
-	printf("%.2X %.2X %.2X %.2X %.2X %.2X %.2X %.2X %.2X %.2X %.2X %.2X %.2X %.2X %.2X %.2X\n",
-		thread->code[0x00],
-		thread->code[0x01],
-		thread->code[0x02],
-		thread->code[0x03],
-		thread->code[0x04],
-		thread->code[0x05],
-		thread->code[0x06],
-		thread->code[0x07],
-		thread->code[0x08],
-		thread->code[0x09],
-		thread->code[0x0A],
-		thread->code[0x0B],
-		thread->code[0x0C],
-		thread->code[0x0D],
-		thread->code[0x0E],
-		thread->code[0x0F]
-	);
-*/
 
 	printf("[Thread %d]: %sLoaded code (0x%.8X) from \"%s\" into 0x%.8X\n", thread->threadId, TLevel[thread->level], program->size, program->filename, program->location);
 
@@ -75,23 +55,115 @@ uint32_t Thread_DeleteProgram(Thread_t* thread)
 uint8_t Thread_ReadImm8(Thread_t* thread)
 {
 	thread->instructionPointer = thread->nextInstructionPointer;
+
+	uint8_t data = thread->code[thread->instructionPointer];
+
+	if(GoldenLogTotal)
+	{
+		if(GoldenLog[GoldenLogIndex].type != LOG_TYPE_R8)
+		{
+			printf("[Thread %d]: (%u) Golden log R8 mismatch! Type isn't LOG_TYPE_R8\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].thread != thread->threadId)
+		{
+			printf("[Thread %d]: (%u) Golden log R8 mismatch! Thread is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->threadId, GoldenLog[GoldenLogIndex].thread);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].tick != thread->ticks)
+		{
+			printf("[Thread %d]: (%u) Golden log R8 mismatch! Tick is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->ticks, GoldenLog[GoldenLogIndex].tick);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].value != data)
+		{
+			printf("[Thread %d]: (%u) Golden log R8 mismatch! Value is not 0x%.8X, but 0x%.8X\n", thread->threadId, GoldenLog[GoldenLogIndex].time, data, GoldenLog[GoldenLogIndex].value);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		GoldenLogIndex++;
+	}
+
 	thread->nextInstructionPointer = thread->nextInstructionPointer + 1;
-	return thread->code[thread->instructionPointer];
+	return data;
 }
 
 uint8_t Thread_ReadCode8(Thread_t* thread)
 {
 	uint8_t data = thread->code[thread->nextInstructionPointer];
-	printf("[Thread %d]: %sReadCode8() @ 0x%.8X = 0x%.2X\n", thread->threadId, TLevel[thread->level], thread->nextInstructionPointer, data);
+	if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+		printf("[Thread %d]: %sReadCode8() @ 0x%.8X = 0x%.2X\n", thread->threadId, TLevel[thread->level], thread->nextInstructionPointer, data);
 	thread->nextInstructionPointer = thread->nextInstructionPointer + 1;
+
+	if(GoldenLogTotal)
+	{
+		if(GoldenLog[GoldenLogIndex].type != LOG_TYPE_RC8)
+		{
+			printf("[Thread %d]: (%u) Golden log RC8 mismatch! Type isn't LOG_TYPE_RC8\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].thread != thread->threadId)
+		{
+			printf("[Thread %d]: (%u) Golden log RC8 mismatch! Thread is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->threadId, GoldenLog[GoldenLogIndex].thread);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].tick != thread->ticks)
+		{
+			printf("[Thread %d]: (%u) Golden log RC8 mismatch! Tick is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->ticks, GoldenLog[GoldenLogIndex].tick);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].value != data)
+		{
+			printf("[Thread %d]: (%u) Golden log RC8 mismatch! Value is not 0x%.8X, but 0x%.8X\n", thread->threadId, GoldenLog[GoldenLogIndex].time, data, GoldenLog[GoldenLogIndex].value);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		GoldenLogIndex++;
+	}
 	return data;
 }
 
 uint16_t Thread_ReadCode16(Thread_t* thread)
 {
 	uint16_t data = thread->code[thread->nextInstructionPointer] | (thread->code[thread->nextInstructionPointer + 1] << 8);
-	printf("[Thread %d]: %sReadCode16() @ 0x%.8X = 0x%.4X\n", thread->threadId, TLevel[thread->level], thread->nextInstructionPointer, data);
+	if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+		printf("[Thread %d]: %sReadCode16() @ 0x%.8X = 0x%.4X\n", thread->threadId, TLevel[thread->level], thread->nextInstructionPointer, data);
 	thread->nextInstructionPointer = thread->nextInstructionPointer + 2;
+
+	if(GoldenLogTotal)
+	{
+		if(GoldenLog[GoldenLogIndex].type != LOG_TYPE_RC16)
+		{
+			printf("[Thread %d]: (%u) Golden log RC16 mismatch! Type isn't LOG_TYPE_RC16\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].thread != thread->threadId)
+		{
+			printf("[Thread %d]: (%u) Golden log RC16 mismatch! Thread is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->threadId, GoldenLog[GoldenLogIndex].thread);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].tick != thread->ticks)
+		{
+			printf("[Thread %d]: (%u) Golden log RC16 mismatch! Tick is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->ticks, GoldenLog[GoldenLogIndex].tick);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].value != data)
+		{
+			printf("[Thread %d]: (%u) Golden log RC16 mismatch! Value is not 0x%.8X, but 0x%.8X\n", thread->threadId, GoldenLog[GoldenLogIndex].time, data, GoldenLog[GoldenLogIndex].value);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		GoldenLogIndex++;
+	}
 	return data;
 }
 
@@ -102,22 +174,99 @@ uint32_t Thread_ReadCode32(Thread_t* thread)
 		(thread->code[thread->nextInstructionPointer + 1] << 8) |
 		(thread->code[thread->nextInstructionPointer + 2] << 16) |
 		(thread->code[thread->nextInstructionPointer + 3] << 24);
-	printf("[Thread %d]: %sReadCode32() @ 0x%.8X = 0x%.8X\n", thread->threadId, TLevel[thread->level], thread->nextInstructionPointer, data);
+	if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+		printf("[Thread %d]: %sReadCode32() @ 0x%.8X = 0x%.8X\n", thread->threadId, TLevel[thread->level], thread->nextInstructionPointer, data);
 	thread->nextInstructionPointer = thread->nextInstructionPointer + 4;
+
+	if(GoldenLogTotal)
+	{
+		if(GoldenLog[GoldenLogIndex].type != LOG_TYPE_RC32)
+		{
+			printf("[Thread %d]: (%u) Golden log RC32 mismatch! Type isn't LOG_TYPE_RC32\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].thread != thread->threadId)
+		{
+			printf("[Thread %d]: (%u) Golden log RC32 mismatch! Thread is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->threadId, GoldenLog[GoldenLogIndex].thread);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].tick != thread->ticks)
+		{
+			printf("[Thread %d]: (%u) Golden log RC32 mismatch! Tick is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->ticks, GoldenLog[GoldenLogIndex].tick);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].value != data)
+		{
+			printf("[Thread %d]: (%u) Golden log RC32 mismatch! Value is not 0x%.8X, but 0x%.8X\n", thread->threadId, GoldenLog[GoldenLogIndex].time, data, GoldenLog[GoldenLogIndex].value);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		GoldenLogIndex++;
+	}
+
 	return data;
 }
 
 void Thread_PushStack(Thread_t* thread, uint32_t data)
 {
-	printf("[Thread %d]: %sPushStack(0x%.8X) @ 0x%.8X\n", thread->threadId, TLevel[thread->level], data, thread->stackPointer);
-	thread->stack[thread->stackPointer] = data;
+	if(GoldenLogTotal)
+	{
+		// Get Sys0.GetSysTime value from the log
+		if(GoldenLog[GoldenLogIndex].value != data && thread->opcode == 0x8004)
+		{
+			printf("[Thread %d]: (%u) Golden log PUSH overwrite, from 0x%.8X, but 0x%.8X\n", thread->threadId, GoldenLog[GoldenLogIndex].time, data, GoldenLog[GoldenLogIndex].value);
+			data = GoldenLog[GoldenLogIndex].value;
+		}
+		// Get Sys0.PopGlobalList value from the log
+		if(GoldenLog[GoldenLogIndex].value != data && thread->opcode == 0x80A0)
+		{
+			printf("[Thread %d]: (%u) Golden log PUSH overwrite, from 0x%.8X, but 0x%.8X\n", thread->threadId, GoldenLog[GoldenLogIndex].time, data, GoldenLog[GoldenLogIndex].value);
+			data = GoldenLog[GoldenLogIndex].value;
+		}
+
+		if(GoldenLog[GoldenLogIndex].type != LOG_TYPE_PUSH)
+		{
+			printf("[Thread %d]: (%u) Golden log PUSH mismatch! Type isn't LOG_TYPE_PUSH\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].thread != thread->threadId)
+		{
+			printf("[Thread %d]: (%u) Golden log PUSH mismatch! Thread is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->threadId, GoldenLog[GoldenLogIndex].thread);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].tick != thread->ticks)
+		{
+			printf("[Thread %d]: (%u) Golden log PUSH mismatch! Tick is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->ticks, GoldenLog[GoldenLogIndex].tick);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].value != data)
+		{
+			printf("[Thread %d]: (%u) Golden log PUSH mismatch! Value is not 0x%.8X, but 0x%.8X\n", thread->threadId, GoldenLog[GoldenLogIndex].time, data, GoldenLog[GoldenLogIndex].value);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		GoldenLogIndex++;
+	}
+
+	if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+		printf("[Thread %d]: %sPushStack(0x%.8X) @ 0x%.8X\n", thread->threadId, TLevel[thread->level], data, thread->stackPointer);
 	if(thread->stackPointer == thread->stackSize)
 	{
 		//sp = thread->stackSize;
-		printf("[Thread %d]: %sStack overflow!\n", thread->threadId, TLevel[thread->level]);
-		thread->running = 0;
-		return;
+		if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+			printf("[Thread %d]: %sStack overflow!\n", thread->threadId, TLevel[thread->level]);
+		//thread->running = 0;
+		//thread->error = 1;
+		//return;
+		thread->stackPointer = 0;
 	}
+	thread->stack[thread->stackPointer] = data;
 	thread->stackPointer++;
 }
 
@@ -127,15 +276,55 @@ uint32_t Thread_PopStack(Thread_t* thread)
 	if(sp == 0)
 	{
 		//sp = thread->stackSize;
-		printf("[Thread %d]: %sStack underflow!\n", thread->threadId, TLevel[thread->level]);
-		thread->running = 0;
-		return 0;
+		if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+			printf("[Thread %d]: %sStack underflow!\n", thread->threadId, TLevel[thread->level]);
+		//thread->running = 0;
+		//thread->error = 1;
+		//return 0;
+		thread->stackPointer = thread->stackSize;
+		sp = thread->stackPointer;
 	}
 	sp--;
 	thread->stackPointer = sp;
 	uint32_t data = thread->stack[sp];
-	printf("[Thread %d]: %sPopStack() @ 0x%.8X = 0x%.8X\n", thread->threadId, TLevel[thread->level], thread->stackPointer, data);
+	if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+		printf("[Thread %d]: %sPopStack() @ 0x%.8X = 0x%.8X\n", thread->threadId, TLevel[thread->level], thread->stackPointer, data);
+
+	if(GoldenLogTotal)
+	{
+		if(GoldenLog[GoldenLogIndex].type != LOG_TYPE_POP)
+		{
+			printf("[Thread %d]: (%u) Golden log POP mismatch! Type isn't LOG_TYPE_POP\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].thread != thread->threadId)
+		{
+			printf("[Thread %d]: (%u) Golden log POP mismatch! Thread is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->threadId, GoldenLog[GoldenLogIndex].thread);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].tick != thread->ticks)
+		{
+			printf("[Thread %d]: (%u) Golden log POP mismatch! Tick is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->ticks, GoldenLog[GoldenLogIndex].tick);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		if(GoldenLog[GoldenLogIndex].value != data)
+		{
+			printf("[Thread %d]: (%u) Golden log POP mismatch! Value is not 0x%.8X, but 0x%.8X\n", thread->threadId, GoldenLog[GoldenLogIndex].time, data, GoldenLog[GoldenLogIndex].value);
+			thread->running = 0;
+			thread->error = 2;
+		}
+		GoldenLogIndex++;
+	}
 	return data;
+}
+
+void Thread_SchedulePush(Thread_t* thread, uint32_t data)
+{
+	thread->queuePushQueue[thread->queuePush] = data;
+	thread->queuePush++;
 }
 
 uint32_t Thread_GetInstructionPointer(Thread_t* thread)
@@ -145,7 +334,8 @@ uint32_t Thread_GetInstructionPointer(Thread_t* thread)
 
 void Thread_SetInstructionPointer(Thread_t* thread, uint32_t value)
 {
-	printf("[Thread %d]: %sSet instruction pointer to 0x%.8X\n", thread->threadId, TLevel[thread->level], value);
+	if(!thread->silenceBasicOpcodeLog)
+		printf("[Thread %d]: %sSet instruction pointer to 0x%.8X\n", thread->threadId, TLevel[thread->level], value);
 	thread->nextInstructionPointer = value;
 }
 
@@ -156,7 +346,8 @@ uint32_t Thread_GetBasePointer(Thread_t* thread)
 
 void Thread_SetBasePointer(Thread_t* thread, uint32_t value)
 {
-	printf("[Thread %d]: %sSet base pointer to 0x%.8X\n", thread->threadId, TLevel[thread->level], value);
+	if(!thread->silenceBasicOpcodeLog)
+		printf("[Thread %d]: %sSet base pointer to 0x%.8X\n", thread->threadId, TLevel[thread->level], value);
 	thread->basePointer = value;
 }
 
@@ -171,16 +362,87 @@ void Thread_SetUnknownTimestamp(Thread_t* thread, uint32_t value)
 uint32_t Thread_Execute(Thread_t* thread)
 {
 	uint8_t opcode = Thread_ReadImm8(thread);
-	printf("[Thread %d]: %s[%.8X] Executing opcode %s (0x%.2X / %d)\n", thread->threadId, TLevel[thread->level], thread->instructionPointer, OpcodesMnemonics[opcode], opcode, opcode);
+	thread->inBasicOpcode = 1;
+	if(!thread->silenceBasicOpcodeLog)
+		printf("[Thread %d]: %s[%.8X] Executing opcode %s (0x%.2X / %d)\n", thread->threadId, TLevel[thread->level], thread->instructionPointer, OpcodesMnemonics[opcode], opcode, opcode);
 	thread->level++;
+	thread->opcode = opcode;
+
+	if(GoldenLogTotal)
+	{
+		if(GoldenLog[GoldenLogIndex].type != LOG_TYPE_EXEC)
+		{
+			printf("[Thread %d]: (%u) Golden log EXEC mismatch! Type isn't LOG_TYPE_EXEC\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+			thread->running = 0;
+			thread->error = 2;
+			return 0xFFFFFFFE;
+		}
+		if(GoldenLog[GoldenLogIndex].thread != thread->threadId)
+		{
+			printf("[Thread %d]: (%u) Golden log EXEC mismatch! Thread is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->threadId, GoldenLog[GoldenLogIndex].thread);
+			thread->running = 0;
+			thread->error = 2;
+			return 0xFFFFFFFE;
+		}
+		if(GoldenLog[GoldenLogIndex].tick != thread->ticks)
+		{
+			printf("[Thread %d]: (%u) Golden log EXEC mismatch! Tick is not %d, but %d\n", thread->threadId, GoldenLog[GoldenLogIndex].time, thread->ticks, GoldenLog[GoldenLogIndex].tick);
+			thread->running = 0;
+			thread->error = 2;
+			return 0xFFFFFFFE;
+		}
+		if(GoldenLog[GoldenLogIndex].value != opcode)
+		{
+			printf("[Thread %d]: (%u) Golden log EXEC mismatch! Value is not 0x%.8X, but 0x%.8X\n", thread->threadId, GoldenLog[GoldenLogIndex].time, opcode, GoldenLog[GoldenLogIndex].value);
+			thread->running = 0;
+			thread->error = 2;
+			return 0xFFFFFFFE;
+		}
+		GoldenLogIndex++;
+	}
+
 	if(Opcodes[opcode] == NULL)
 	{
 		thread->level--;
 		printf("[Thread %d]: %sError: opcode 0x%.2X (%d) not implemented\n", thread->threadId, TLevel[thread->level], opcode, opcode);
-		return 0xFFFFFFFF;
+		return 0xFFFFFFFD;
 	}
 	uint32_t res = Opcodes[opcode](thread);
 	thread->level--;
+
+	if(GoldenLog[GoldenLogIndex].thread == thread->threadId && GoldenLog[GoldenLogIndex].tick == thread->ticks)
+	{
+		int idx = GoldenLogIndex;
+		while(GoldenLog[idx].tick == thread->ticks)
+		{
+			switch(GoldenLog[idx].type)
+			{
+				case LOG_TYPE_EXEC:
+					printf("[Thread %d]: (%u) Golden log missing LOG_TYPE_EXEC\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+				case LOG_TYPE_R8:
+					printf("[Thread %d]: (%u) Golden log missing LOG_TYPE_R8\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+				case LOG_TYPE_RC8:
+					printf("[Thread %d]: (%u) Golden log missing LOG_TYPE_RC8\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+				case LOG_TYPE_RC16:
+					printf("[Thread %d]: (%u) Golden log missing LOG_TYPE_RC16\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+				case LOG_TYPE_RC32:
+					printf("[Thread %d]: (%u) Golden log missing LOG_TYPE_RC32\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+				case LOG_TYPE_PUSH:
+					printf("[Thread %d]: (%u) Golden log missing LOG_TYPE_PUSH\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+				case LOG_TYPE_POP:
+					printf("[Thread %d]: (%u) Golden log missing LOG_TYPE_POP\n", thread->threadId, GoldenLog[GoldenLogIndex].time);
+
+			}
+			idx++;
+		}
+		thread->running = 0;
+		thread->error = 2;
+	}
+	if(thread->error == 1)
+		return 0xFFFFFFFC;
+	if(thread->error == 2)
+		return 0xFFFFFFFE;
+	thread->ticks++;
 	return res;
 }
 
@@ -189,29 +451,53 @@ uint8_t* Thread_ResolveAddr(Thread_t* thread, uint32_t address)
 	if(address == 0)
 		return NULL;
 
-	int tag = (address >> 25) & 0x7F;
+	int tag = address >> 24;
 	uint32_t offset = address & 0x00ffffff;
 
 	// TODO: Bounds checking
 	switch(tag)
 	{
 		case 0:
-			printf("[Thread %d]: %sResolved address: GlobalMem Offset 0x%.8X\n", thread->threadId, TLevel[thread->level], offset);
-			return gGlobalMem + offset;
-		case 8:
-			printf("[Thread %d]: %sResolved address: CodeMem Offset 0x%.8X\n", thread->threadId, TLevel[thread->level], offset);
-			return thread->code + offset;
-		case 9:
-			printf("[Thread %d]: %sResolved address: LocalMem Offset 0x%.8X\n", thread->threadId, TLevel[thread->level], offset);
+			if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+				printf("[Thread %d]: %sResolved address: GlobalMem Offset 0x%.8X\n", thread->threadId, TLevel[thread->level], offset);
+			return thread->engine->globalMem + offset;
+		case 0x10:
+			if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+				printf("[Thread %d]: %sResolved address: LocalMem Offset 0x%.8X\n", thread->threadId, TLevel[thread->level], offset);
 			return thread->localMem + offset;
-		case 10:
+		case 0x11:
+			if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+				printf("[Thread %d]: %sResolved address: CodeMem Offset 0x%.8X\n", thread->threadId, TLevel[thread->level], offset);
+			return thread->code + offset;
+		case 0x12:
 			printf("[Thread %d]: %sError: Struct Memory area %.2X is not implemented\n", thread->threadId, TLevel[thread->level], tag);
 			//return BGI_GetUnknownStuctMem(thread, offset);
 			return NULL;
 		default:
-			printf("[Thread %d]: %sError: Aux Memory area %.2X is not implemented\n", thread->threadId, TLevel[thread->level], tag);
-			//return BGI_GetUnknownStuctMem(thread, offset);
-			return NULL;
+			if(tag < 0x40)
+			{
+				printf("[Thread %d]: %sError: %.2X is an invalid memory area\n", thread->threadId, TLevel[thread->level], tag);
+				return NULL;
+			}
+			int slot = (tag >> 1) - 32;
+			if(thread->engine->auxMemory[slot] == NULL)
+			{
+				printf("[Thread %d]: %sError: %.2X is an uninitialised aux memory area\n", thread->threadId, TLevel[thread->level], tag);
+				thread->running = 0;
+				thread->error = 1;
+				return NULL;
+			}
+
+			if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+				printf("[Thread %d]: %sResolved address: AuxMem Offset 0x%.8X\n", thread->threadId, TLevel[thread->level], offset);
+			return thread->engine->auxMemory[slot] + offset;
+
+			//printf("[Thread %d]: %sError: Aux Memory area %.2X is not implemented\n", thread->threadId, TLevel[thread->level], tag);
+			////return BGI_GetUnknownStuctMem(thread, offset);
+			//thread->running = 0;
+			//thread->error = 1;
+			//return NULL;
+			/*
 			if(tag < 16)
 			{
 				printf("[Thread %d]: %sError: %.2X is an invalid memory area\n", thread->threadId, TLevel[thread->level], tag);
@@ -225,6 +511,7 @@ uint8_t* Thread_ResolveAddr(Thread_t* thread, uint32_t address)
 				return NULL;
 			}
 			return auxMem + offset;
+			*/
 	}
 }
 
@@ -240,15 +527,18 @@ uint32_t Thread_WriteIntToMemory(Thread_t* thread, uint8_t* ptr, uint8_t size, u
 	switch(size)
 	{
 		case 0:
-			printf("[Thread %d]: %sWrite 0x%.2X to memory\n", thread->threadId, TLevel[thread->level], value);
+			if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+				printf("[Thread %d]: %sWrite 0x%.2X to memory\n", thread->threadId, TLevel[thread->level], value);
 			*(uint8_t*)ptr = (uint8_t)value;
 			break;
 		case 1:
-			printf("[Thread %d]: %sWrite 0x%.4X to memory\n", thread->threadId, TLevel[thread->level], value);
+			if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+				printf("[Thread %d]: %sWrite 0x%.4X to memory\n", thread->threadId, TLevel[thread->level], value);
 			*(uint16_t*)ptr = (uint16_t)value;
 			break;
 		case 2:
-			printf("[Thread %d]: %sWrite 0x%.8X to memory\n", thread->threadId, TLevel[thread->level], value);
+			if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+				printf("[Thread %d]: %sWrite 0x%.8X to memory\n", thread->threadId, TLevel[thread->level], value);
 			*(uint32_t*)ptr = (uint32_t)value;
 			break;
 		default:
@@ -282,7 +572,7 @@ uint32_t Thread_GetThreadID(Thread_t* thread)
 
 void Thread_Sprintf(Thread_t* thread, char* dst, const char* fmt)
 {
-	uint32_t args[16] = {0};
+	size_t args[16] = {0};
 	int argCount = 0;
 	const char* p = fmt;
 
@@ -341,8 +631,8 @@ void Thread_Sprintf(Thread_t* thread, char* dst, const char* fmt)
 				//crash("BGI_Sprintf: too many arguments (maximum 16)", (char *)thread);
 				return;
 			}
-			uint8_t *str_ptr = Thread_PopAndResolveAddress(thread);
-			args[argCount++] = (uint32_t)(uintptr_t)str_ptr;
+			uint8_t* str_ptr = Thread_PopAndResolveAddress(thread);
+			args[argCount++] = (size_t)str_ptr;
 		}
 		else
 		{
@@ -356,6 +646,8 @@ void Thread_Sprintf(Thread_t* thread, char* dst, const char* fmt)
 	}
 
 	// Dispatch to sprintf with the exact number of arguments popped from the VM
+	if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+		printf("sprintf with %d args to %.16lX\n", argCount, (size_t)dst);
 	switch(argCount)
 	{
 		case 0:  strcpy(dst, fmt); break;
@@ -377,5 +669,6 @@ void Thread_Sprintf(Thread_t* thread, char* dst, const char* fmt)
 		case 16: sprintf(dst, fmt, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14], args[15]); break;
 		default: strcpy(dst, fmt); break;
 	}
-	printf("[Thread %d]: %sSprintf dst: %s, fmt: %s, Number of arguments: %d\n", thread->threadId, TLevel[thread->level], dst, fmt, argCount);
+	if(!thread->inBasicOpcode || !thread->silenceBasicOpcodeLog)
+		printf("[Thread %d]: %sSprintf dst: %s, fmt: %s, Number of arguments: %d\n", thread->threadId, TLevel[thread->level], dst, fmt, argCount);
 }

@@ -159,7 +159,7 @@ char* OpcodesGrp1Mnemonics[256] = {
     /* 0x95 149 */ "Unknown_149",
     /* 0x96 150 */ "Unknown_150",
     /* 0x97 151 */ "--Unknown--",
-    /* 0x98 152 */ "neticMargin",
+    /* 0x98 152 */ "SetPhoneticMargin",
     /* 0x99 153 */ "--Unknown--",
     /* 0x9A 154 */ "--Unknown--",
     /* 0x9B 155 */ "--Unknown--",
@@ -701,7 +701,14 @@ uint32_t Opcode_Grp1_Unknown_140(Thread_t* thread)
 
 uint32_t Opcode_Grp1_Unknown_141(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+    uint32_t value1 = Thread_PopStack(thread);
+    uint32_t value2 = Thread_PopStack(thread);
+    uint32_t value3 = Thread_PopStack(thread);
+    uint32_t value4 = Thread_PopStack(thread);
+    uint32_t value5 = Thread_PopStack(thread);
+    uint32_t value6 = Thread_PopStack(thread);
+    printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
+    return 0;
 }
 
 uint32_t Opcode_Grp1_Unknown_142(Thread_t* thread)
@@ -731,7 +738,10 @@ uint32_t Opcode_Grp1_Unknown_147(Thread_t* thread)
 
 uint32_t Opcode_Grp1_Unknown_148(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+    uint8_t* ptr1 = Thread_PopAndResolveAddress(thread);
+    uint8_t* ptr2 = Thread_PopAndResolveAddress(thread);
+    printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
+    return 0;
 }
 
 uint32_t Opcode_Grp1_Unknown_149(Thread_t* thread)
@@ -751,7 +761,7 @@ uint32_t Opcode_Grp1_SetPhoneticMargin(Thread_t* thread)
 	uint32_t value3 = Thread_PopStack(thread);
 	uint32_t value4 = Thread_PopStack(thread);
 	uint32_t value5 = Thread_PopStack(thread);
-	uint32_t value6 = Thread_PopStack(thread);
+	//uint32_t value6 = Thread_PopStack(thread);
 	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
 	return 0;
 }

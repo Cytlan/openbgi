@@ -18,7 +18,7 @@ BUILD_NUMBER_FILE := $(SRCDIR)/build_number.h
 BUMP_SCRIPT       := ./scripts/bump_build_number.sh
 
 # Additional libraries
-LIBRARIES   := 
+LIBRARIES   :=
 
 INCDIR := src
 
@@ -29,11 +29,11 @@ INCDIR := src
 # ------------------------------------------------------------------------------
 
 # Compile & Link, Compile, Assemble and Link utilities
-CC = i686-w64-mingw32-gcc
+CC = gcc #i686-w64-mingw32-gcc
 
 # Compiler, assembler and linker options
-CFLAGS = -g
-LDFLAGS = -g
+CFLAGS = -g -fsanitize=address `sdl2-config --cflags` -DSPNG_USE_MINIZ
+LDFLAGS = -g -fsanitize=address `sdl2-config --libs` -lm
 
 # System utilities
 RM = rm -f

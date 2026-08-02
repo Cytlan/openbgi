@@ -2,6 +2,7 @@
 #define OPCODES_H_
 
 #include <stdint.h>
+#include "engine.h"
 
 typedef struct Thread Thread_t;
 
@@ -51,7 +52,14 @@ uint32_t Opcode_Xor(Thread_t* thread);
 uint32_t Opcode_Not(Thread_t* thread);
 uint32_t Opcode_Sprintf(Thread_t* thread);
 uint32_t Opcode_Memcpy(Thread_t* thread);
+uint32_t Opcode_Memclr(Thread_t* thread);
+uint32_t Opcode_DoubleNotZero(Thread_t* thread);
+uint32_t Opcode_DoubleAnyNotZero(Thread_t* thread);
 uint32_t Opcode_IsZero(Thread_t* thread);
+uint32_t Opcode_Strcpy(Thread_t* thread);
+uint32_t Opcode_StrToLower(Thread_t* thread);
+uint32_t Opcode_Strlen(Thread_t* thread);
+uint32_t Opcode_Streq(Thread_t* thread);
 
 extern OpcodePtr_t Opcodes[256];
 extern char* OpcodesMnemonics[256];

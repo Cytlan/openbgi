@@ -11,6 +11,7 @@
 #include "opcodes_ext0.h"
 #include "opcodes_ext1.h"
 #include "thread.h"
+#include "golden_log.h"
 
 char* OpcodesMnemonics[256] = {
 	/* 0x00   0 */ "Push8",
@@ -69,8 +70,8 @@ char* OpcodesMnemonics[256] = {
 	/* 0x35  53 */ "Le",
 	/* 0x36  54 */ "Unknown",
 	/* 0x37  55 */ "Unknown",
-	/* 0x38  56 */ "Unknown",
-	/* 0x39  57 */ "Unknown",
+	/* 0x38  56 */ "DoubleNotZero",
+	/* 0x39  57 */ "DoubleAnyNotZero",
 	/* 0x3A  58 */ "IsZero",
 	/* 0x3B  59 */ "Unknown",
 	/* 0x3C  60 */ "Unknown",
@@ -110,19 +111,19 @@ char* OpcodesMnemonics[256] = {
 	/* 0x5E  94 */ "Unknown",
 	/* 0x5F  95 */ "Unknown",
 	/* 0x60  96 */ "Memcpy",
-	/* 0x61  97 */ "Unknown",
+	/* 0x61  97 */ "Memclr",
 	/* 0x62  98 */ "Unknown",
 	/* 0x63  99 */ "Unknown",
 	/* 0x64 100 */ "Unknown",
 	/* 0x65 101 */ "Unknown",
 	/* 0x66 102 */ "Unknown",
 	/* 0x67 103 */ "Unknown",
-	/* 0x68 104 */ "Unknown",
-	/* 0x69 105 */ "Unknown",
-	/* 0x6A 106 */ "Unknown",
+	/* 0x68 104 */ "Strlen",
+	/* 0x69 105 */ "Streq",
+	/* 0x6A 106 */ "Strcpy",
 	/* 0x6B 107 */ "Unknown",
 	/* 0x6C 108 */ "Unknown",
-	/* 0x6D 109 */ "Unknown",
+	/* 0x6D 109 */ "StrToLower",
 	/* 0x6E 110 */ "Unknown",
 	/* 0x6F 111 */ "Sprintf",
 	/* 0x70 112 */ "Unknown",
@@ -328,8 +329,8 @@ OpcodePtr_t Opcodes[256] = {
 	/* 0x35  53 */ Opcode_Le,
 	/* 0x36  54 */ 0,
 	/* 0x37  55 */ 0,
-	/* 0x38  56 */ 0,
-	/* 0x39  57 */ 0,
+	/* 0x38  56 */ Opcode_DoubleNotZero,
+	/* 0x39  57 */ Opcode_DoubleAnyNotZero,
 	/* 0x3A  58 */ Opcode_IsZero,
 	/* 0x3B  59 */ 0,
 	/* 0x3C  60 */ 0,
@@ -369,19 +370,19 @@ OpcodePtr_t Opcodes[256] = {
 	/* 0x5E  94 */ 0,
 	/* 0x5F  95 */ 0,
 	/* 0x60  96 */ Opcode_Memcpy,
-	/* 0x61  97 */ 0,
+	/* 0x61  97 */ Opcode_Memclr,
 	/* 0x62  98 */ 0,
 	/* 0x63  99 */ 0,
 	/* 0x64 100 */ 0,
 	/* 0x65 101 */ 0,
 	/* 0x66 102 */ 0,
 	/* 0x67 103 */ 0,
-	/* 0x68 104 */ 0,
-	/* 0x69 105 */ 0,
-	/* 0x6A 106 */ 0,
+	/* 0x68 104 */ Opcode_Strlen,
+	/* 0x69 105 */ Opcode_Streq,
+	/* 0x6A 106 */ Opcode_Strcpy,
 	/* 0x6B 107 */ 0,
 	/* 0x6C 108 */ 0,
-	/* 0x6D 109 */ 0,
+	/* 0x6D 109 */ Opcode_StrToLower,
 	/* 0x6E 110 */ 0,
 	/* 0x6F 111 */ Opcode_Sprintf,
 	/* 0x70 112 */ 0,
@@ -590,7 +591,7 @@ uint32_t Opcode_CondJump(Thread_t* thread)
 			res = value == 0;
 			break;
 		case 2:
-			res = value > 0;
+			res = value < 0;
 			break;
 		case 3:
 			res = value >= 0;
@@ -599,7 +600,7 @@ uint32_t Opcode_CondJump(Thread_t* thread)
 			res = value <= 0;
 			break;
 		case 5:
-			res = value < 0;
+			res = value > 0;
 			break;
 		default:
 			res = true;
@@ -607,10 +608,11 @@ uint32_t Opcode_CondJump(Thread_t* thread)
 	if(res == true)
 	{
 		// TODO: Bounds checking
-		printf("[Thread %d]: %sJump taken\n", thread->threadId, TLevel[thread->level]);
+		if(!thread->silenceBasicOpcodeLog)
+			printf("[Thread %d]: %sJump taken\n", thread->threadId, TLevel[thread->level]);
 		Thread_SetInstructionPointer(thread, dest);
 	}
-	else
+	else if(!thread->silenceBasicOpcodeLog)
 		printf("[Thread %d]: %sJump not taken\n", thread->threadId, TLevel[thread->level]);
 	return 0;
 }
@@ -668,8 +670,11 @@ uint32_t Opcode_Add(Thread_t* thread)
 
 uint32_t Opcode_Sys0(Thread_t* thread)
 {
-	uint8_t opcode = Thread_ReadImm8(thread);
-	printf("[Thread %d]: %sSys0 Executing opcode Sys0.%s (0x%.2X / %d)\n", thread->threadId, TLevel[thread->level], OpcodesSys0Mnemonics[opcode], opcode, opcode);
+	uint8_t opcode = Thread_ReadCode8(thread);
+	thread->inBasicOpcode = 0;
+	thread->opcode = (thread->opcode << 8) | opcode;
+	if(opcode != 0x5F || (opcode == 0x5F && !thread->silenceYield))
+		printf("[Thread %d]: %sSys0 Executing opcode Sys0.%s (0x%.2X / %d) (%d)\n", thread->threadId, TLevel[thread->level], OpcodesSys0Mnemonics[opcode], opcode, opcode, GoldenLog[GoldenLogIndex].time);
 	thread->level++;
 	if(OpcodesSys0[opcode] == NULL)
 	{
@@ -684,8 +689,10 @@ uint32_t Opcode_Sys0(Thread_t* thread)
 
 uint32_t Opcode_Grp0(Thread_t* thread)
 {
-	uint8_t opcode = Thread_ReadImm8(thread);
-	printf("[Thread %d]: %sGrp0 Executing opcode Grp0.%s (0x%.2X / %d)\n", thread->threadId, TLevel[thread->level], OpcodesGrp0Mnemonics[opcode], opcode, opcode);
+	uint8_t opcode = Thread_ReadCode8(thread);
+	thread->inBasicOpcode = 0;
+	thread->opcode = (thread->opcode << 8) | opcode;
+	printf("[Thread %d]: %sGrp0 Executing opcode Grp0.%s (0x%.2X / %d) (%d)\n", thread->threadId, TLevel[thread->level], OpcodesGrp0Mnemonics[opcode], opcode, opcode, GoldenLog[GoldenLogIndex].time);
 	thread->level++;
 	if(OpcodesGrp0[opcode] == NULL)
 	{
@@ -700,8 +707,10 @@ uint32_t Opcode_Grp0(Thread_t* thread)
 
 uint32_t Opcode_Grp1(Thread_t* thread)
 {
-	uint8_t opcode = Thread_ReadImm8(thread);
-	printf("[Thread %d]: %sGrp1 Executing opcode Grp1.%s (0x%.2X / %d)\n", thread->threadId, TLevel[thread->level], OpcodesGrp1Mnemonics[opcode], opcode, opcode);
+	uint8_t opcode = Thread_ReadCode8(thread);
+	thread->inBasicOpcode = 0;
+	thread->opcode = (thread->opcode << 8) | opcode;
+	printf("[Thread %d]: %sGrp1 Executing opcode Grp1.%s (0x%.2X / %d) (%d)\n", thread->threadId, TLevel[thread->level], OpcodesGrp1Mnemonics[opcode], opcode, opcode, GoldenLog[GoldenLogIndex].time);
 	thread->level++;
 	if(OpcodesGrp1[opcode] == NULL)
 	{
@@ -716,8 +725,10 @@ uint32_t Opcode_Grp1(Thread_t* thread)
 
 uint32_t Opcode_Grp2(Thread_t* thread)
 {
-	uint8_t opcode = Thread_ReadImm8(thread);
-	printf("[Thread %d]: %sGrp2 Executing opcode Grp2.%s (0x%.2X / %d)\n", thread->threadId, TLevel[thread->level], OpcodesGrp2Mnemonics[opcode], opcode, opcode);
+	uint8_t opcode = Thread_ReadCode8(thread);
+	thread->inBasicOpcode = 0;
+	thread->opcode = (thread->opcode << 8) | opcode;
+	printf("[Thread %d]: %sGrp2 Executing opcode Grp2.%s (0x%.2X / %d) (%d)\n", thread->threadId, TLevel[thread->level], OpcodesGrp2Mnemonics[opcode], opcode, opcode, GoldenLog[GoldenLogIndex].time);
 	thread->level++;
 	if(OpcodesGrp2[opcode] == NULL)
 	{
@@ -732,8 +743,10 @@ uint32_t Opcode_Grp2(Thread_t* thread)
 
 uint32_t Opcode_Snd0(Thread_t* thread)
 {
-	uint8_t opcode = Thread_ReadImm8(thread);
-	printf("[Thread %d]: %sSnd0 Executing opcode Snd0.%s (0x%.2X / %d)\n", thread->threadId, TLevel[thread->level], OpcodesSnd0Mnemonics[opcode], opcode, opcode);
+	uint8_t opcode = Thread_ReadCode8(thread);
+	thread->inBasicOpcode = 0;
+	thread->opcode = (thread->opcode << 8) | opcode;
+	printf("[Thread %d]: %sSnd0 Executing opcode Snd0.%s (0x%.2X / %d) (%d)\n", thread->threadId, TLevel[thread->level], OpcodesSnd0Mnemonics[opcode], opcode, opcode, GoldenLog[GoldenLogIndex].time);
 	thread->level++;
 	if(OpcodesSnd0[opcode] == NULL)
 	{
@@ -748,8 +761,10 @@ uint32_t Opcode_Snd0(Thread_t* thread)
 
 uint32_t Opcode_Ext0(Thread_t* thread)
 {
-	uint8_t opcode = Thread_ReadImm8(thread);
-	printf("[Thread %d]: %sExt0 Executing opcode Ext0.%s (0x%.2X / %d)\n", thread->threadId, TLevel[thread->level], OpcodesExt0Mnemonics[opcode], opcode, opcode);
+	uint8_t opcode = Thread_ReadCode8(thread);
+	thread->inBasicOpcode = 0;
+	thread->opcode = (thread->opcode << 8) | opcode;
+	printf("[Thread %d]: %sExt0 Executing opcode Ext0.%s (0x%.2X / %d) (%d)\n", thread->threadId, TLevel[thread->level], OpcodesExt0Mnemonics[opcode], opcode, opcode, GoldenLog[GoldenLogIndex].time);
 	thread->level++;
 	if(OpcodesExt0[opcode] == NULL)
 	{
@@ -764,8 +779,10 @@ uint32_t Opcode_Ext0(Thread_t* thread)
 
 uint32_t Opcode_Ext1(Thread_t* thread)
 {
-	uint8_t opcode = Thread_ReadImm8(thread);
-	printf("[Thread %d]: %sExt1 Executing opcode Ext1.%s (0x%.2X / %d)\n", thread->threadId, TLevel[thread->level], OpcodesExt1Mnemonics[opcode], opcode, opcode);
+	uint8_t opcode = Thread_ReadCode8(thread);
+	thread->inBasicOpcode = 0;
+	thread->opcode = (thread->opcode << 8) | opcode;
+	printf("[Thread %d]: %sExt1 Executing opcode Ext1.%s (0x%.2X / %d) (%d)\n", thread->threadId, TLevel[thread->level], OpcodesExt1Mnemonics[opcode], opcode, opcode, GoldenLog[GoldenLogIndex].time);
 	thread->level++;
 	if(OpcodesExt1[opcode] == NULL)
 	{
@@ -783,7 +800,7 @@ uint32_t Opcode_BaseOffset(Thread_t* thread)
 	uint16_t offset = Thread_ReadCode16(thread);
 	uint32_t base = Thread_GetBasePointer(thread);
 	uint32_t relativeOffset = base - offset;
-	uint32_t taggedValue    = relativeOffset | 0x12000000;
+	uint32_t taggedValue    = relativeOffset | 0x10000000;
 	Thread_PushStack(thread, taggedValue);
 	return 0;
 }
@@ -814,19 +831,23 @@ uint32_t Opcode_ReadMem(Thread_t* thread)
 	uint8_t* ptr = Thread_PopAndResolveAddress(thread);
 	uint8_t size = Thread_ReadCode8(thread);
 	uint32_t value = 0;
+
 	switch(size)
 	{
 		case 0:
-			value = *(uint8_t*)ptr;
-			printf("[Thread %d]: %sRead 0x%.2X from memory\n", thread->threadId, TLevel[thread->level], value);
+			value = *(int8_t*)ptr;
+			if(!thread->silenceBasicOpcodeLog)
+				printf("[Thread %d]: %sRead 0x%.2X from memory\n", thread->threadId, TLevel[thread->level], value);
 			break;
 		case 1:
-			value = *(uint16_t*)ptr;
-			printf("[Thread %d]: %sRead 0x%.4X from memory\n", thread->threadId, TLevel[thread->level], value);
+			value = *(int16_t*)ptr;
+			if(!thread->silenceBasicOpcodeLog)
+				printf("[Thread %d]: %sRead 0x%.4X from memory\n", thread->threadId, TLevel[thread->level], value);
 			break;
 		case 2:
 			value = *(uint32_t*)ptr;
-			printf("[Thread %d]: %sRead 0x%.8X from memory\n", thread->threadId, TLevel[thread->level], value);
+			if(!thread->silenceBasicOpcodeLog)
+				printf("[Thread %d]: %sRead 0x%.8X from memory\n", thread->threadId, TLevel[thread->level], value);
 			break;
 		default:
 			printf("[Thread %d]: %sInvalid size %d of value 0x%.8X when reading from memory\n", thread->threadId, TLevel[thread->level], size, value);
@@ -937,7 +958,7 @@ uint32_t Opcode_Leq(Thread_t* thread)
 {
 	int32_t right = Thread_PopStack(thread);
 	int32_t left = Thread_PopStack(thread);
-	Thread_PushStack(thread, left <= right);
+	Thread_PushStack(thread, left >= right);
 	return 0;
 }
 
@@ -953,7 +974,7 @@ uint32_t Opcode_Ge(Thread_t* thread)
 {
 	int32_t right = Thread_PopStack(thread);
 	int32_t left = Thread_PopStack(thread);
-	Thread_PushStack(thread, left > right);
+	Thread_PushStack(thread, left < right);
 	return 0;
 }
 
@@ -961,7 +982,7 @@ uint32_t Opcode_Le(Thread_t* thread)
 {
 	int32_t right = Thread_PopStack(thread);
 	int32_t left = Thread_PopStack(thread);
-	Thread_PushStack(thread, left < right);
+	Thread_PushStack(thread, left > right);
 	return 0;
 }
 
@@ -1035,5 +1056,61 @@ uint32_t Opcode_Memcpy(Thread_t* thread)
 uint32_t Opcode_IsZero(Thread_t* thread)
 {
 	Thread_PushStack(thread, Thread_PopStack(thread) == 0);
+	return 0;
+}
+
+uint32_t Opcode_DoubleNotZero(Thread_t* thread)
+{
+	// Push 1 if *both* values are non-zero
+	uint32_t value1 = Thread_PopStack(thread);
+	uint32_t value2 = Thread_PopStack(thread);
+	Thread_PushStack(thread, value1 != 0 && value2 != 0);
+	return 0;
+}
+
+uint32_t Opcode_DoubleAnyNotZero(Thread_t* thread)
+{
+	// Push 1 if *either or both* values are non-zero
+	uint32_t value1 = Thread_PopStack(thread);
+	uint32_t value2 = Thread_PopStack(thread);
+	Thread_PushStack(thread, value1 != 0 || value2 != 0);
+	return 0;
+}
+
+uint32_t Opcode_Memclr(Thread_t* thread)
+{
+	uint32_t size = Thread_PopStack(thread);
+	uint8_t* src = Thread_PopAndResolveAddress(thread);
+	memset(src, 0, size);
+	return 0;
+}
+
+uint32_t Opcode_Strcpy(Thread_t* thread)
+{
+	uint8_t* src = Thread_PopAndResolveAddress(thread);
+	uint8_t* dst = Thread_PopAndResolveAddress(thread);
+	strcpy(dst, src);
+	return 0;
+}
+
+uint32_t Opcode_StrToLower(Thread_t* thread)
+{
+	uint8_t* src = Thread_PopAndResolveAddress(thread);
+	Str_StrToLowerCase(src);
+	return 0;
+}
+
+uint32_t Opcode_Strlen(Thread_t* thread)
+{
+	uint8_t* str = Thread_PopAndResolveAddress(thread);
+	Thread_PushStack(thread, strlen(str));
+	return 0;
+}
+
+uint32_t Opcode_Streq(Thread_t* thread)
+{
+	uint8_t* str1 = Thread_PopAndResolveAddress(thread);
+	uint8_t* str2 = Thread_PopAndResolveAddress(thread);
+	Thread_PushStack(thread, strcmp(str1, str2) == 0);
 	return 0;
 }

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 #include "engine.h"
 #include "opcodes.h"
 #include "opcodes_sys0.h"
@@ -22,7 +23,7 @@ char* OpcodesSys0Mnemonics[256] = {
 	/* 0x0C  12 */ "Unknown_12",
 	/* 0x0D  13 */ "Unknown_13",
 	/* 0x0E  14 */ "Unknown_14",
-	/* 0x0F  15 */ "Unknown_15",
+	/* 0x0F  15 */ "IsWindowActive",
 	/* 0x10  16 */ "Unknown_16",
 	/* 0x11  17 */ "Unknown_17",
 	/* 0x12  18 */ "Unknown_18",
@@ -55,10 +56,10 @@ char* OpcodesSys0Mnemonics[256] = {
 	/* 0x2D  45 */ "Unknown_45",
 	/* 0x2E  46 */ "--Unknown--",
 	/* 0x2F  47 */ "Unknown_47",
-	/* 0x30  48 */ "Unknown_48",
+	/* 0x30  48 */ "ReadFile",
 	/* 0x31  49 */ "Unknown_49",
 	/* 0x32  50 */ "Unknown_50",
-	/* 0x33  51 */ "Unknown_51",
+	/* 0x33  51 */ "DeleteFile",
 	/* 0x34  52 */ "FindFile",
 	/* 0x35  53 */ "Unknown_53",
 	/* 0x36  54 */ "EnableSearchPaths",
@@ -281,7 +282,7 @@ OpcodePtr_t OpcodesSys0[256] = {
 	/* 0x0C  12 */ Opcode_Sys0_Unknown_12,
 	/* 0x0D  13 */ Opcode_Sys0_Unknown_13,
 	/* 0x0E  14 */ Opcode_Sys0_Unknown_14,
-	/* 0x0F  15 */ Opcode_Sys0_Unknown_15,
+	/* 0x0F  15 */ Opcode_Sys0_IsWindowActive,
 	/* 0x10  16 */ Opcode_Sys0_Unknown_16,
 	/* 0x11  17 */ Opcode_Sys0_Unknown_17,
 	/* 0x12  18 */ Opcode_Sys0_Unknown_18,
@@ -314,10 +315,10 @@ OpcodePtr_t OpcodesSys0[256] = {
 	/* 0x2D  45 */ Opcode_Sys0_Unknown_45,
 	/* 0x2E  46 */ NULL,
 	/* 0x2F  47 */ Opcode_Sys0_Unknown_47,
-	/* 0x30  48 */ Opcode_Sys0_Unknown_48,
+	/* 0x30  48 */ Opcode_Sys0_ReadFile,
 	/* 0x31  49 */ Opcode_Sys0_Unknown_49,
 	/* 0x32  50 */ Opcode_Sys0_Unknown_50,
-	/* 0x33  51 */ Opcode_Sys0_Unknown_51,
+	/* 0x33  51 */ Opcode_Sys0_DeleteFile,
 	/* 0x34  52 */ Opcode_Sys0_FindFile,
 	/* 0x35  53 */ Opcode_Sys0_Unknown_53,
 	/* 0x36  54 */ Opcode_Sys0_EnableSearchPaths,
@@ -544,8 +545,9 @@ uint32_t Opcode_Sys0_Unknown_2(Thread_t* thread)
 
 uint32_t Opcode_Sys0_GetSysTime(Thread_t* thread)
 {
-	// Dummy
+	// Dummy data
 	uint32_t data = 0xDEADBEEF;
+
 	Thread_PushStack(thread, data);
 	return 0;
 }
@@ -580,9 +582,11 @@ uint32_t Opcode_Sys0_Unknown_14(Thread_t* thread)
 	return 0xFFFFFFFF;
 }
 
-uint32_t Opcode_Sys0_Unknown_15(Thread_t* thread)
+uint32_t Opcode_Sys0_IsWindowActive(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	// Should read from a global var; Fake it for now
+	Thread_PushStack(thread, 1);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_16(Thread_t* thread)
@@ -607,7 +611,9 @@ uint32_t Opcode_Sys0_Unknown_19(Thread_t* thread)
 
 uint32_t Opcode_Sys0_Unknown_20(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t data = Thread_PopStack(thread);
+	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_21(Thread_t* thread)
@@ -627,7 +633,9 @@ uint32_t Opcode_Sys0_Unknown_23(Thread_t* thread)
 
 uint32_t Opcode_Sys0_Unknown_24(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t data = Thread_PopStack(thread);
+	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_25(Thread_t* thread)
@@ -651,7 +659,10 @@ uint32_t Opcode_Sys0_Unknown_0x1B(Thread_t* thread)
 
 uint32_t Opcode_Sys0_Unknown_28(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t value1 = Thread_PopStack(thread);
+	Thread_PushStack(thread, 0);
+	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_29(Thread_t* thread)
@@ -666,12 +677,21 @@ uint32_t Opcode_Sys0_Unknown_30(Thread_t* thread)
 
 uint32_t Opcode_Sys0_Unknown_31(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t value1 = Thread_PopStack(thread);
+	uint32_t value2 = Thread_PopStack(thread);
+	uint32_t value3 = Thread_PopStack(thread);
+	uint32_t value4 = Thread_PopStack(thread);
+	uint32_t value5 = Thread_PopStack(thread);
+	uint32_t value6 = Thread_PopStack(thread);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_AllocAuxMem(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t size = Thread_PopStack(thread);
+	uint32_t res = Engine_AllocAuxMemory(thread->engine, size);
+	Thread_PushStack(thread, res);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_33(Thread_t* thread)
@@ -708,7 +728,7 @@ uint32_t Opcode_Sys0_Unknown_41(Thread_t* thread)
 uint32_t Opcode_Sys0_IsDirectory(Thread_t* thread)
 {
 	uint8_t* ptr = Thread_PopAndResolveAddress(thread);
-	Thread_PushStack(thread, 0);
+	Thread_PushStack(thread, 1);
 	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
 	return 0;
 }
@@ -728,9 +748,14 @@ uint32_t Opcode_Sys0_Unknown_47(Thread_t* thread)
 	return 0xFFFFFFFF;
 }
 
-uint32_t Opcode_Sys0_Unknown_48(Thread_t* thread)
+uint32_t Opcode_Sys0_ReadFile(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint8_t* filename = Thread_PopAndResolveAddress(thread);
+	uint8_t* archive = Thread_PopAndResolveAddress(thread);
+	uint8_t* buffer = Thread_PopAndResolveAddress(thread);
+	uint32_t size = Engine_ReadFileToMemory(thread->engine, archive, filename, buffer);
+	Thread_PushStack(thread, size);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_49(Thread_t* thread)
@@ -755,18 +780,30 @@ uint32_t Opcode_Sys0_Unknown_50(Thread_t* thread)
 	return 0xFFFFFFFF;
 }
 
-uint32_t Opcode_Sys0_Unknown_51(Thread_t* thread)
+uint32_t Opcode_Sys0_DeleteFile(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint8_t* ptr1 = Thread_PopAndResolveAddress(thread);
+	uint8_t* ptr2 = Thread_PopAndResolveAddress(thread);
+	printf("[Thread %d]: %sDeleting file (\"%s\", \"%s\")\n", thread->threadId, TLevel[thread->level], ptr1, ptr2);
+	Thread_PushStack(thread, 0);
+	return 0;
 }
-
 
 uint32_t Opcode_Sys0_FindFile(Thread_t* thread)
 {
 	uint8_t* ptr1 = Thread_PopAndResolveAddress(thread);
 	uint8_t* ptr2 = Thread_PopAndResolveAddress(thread);
-	printf("[Thread %d]: %s(\"%s\", \"%s\")\n", thread->threadId, TLevel[thread->level], ptr1, ptr2);
-	Thread_PushStack(thread, 0xDEADBEEF);
+	printf("[Thread %d]: %sFinding file (\"%s\", \"%s\")\n", thread->threadId, TLevel[thread->level], ptr1, ptr2);
+	if(strcmp(ptr1, "fordebuggers.dbg") == 0)
+		Thread_PushStack(thread, 0);
+	else if(strcmp(ptr1, "debug.inf") == 0)
+		Thread_PushStack(thread, 1);
+	else if(strcmp(ptr1, "font") == 0)
+		Thread_PushStack(thread, 1);
+	else if(strcmp(ptr1, "UserData\\NurseryRhyme") >= 0)
+		Thread_PushStack(thread, 0);
+	else
+		Thread_PushStack(thread, 1);
 	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
 	return 0;
 }
@@ -814,9 +851,12 @@ uint32_t Opcode_Sys0_Unknown_60(Thread_t* thread)
 
 uint32_t Opcode_Sys0_Unknown_0x3D(Thread_t* thread)
 {
+	// Get current working directory is value = 0, otherwise get maybeNextWorkingDir if value = 1
 	uint32_t value1 = Thread_PopStack(thread);
 	uint8_t* ptr = Thread_PopAndResolveAddress(thread);
-	Thread_PushStack(thread, 0);
+	strcpy(ptr, "./");
+	printf("[Thread %d]: %sRead: %s\n", thread->threadId, TLevel[thread->level], ptr);
+	Thread_PushStack(thread, 1);
 	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
 	return 0;
 }
@@ -838,7 +878,8 @@ uint32_t Opcode_Sys0_LoadProgram(Thread_t* thread)
 	uint8_t* archive = Thread_PopAndResolveAddress(thread);
 	printf("[Thread %d]: %sAttempting to load program [%s : %s]\n", thread->threadId, TLevel[thread->level], archive, filename);
 
-	uint8_t* code = Engine_ReadFile(gEngine, archive, filename);
+	size_t fileSize;
+	uint8_t* code = Engine_ReadFile(gEngine, archive, filename, &fileSize);
 	if(code == NULL)
 		return 1;
 	uint32_t location = Thread_LoadCode(thread, code, filename);
@@ -894,7 +935,10 @@ uint32_t Opcode_Sys0_Unknown_72(Thread_t* thread)
 
 uint32_t Opcode_Sys0_Unknown_73(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint8_t* ptr = Thread_PopAndResolveAddress(thread);
+	// Writes a uint32 to ptr from an unknown list in the thread, possibly a message queue being popped
+	Thread_PushStack(thread, 0);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_74(Thread_t* thread)
@@ -932,12 +976,20 @@ uint32_t Opcode_Sys0_SetTimer(Thread_t* thread)
 
 uint32_t Opcode_Sys0_Unknown_89(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t value1 = Thread_PopStack(thread);
+	if(thread->ticks == 19946 || thread->ticks == 1192)
+		Thread_PushStack(thread, 1);
+	else
+		Thread_PushStack(thread, 0); // 0 @ 24926, 1 @ 24686, 24746, 24806, 24866
+	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
+	return 2;
 }
 
 uint32_t Opcode_Sys0_Unknown_90(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	Thread_PushStack(thread, 0);
+	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
+	return 2;
 }
 
 uint32_t Opcode_Sys0_Unknown_92(Thread_t* thread)
@@ -945,6 +997,8 @@ uint32_t Opcode_Sys0_Unknown_92(Thread_t* thread)
 	uint32_t value1 = Thread_PopStack(thread);
 	uint32_t value2 = Thread_PopStack(thread);
 	uint32_t value3 = Thread_PopStack(thread);
+	//Thread_PushStack(thread, 0); // This push happens *after* execution! Find out where it happens!
+	Thread_SchedulePush(thread, 0);
 	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
 	return 2;
 }
@@ -956,12 +1010,14 @@ uint32_t Opcode_Sys0_Unknown_93(Thread_t* thread)
 
 uint32_t Opcode_Sys0_SwitchToThread(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t threadId = Thread_PopStack(thread);
+	thread->engine->nextThreadRequest = threadId;
+	return 3;
 }
 
 uint32_t Opcode_Sys0_Yield(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	return 1;
 }
 
 
@@ -1057,7 +1113,7 @@ uint32_t Opcode_Sys0_Unknown_111(Thread_t* thread)
 uint32_t Opcode_Sys0_InitGlobalMem(Thread_t* thread)
 {
 	uint32_t level = Thread_PopStack(thread);
-	uint32_t res = InitGlobalMemory(level);
+	uint32_t res = Engine_InitGlobalMemory(thread->engine, level);
 	Thread_PushStack(thread, res);
 	return 0;
 }
@@ -1100,7 +1156,7 @@ uint32_t Opcode_Sys0_LoadGlobalDatabase(Thread_t* thread)
 {
 	// It normally loads the database, but pushes 1 if it's not found, or 2 if it's corrupt
 	// We'll pretend it doesn't exist
-	Thread_PushStack(thread, 1);
+	Thread_PushStack(thread, 0);
 	printf("[Thread %d]: %sWarning: dummy opcode: Pretending global database file doesn't exist\n", thread->threadId, TLevel[thread->level]);
 	return 0;
 }
@@ -1132,7 +1188,11 @@ uint32_t Opcode_Sys0_Unknown_133(Thread_t* thread)
 
 uint32_t Opcode_Sys0_Unknown_136(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t data = Thread_PopStack(thread);
+	uint8_t* ptr2 = Thread_PopAndResolveAddress(thread);
+	//printf("[Thread %d]: %sDeleting file (\"%s\", \"%s\")\n", thread->threadId, TLevel[thread->level], ptr1, ptr2);
+	Thread_PushStack(thread, 1);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_137(Thread_t* thread)
@@ -1142,17 +1202,30 @@ uint32_t Opcode_Sys0_Unknown_137(Thread_t* thread)
 
 uint32_t Opcode_Sys0_Unknown_138(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t consecutiveFlag = Thread_PopStack(thread);
+	uint32_t unknown = Thread_PopStack(thread);
+	uint32_t flagNumber = Thread_PopStack(thread);
+	uint8_t* groupName = Thread_PopAndResolveAddress(thread);
+	printf("[Thread %d]: %sChecking flag %d from group %s\n", thread->threadId, TLevel[thread->level], flagNumber, groupName);
+	Thread_PushStack(thread, 0);
+	//*ptr2 = 0x80; // Where does this come from?
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_139(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t flagNumber = Thread_PopStack(thread);
+	uint8_t* groupName = Thread_PopAndResolveAddress(thread);
+	uint8_t* ptr2 = Thread_PopAndResolveAddress(thread);
+	printf("[Thread %d]: %sChecking flag %d from group %s\n", thread->threadId, TLevel[thread->level], flagNumber, groupName);
+	Thread_PushStack(thread, 0);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_144(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t data = Thread_PopStack(thread);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_145(Thread_t* thread)
@@ -1209,6 +1282,26 @@ uint32_t Opcode_Sys0_PopGlobalList(Thread_t* thread)
 {
 	uint32_t* ptr = (uint32_t*)Thread_PopAndResolveAddress(thread);
 	uint32_t res = Engine_PopGlobalList(ptr);
+
+	if(thread->ticks == 27982)
+	{
+		*ptr = 0x00000002; ptr++;
+		*ptr = 0x00000000; ptr++;
+		*ptr = 0x00000000; ptr++;
+	}
+	else if(thread->ticks == 28053)
+	{
+		*ptr = 0x00000000; ptr++;
+		*ptr = 0x00004000; ptr++;
+		*ptr = 0x00000000; ptr++;
+	}
+	else
+	{
+		*ptr = 0x00000003; ptr++;
+		*ptr = 0x00000001; ptr++;
+		*ptr = 0x00000000; ptr++;
+	}
+
 	Thread_PushStack(thread, res);
 	return 0;
 }
@@ -1283,7 +1376,11 @@ uint32_t Opcode_Sys0_Unknown_197(Thread_t* thread)
 
 uint32_t Opcode_Sys0_Unknown_208(Thread_t* thread)
 {
-	return 0xFFFFFFFF;
+	uint32_t data = Thread_PopStack(thread);
+	uint8_t* ptr = Thread_PopAndResolveAddress(thread);
+	Thread_PushStack(thread, 0);
+	printf("[Thread %d]: %sWarning: dummy opcode\n", thread->threadId, TLevel[thread->level]);
+	return 0;
 }
 
 uint32_t Opcode_Sys0_Unknown_209(Thread_t* thread)

@@ -2,7 +2,34 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
+#include <ctype.h>
+#include <time.h>
 #include "engine.h"
+#include "renderer.h"
+#include "golden_log.h"
+#include "os.h"
+
+void Engine_Init(Engine_t* engine)
+{
+	engine->threadCounter = 2;
+	engine->programCounter = 0;
+	engine->threads = NULL;
+	engine->programs = NULL;
+	engine->memory = NULL;
+	for(int i = 0; i < 48; i++)
+		engine->auxMemory[i] = NULL;
+	engine->globalBufferSize = 0;
+	engine->globalMem = NULL;
+	engine->windowObjectHandle = 0xC0000000;
+	engine->filterObjectHandle = 0x90000000;
+	engine->spriteObjectHandle = 0x80000000;
+	engine->knobObjectHandle = 0xE0000000;
+	engine->nextThreadRequest = 0;
+	engine->renderer = Renderer_Init(engine);
+	engine->window = NULL;
+	printf("[Engine]: Engine initialised\n");
+}
 
 Thread_t* Engine_CreateThread(Engine_t* engine, uint32_t stackSize, uint32_t codeSize, uint32_t memorySize)
 {
@@ -19,7 +46,7 @@ Thread_t* Engine_CreateThread(Engine_t* engine, uint32_t stackSize, uint32_t cod
 	thread->basePointer = 0;
 	thread->stackSize = stackSize;
 	thread->stackMemoryConfig.isAllocated = 1;
-	thread->stackMemoryConfig.mem = (uint8_t*)malloc(stackSize);
+	thread->stackMemoryConfig.mem = (uint8_t*)malloc(stackSize * sizeof(uint32_t));
 	thread->stackMemoryConfig.size = stackSize;
 	thread->stack = (uint32_t*)thread->stackMemoryConfig.mem;
 	thread->codeSize = codeSize;
@@ -38,33 +65,162 @@ Thread_t* Engine_CreateThread(Engine_t* engine, uint32_t stackSize, uint32_t cod
 
 	thread->level = 0;
 	thread->running = 0;
+	thread->ticks = 0;
+	thread->error = 0;
+	thread->engine = engine;
+	thread->opcode = 0;
+	thread->waitTicks = 0;
+	thread->queuePush = 0;
+
+	thread->silenceBasicOpcodeLog = 1;
+	thread->silenceYield = 1;
 
 	printf("[Engine]: Created thread %d (stack: 0x%.8X, code: 0x%.8X, memory: 0x%.8X)\n", thread->threadId, thread->stackSize, thread->codeSize, thread->localMemSize);
 
 	return thread;
 }
 
-uint8_t* Engine_ReadFile(Engine_t* engine, const char* archive, const char* filename)
+char* Engine_SearchForArchive(const char* archive)
 {
-	printf("[Engine]: Attempting to read file \"%s\" from archive \"%s\"\n", filename, archive);
+	char arcName[256];
+	strcpy(arcName, archive);
+	for(int i = 0; arcName[i] != '\0'; i++)
+		arcName[i] = tolower(arcName[i]);
 	char path[256];
-	int cx = snprintf(path, 256, "%s/%s", archive, filename);
-	if(cx < 0 || cx > 256)
+    DIR *dir;
+    struct dirent *entry;
+
+    dir = opendir(".");
+    if(dir == NULL)
+    {
+        perror("[Engine]");
+        return NULL;
+    }
+
+    int found = 0;
+    while((entry = readdir(dir)) != NULL)
+    {
+        char* name = entry->d_name;
+        int i;
+		for(i = 0; name[i] != '\0'; i++)
+			path[i] = tolower(name[i]);
+		path[i] = 0;
+		if(strcmp(path, arcName) == 0)
+		{
+			strcpy(path, name);
+			found = 1;
+			break;
+		}
+		int pi = i;
+		path[i++] = '.';
+		path[i++] = 'a';
+		path[i++] = 'r';
+		path[i++] = 'c';
+		path[i++] = 0;
+		if(strcmp(path, arcName) == 0)
+		{
+			path[pi] = 0;
+			strcpy(path, name);
+			found = 1;
+			break;
+		}
+    }
+    closedir(dir);
+    if(found)
+    {
+    	char* pathname = (char*)malloc(strlen(path) + 1);
+    	strcpy(pathname, path);
+    	return pathname;
+    }
+    return NULL;
+}
+
+char* Engine_SearchForFile(const char* archive, const char* filename)
+{
+	char* arcPath = Engine_SearchForArchive(archive);
+	if(arcPath == NULL)
+		return NULL;
+
+    DIR *dir;
+    struct dirent *entry;
+
+    dir = opendir(arcPath);
+    if(dir == NULL)
+    {
+        perror("[Engine]");
+        free(arcPath);
+        return NULL;
+    }
+
+    char fileName[256];
+	strcpy(fileName, filename);
+	for(int i = 0; fileName[i] != '\0'; i++)
+		fileName[i] = tolower(fileName[i]);
+
+	char path[256];
+	int found = 0;
+    while((entry = readdir(dir)) != NULL)
+    {
+        char* name = entry->d_name;
+        int i;
+		for(i = 0; name[i] != '\0'; i++)
+			path[i] = tolower(name[i]);
+		path[i] = 0;
+
+		if(strcmp(path, fileName) == 0)
+		{
+			strcpy(path, name);
+			found = 1;
+			break;
+		}
+    }
+    closedir(dir);
+    if(found)
+    {
+		char fullpath[256];
+		int cx = snprintf(fullpath, 256, "%s/%s", arcPath, path);
+		free(arcPath);
+		if(cx < 0 || cx > 256)
+		{
+			// TODO: Error
+			return NULL;
+		}
+
+		char* finalpath = (char*)malloc(strlen(fullpath) + 1);
+		strcpy(finalpath, fullpath);
+		return finalpath;
+	}
+	else
 	{
-		// TODO: Error
+		free(arcPath);
 		return NULL;
 	}
+}
+
+uint8_t* Engine_ReadFile(Engine_t* engine, const char* archive, const char* filename, size_t* outSize)
+{
+	printf("[Engine]: Attempting to read file \"%s\" from archive \"%s\"\n", filename, archive);
+	char* path = Engine_SearchForFile(archive, filename);
+	if(!path)
+	{
+		printf("[Engine]: Failed to find file \"%s\" from archive \"%s\"\n", filename, archive);
+		return 0;
+	}
+	printf("[Engine]: Found file at \"%s\"\n", path);
+
 	FILE* f = fopen(path, "rb");
 	if(f == NULL)
 	{
 		// TODO: Error
 		perror("Error");
+		free(path);
 		return NULL;
 	}
 	if(fseek(f, 0, SEEK_END) != 0)
 	{
 		// TODO: Error
 		perror("Error");
+		free(path);
 		fclose(f);
 		return NULL;
 	}
@@ -73,6 +229,7 @@ uint8_t* Engine_ReadFile(Engine_t* engine, const char* archive, const char* file
 	{
 		// TODO: Error
 		perror("Error");
+		free(path);
 		fclose(f);
 		return NULL;
 	}
@@ -81,6 +238,7 @@ uint8_t* Engine_ReadFile(Engine_t* engine, const char* archive, const char* file
 	{
 		// TODO: Error
 		fclose(f);
+		free(path);
 		return NULL;
 	}
 	if(fread(file, 1, size, f) != size)
@@ -88,11 +246,15 @@ uint8_t* Engine_ReadFile(Engine_t* engine, const char* archive, const char* file
 		// TODO: Error
 		perror("Error");
 		free(file);
+		free(path);
 		fclose(f);
 		return NULL;
 	}
 	fclose(f);
 	printf("[Engine]: Read file \"%s\"\n", path);
+	free(path);
+	if(outSize != NULL)
+		*outSize = size;
 	return file;
 }
 
@@ -100,13 +262,65 @@ uint32_t Engine_LoadProgram(Engine_t* engine, const char* archive, const char* f
 {
 	printf("[Engine]: Loading program \"%s\" from archive \"%s\"\n", filename, archive);
 	Thread_t* thread = Engine_CreateThread(engine, stackSize, codeSize, memorySize);
-	uint8_t* code = Engine_ReadFile(engine, archive, filename);
+	size_t fileSize;
+	uint8_t* code = Engine_ReadFile(engine, archive, filename, &fileSize);
 	if(code == NULL)
 		return 1;
 	Thread_LoadCode(thread, code, filename);
 	free(code);
 
 	return thread->threadId;
+}
+
+uint32_t Engine_ReadFileToMemory(Engine_t* engine, const char* archive, const char* filename, uint8_t* buffer)
+{
+	printf("[Engine]: Attempting to read file \"%s\" from archive \"%s\" into memory\n", filename, archive);
+	
+	char* path = Engine_SearchForFile(archive, filename);
+	if(!path)
+	{
+		printf("[Engine]: Failed to find file \"%s\" from archive \"%s\"\n", filename, archive);
+		return 0;
+	}
+	printf("[Engine]: Found file at \"%s\"\n", path);
+
+	FILE* f = fopen(path, "rb");
+	if(f == NULL)
+	{
+		// TODO: Error
+		free(path);
+		perror("[Engine]");
+		return 0;
+	}
+	if(fseek(f, 0, SEEK_END) != 0)
+	{
+		// TODO: Error
+		free(path);
+		perror("[Engine]");
+		fclose(f);
+		return 0;
+	}
+	size_t size = ftell(f);
+	if(fseek(f, 0, SEEK_SET) != 0)
+	{
+		// TODO: Error
+		free(path);
+		perror("[Engine]");
+		fclose(f);
+		return 0;
+	}
+	if(fread(buffer, 1, size, f) != size)
+	{
+		// TODO: Error
+		free(path);
+		perror("[Engine]");
+		fclose(f);
+		return 0;
+	}
+	fclose(f);
+	printf("[Engine]: Read file \"%s\" into memory\n", path);
+	free(path);
+	return size;
 }
 
 Thread_t* Engine_GetThreadById(Engine_t* engine, uint32_t threadId)
@@ -121,78 +335,144 @@ Thread_t* Engine_GetThreadById(Engine_t* engine, uint32_t threadId)
 	return NULL;
 }
 
-void Engine_ExecuteThread(Engine_t* engine, uint32_t threadId)
+void Engine_Sleep(int microseconds)
+{
+	struct timespec ts;
+    ts.tv_sec = microseconds / 1000000;
+    ts.tv_nsec = (microseconds % 1000000) * 1000;
+    nanosleep(&ts, NULL);
+}
+
+int totalTicks = 0;
+void Engine_Execute(Engine_t* engine)
+{
+	engine->isRunning = 1;
+
+	Thread_t* thread = engine->threads;
+	Thread_t* nextThread;
+	int lastSleep = 0;
+	while(engine->isRunning)
+	{
+		OS_Poll();
+
+		if(GoldenLogTotal)
+		{
+			if(lastSleep == 0)
+				lastSleep = GoldenLog[GoldenLogIndex].time;
+			else
+			{
+				int delta = GoldenLog[GoldenLogIndex].time - lastSleep;
+				if(delta > 20000)
+				{
+					Renderer_DrawScreen(engine->renderer);
+					lastSleep = GoldenLog[GoldenLogIndex].time;
+					Engine_Sleep(delta);
+				}
+			}
+		}
+
+		if(thread->waitTicks == 0)
+			Engine_ExecuteThread(engine, thread->threadId, 1);
+		else
+			thread->waitTicks--;
+		if(engine->nextThreadRequest)
+		{
+			nextThread = Engine_GetThreadById(engine, engine->nextThreadRequest);
+			engine->nextThreadRequest = 0;
+		}
+		else
+			nextThread = Engine_GetThreadById(engine, thread->threadId + 1);
+		if(nextThread == NULL)
+			nextThread = Engine_GetThreadById(engine, 2);
+		thread = nextThread;
+	}
+	printf("[Engine]: Engine stopped. Executed %d ticks...\n", totalTicks);
+}
+
+void Engine_ExecuteThread(Engine_t* engine, uint32_t threadId, int ticks)
 {
 	Thread_t* thread = Engine_GetThreadById(engine, threadId);
-	int runSteps = 3000;
+	int runSteps = ticks; //81944;
 	int steps = runSteps;
 	thread->running = 1;
-	printf("[Engine]: Running %d instructions...\n", steps);
+
+
+	//printf("[Engine]: Running %d instructions...\n", steps);
 	while(steps && thread->running)
 	{
+		// Delayed push from async execution
+		while(thread->queuePush)
+		{
+			thread->queuePush--;
+			Thread_PushStack(thread, thread->queuePushQueue[thread->queuePush]);
+		}
+
 		uint32_t res = Thread_Execute(thread);
 		if(res == 0xFFFFFFFF)
 		{
 			printf("[Engine]: Stub opcode encountered. Stopping.\n");
+			engine->isRunning = 0;
 			break;
 		}
-		if(res != 0)
+		if(res == 0xFFFFFFFE)
+		{
+			printf("[Engine]: Golden log mismatch encountered. Stopping.\n");
+			engine->isRunning = 0;
+			break;
+		}
+		if(res == 0xFFFFFFFD)
+		{
+			printf("[Engine]: Unknown opcode encountered. Stopping.\n");
+			engine->isRunning = 0;
+			break;
+		}
+		if(res == 0xFFFFFFFC)
+		{
+			printf("[Engine]: Error encountered. Stopping.\n");
+			engine->isRunning = 0;
+			break;
+		}
+		if(res != 0 && res != 1 && res != 2 && res != 3)
 		{
 			printf("[Engine]: Non-zero result from opcode. Stopping.\n");
+			engine->isRunning = 0;
+			break;
+		}
+		if(res == 2)
+		{
+			// Simulate async if we have golden log
+			if(GoldenLogTotal)
+			{
+				int idx = GoldenLogIndex;
+				int repeatThread = GoldenLog[GoldenLogIndex].thread;
+				int ticks = 0;
+				idx++;
+				while(idx < GoldenLogTotal)
+				{
+					if(GoldenLog[idx].type != LOG_TYPE_EXEC)
+					{
+						idx++;
+						continue;
+					}
+					int cThread = GoldenLog[idx].thread;
+					if(cThread == repeatThread)
+						ticks++;
+					if(cThread == threadId)
+						break;
+					idx++;
+				}
+				thread->waitTicks = ticks - 1;
+				printf("[Engine]: Sleeping thread for %d ticks.\n", ticks);
+			}
+		}
+		if(res == 1 || res == 3)
+		{
 			break;
 		}
 		steps--;
+		totalTicks++;
 	}
-	printf("[Engine]: Ran %d instructions; Exiting...\n", runSteps - steps);
-}
-
-void Engine_Free(Engine_t* engine)
-{
-	printf("[Engine]: Freeing memory\n");
-	Thread_t* thread = engine->threads;
-	while(thread)
-	{
-		Thread_t* nextThread = thread->previousThread;
-		if(thread->stackMemoryConfig.isAllocated)
-			free(thread->stackMemoryConfig.mem);
-		if(thread->codeMemoryConfig.isAllocated)
-			free(thread->codeMemoryConfig.mem);
-		if(thread->localMemConfig.isAllocated)
-			free(thread->localMemConfig.mem);
-		Program_t* program = thread->programs;
-		while(program)
-		{
-			Program_t* nextProgram = program->previousProgram;
-			free(program->filename);
-			free(program);
-			program = nextProgram;
-		}
-		free(thread);
-		thread = nextThread;
-	}
-	engine->threads = NULL;
-
-	if(gGlobalMem != NULL)
-		free(gGlobalMem);
-	gGlobalMem = NULL;
-
-	while(gSearchPaths)
-	{
-		SearchPathNode_t* next = gSearchPaths->next;
-		free(gSearchPaths->path);
-		free(gSearchPaths);
-		gSearchPaths = next;
-	}
-}
-
-void Engine_Init(Engine_t* engine)
-{
-	engine->threadCounter = 0;
-	engine->programCounter = 0;
-	engine->threads = NULL;
-	engine->programs = NULL;
-	engine->memory = NULL;
-	printf("[Engine]: Engine initialised\n");
+	//printf("[Engine]: Ran %d instructions; Yielding at tick %d...\n", runSteps - steps, thread->ticks);
 }
 
 uint32_t gUnknownVal001 = 0;
@@ -201,9 +481,7 @@ void SetGlobalUnknownVal001(uint32_t value)
 	gUnknownVal001 = value;
 }
 
-uint32_t gGlobalBufferSize = 0;
-uint8_t* gGlobalMem = NULL;
-int InitGlobalMemory(uint32_t level)
+int Engine_InitGlobalMemory(Engine_t* engine, uint32_t level)
 {
 	if(level < 0 || level >= 13)
 	{
@@ -213,22 +491,41 @@ int InitGlobalMemory(uint32_t level)
 
 	uint32_t bufferSize = 0x1000 << level; // 4096 * (1 << level)
 
-	gGlobalBufferSize = bufferSize;
+	engine->globalBufferSize = bufferSize;
 
-	if(gGlobalMem != NULL)
+	if(engine->globalMem != NULL)
 	{
 		printf("[Engine]: Freeing previous global memory\n");
-		free(gGlobalMem);
+		free(engine->globalMem);
 	}
 
-	gGlobalMem = (uint8_t*)calloc(bufferSize, sizeof(uint8_t));
+	engine->globalMem = (uint8_t*)calloc(bufferSize, sizeof(uint8_t));
 
 	printf("[Engine]: Initialised global memory with size 0x%.8X\n", bufferSize);
 
 	return 1;
 }
 
-uint8_t* Engine_GetAuxMemory(uint8_t slot)
+uint32_t Engine_AllocAuxMemory(Engine_t* engine, uint32_t size)
+{
+	if(size > 0x2000000)
+	{
+		printf("[Engine]: Attempting to allocate too much aux memory\n");
+		engine->isRunning = 0;
+		return 0;
+	}
+	for(int i = 0; i < 48; i++)
+	{
+		if(engine->auxMemory[i] != NULL)
+			continue;
+		engine->auxMemory[i] = (uint8_t*)malloc(size);
+		printf("[Engine]: Initialised aux memory in slot %d with size 0x%.8X\n", i, size);
+		return (i + 32) * 0x2000000;
+	}
+	return 0;
+}
+
+uint8_t* Engine_GetAuxMemory(Engine_t* engine, uint8_t slot)
 {
 	if(slot >= 48)
 		return NULL;
@@ -374,13 +671,14 @@ ListNode_t  gLinkedListSentinel = {
 };
 void Engine_PushGlobalList(uint32_t value1, uint32_t value2, uint32_t value3)
 {
-	ListNode_t* node = (ListNode_t*)malloc(sizeof(ListNode_t));
-	node->data1 = value1;
-	node->data2 = value2;
-	node->data3 = value3;
-	node->next = NULL;
-	gLinkedListTailNext->next = node;
-	gLinkedListTailNext = node;
+	//ListNode_t* node = (ListNode_t*)malloc(sizeof(ListNode_t));
+	//node->data1 = value1;
+	//node->data2 = value2;
+	//node->data3 = value3;
+	//node->next = NULL;
+	//if(gLinkedListTailNext)
+	//	gLinkedListTailNext->next = node;
+	//gLinkedListTailNext = node;
 
 }
 int Engine_PopGlobalList(uint32_t* output)
@@ -463,4 +761,80 @@ int Engine_PlaySound(char* path)
 	printf("Play sound: %s\n", path);
 	//return PlaySoundA(path, gHinstance, SND_ASYNC | SND_NODEFAULT | SND_NOWAIT | SND_FILENAME)
 	return 1;
+}
+
+bool Str_IsDoubleByteSJIS(char c)
+{
+	if((c < 0x80 || c > 0x9F) && c < 0xE0)
+		return false;
+	return true;
+}
+
+void Str_StrToLowerCase(char* ptr)
+{
+	char c = *ptr;
+	while(c)
+	{
+		if(Str_IsDoubleByteSJIS(c))
+			ptr++;
+		else
+		{
+			if(c >= 'A' && c <= 'Z')
+				*ptr |= 0x20;
+		}
+		ptr++;
+		c = *ptr;
+	}
+}
+
+void Engine_Free(Engine_t* engine)
+{
+	printf("[Engine]: Freeing memory\n");
+	Thread_t* thread = engine->threads;
+	while(thread)
+	{
+		Thread_t* nextThread = thread->previousThread;
+		if(thread->stackMemoryConfig.isAllocated)
+			free(thread->stackMemoryConfig.mem);
+		if(thread->codeMemoryConfig.isAllocated)
+			free(thread->codeMemoryConfig.mem);
+		if(thread->localMemConfig.isAllocated)
+			free(thread->localMemConfig.mem);
+		Program_t* program = thread->programs;
+		while(program)
+		{
+			Program_t* nextProgram = program->previousProgram;
+			free(program->filename);
+			free(program);
+			program = nextProgram;
+		}
+		free(thread);
+		thread = nextThread;
+	}
+	engine->threads = NULL;
+
+	if(engine->globalMem != NULL)
+	{
+		free(engine->globalMem);
+		engine->globalMem = NULL;
+	}
+
+	for(int i = 0; i < 48; i++)
+	{
+		if(engine->auxMemory[i])
+		{
+			free(engine->auxMemory[i]);
+			engine->auxMemory[i] = NULL;
+		}
+	}
+
+	Renderer_Free(engine->renderer);
+
+	while(gSearchPaths)
+	{
+		SearchPathNode_t* next = gSearchPaths->next;
+		free(gSearchPaths->path);
+		free(gSearchPaths);
+		gSearchPaths = next;
+	}
 }

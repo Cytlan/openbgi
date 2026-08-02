@@ -2,8 +2,11 @@
 #define ENGINE_H_
 
 #include <stdint.h>
+#include <stdbool.h>
+#include <SDL2/SDL.h>
 #include "thread.h"
 
+typedef struct Renderer Renderer_t;
 typedef struct Engine Engine_t;
 struct Engine
 {
@@ -12,14 +15,30 @@ struct Engine
 	Thread_t* threads;
 	Program_t* programs;
 	Memory_t* memory;
+    uint8_t* auxMemory[48];
+    uint32_t globalBufferSize;
+    uint8_t* globalMem;
+    int isRunning;
+
+    uint32_t windowObjectHandle;
+    uint32_t filterObjectHandle;
+    uint32_t spriteObjectHandle;
+    uint32_t knobObjectHandle;
+
+    uint32_t nextThreadRequest;
+
+    Renderer_t* renderer;
+    SDL_Window* window;
 };
 
 extern Engine_t* gEngine;
 
 uint32_t Engine_LoadProgram(Engine_t* engine, const char* archive, const char* filename, uint32_t stackSize, uint32_t codeSize, uint32_t memorySize);
 Thread_t* Engine_CreateThread(Engine_t* engine, uint32_t stackSize, uint32_t codeSize, uint32_t memorySize);
-uint8_t* Engine_ReadFile(Engine_t* engine, const char* archive, const char* filename);
-void Engine_ExecuteThread(Engine_t* engine, uint32_t threadId);
+uint8_t* Engine_ReadFile(Engine_t* engine, const char* archive, const char* filename, size_t* outSize);
+uint32_t Engine_ReadFileToMemory(Engine_t* engine, const char* archive, const char* filename, uint8_t* buffer);
+void Engine_Execute(Engine_t* engine);
+void Engine_ExecuteThread(Engine_t* engine, uint32_t threadId, int ticks);
 Thread_t* Engine_GetThreadById(Engine_t* engine, uint32_t threadId);
 void Engine_Free(Engine_t* engine);
 void Engine_Init(Engine_t* engine);
@@ -27,11 +46,10 @@ void Engine_Init(Engine_t* engine);
 extern uint32_t gUnknownVal001;
 void SetGlobalUnknownVal001(uint32_t value);
 
-extern uint32_t gGlobalBufferSize;
-extern uint8_t* gGlobalMem;
-int InitGlobalMemory(uint32_t level);
+int Engine_InitGlobalMemory(Engine_t* engine, uint32_t level);
 
-uint8_t* Engine_GetAuxMemory(uint8_t slot);
+uint32_t Engine_AllocAuxMemory(Engine_t* engine, uint32_t size);
+uint8_t* Engine_GetAuxMemory(Engine_t* engine, uint8_t slot);
 
 extern uint32_t gFrameTimeMs;
 extern uint32_t gFrameTimer;
@@ -105,5 +123,8 @@ uint32_t Engine_AddThreadToList(Thread_t* thread);
 Thread_t* Engine_GetThreadFromListById(uint32_t threadId);
 
 int Engine_PlaySound(char* path);
+
+bool Str_IsDoubleByteSJIS(char c);
+void Str_StrToLowerCase(char* ptr);
 
 #endif

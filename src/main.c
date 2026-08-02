@@ -6,15 +6,13 @@
 #include "thread.h"
 #include "engine.h"
 #include "platform_detection.h"
-#include "build_number.h"
-
-#define VERSION_MAJOR 0
-#define VERSION_MINOR 0
-#define VERSION_PATCH 1
+#include "version.h"
+#include "golden_log.h"
+#include "os.h"
 
 void PrintVersion()
 {
-	printf("OpenBGI %d.%d.%d Build %.4X\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, BUILD_NUMBER);
+	printf("%s\n", VERSION_STRING);
 	printf("Built with %s version %d.%d.%d on %s (%s), %s, %s\n\n",
 		COMPILER_NAME,
 		COMPILER_VERSION_MAJOR,
@@ -33,13 +31,18 @@ int main()
 {
 	PrintVersion();
 
+
+	GoldenLog_Load("golden_log.log");
+
 	Engine_t engine;
 	gEngine = &engine;
 	Engine_Init(&engine);
+	OS_Init(&engine);
 
 	uint32_t mainThreadId = Engine_LoadProgram(gEngine, "system", "ipl._bp", 0x1000, 0x20000, 0x20000);
 
-	Engine_ExecuteThread(gEngine, mainThreadId);
+	//Engine_ExecuteThread(gEngine, mainThreadId);
+	Engine_Execute(gEngine);
 
 /*
 	int runSteps = 2000;
@@ -55,7 +58,9 @@ int main()
 	printf("[Engine]: Ran %d instructions; Exiting...\n", runSteps - steps);
 */
 
+	OS_Quit();
 	Engine_Free(&engine);
+
 
 	printf("\nThanks for playing!\n\n");
 }
