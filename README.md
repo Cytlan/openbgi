@@ -66,7 +66,7 @@ The BGI VM consists of two parts:
 
 Basic opcodes mainly deal with routine logic, with the multi-byte opcodes deal with system calls, graphics, sound and custom logic.
 
-The BGI engine exclusively executes `Buriko Program`s (Compiled `._bp` files.)
+The BGI engine exclusively executes `Buriko Programs` (Compiled `._bp` files.)
 
 `Scenario scripts` (what defines the actual story, choices, scenes, and text) are compiled scripts. These scripts are in turn interpreted and executed by the BGI VM (VM in a VM kind of situation.)
 
