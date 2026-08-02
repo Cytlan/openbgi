@@ -53,6 +53,25 @@ cd /path/to/the/game
 
 The engine expect *all* game resources to have been extracted from the game using the `unarc` tool in the `tools` directory. In due time we will support loading directly from unmodified game assets, but for now it helps development to have assets extracted.
 
+Ethornell / Buriko General Interpreter
+--------------------------------------
+
+"Ethornell / Buriko General Interpreter" is most commonly referred to as "BGI".
+
+BGI consists of a stack-based Virtual Machine (VM) plus subsystems for drawing graphics, synthesising graphical effects, playing sound, and reading/writing files.
+
+The BGI VM consists of two parts:
+* Basic opcodes
+* Multi-byte extended opcodes
+
+Basic opcodes mainly deal with routine logic, with the multi-byte opcodes deal with system calls, graphics, sound and custom logic.
+
+The BGI engine exclusively executes `Buriko Program`s (Compiled `._bp` files.)
+
+`Scenario scripts` (what defines the actual story, choices, scenes, and text) are compiled scripts. These scripts are in turn interpreted and executed by the BGI VM (VM in a VM kind of situation.)
+
+OpenBGI aims to execute the lower-level VM execution. By doing thing, we get execution of Scenario scripts "for free", as the Scenario interpreter is defined in a Buriko Program.
+
 Contact
 -------
 
