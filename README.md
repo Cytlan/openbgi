@@ -40,7 +40,7 @@ Before you do anything else, you need to install the various tools and dependenc
 apt install build-essential gcc-mingw-w64-i686
 ```
 
-Building the ebgube is as simple as running:
+Building the engine is as simple as running:
 ```sh
 make
 ```
