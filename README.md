@@ -105,4 +105,4 @@ Feel free to join our Discord server: https://discord.gg/3zFTJWUNt7
 
 Notice
 ------
-OpenBGI (this project) is primarily related to visual novels. This project is unrelated to an AI project with a similar name.
+OpenBGI (this project) is primarily related to visual novels. This project is unrelated to an AI/AGI project with a similar name.
