@@ -105,7 +105,4 @@ Feel free to join our Discord server: https://discord.gg/3zFTJWUNt7
 
 Notice
 ------
-OpenBGI (this project) is primarily related to adult-content oriented visual novels.
-This project is unrelated to BGI Labs, SingularityNET and Ben Goertzel's "OpenBGI" project, which is an AI project.
-
-OpenBGI (this project) has prior use of the OpenBGI name since 2020, and has no plans to rebrand.
+OpenBGI (this project) is primarily related to visual novels. This project is unrelated to an AI project with a similar name.
