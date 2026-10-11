@@ -52,6 +52,14 @@ Only Lump of Sugar games have been tested so far.  We are interested in
 testing other BGI-based games: if you have one, tell us how it goes in
 our [Discord](https://discord.gg/3zFTJWUNt7).
 
+# Roadmap
+
+* Full compatibility with every Lump of Sugar game
+* Explore other Ethornell/BGI based games
+* RTL text layout support for Arabic/Hebrew/other language support for translated scenarios (Requires custom text layout code changes plus OpenBGI-specific opcodes.)
+* API layer for headless playback with external launchers (RetroArch and similar launchers.)
+* More compile targets (macOS, Haiku, console homebrew)
+
 ## Building
 
     make              Linux (gcc or clang; X11, Xext, FreeType, optionally
