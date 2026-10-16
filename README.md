@@ -33,6 +33,7 @@ The games we have been working on, with the engine build each one needs
 | Nursery Rhyme | `NurseryRhyme` | 1.64 | In progress |
 | Itsuka, Todoku, Ano Sora ni. | `ItsukaTodokuAnoSorani` | 1.66 | In progress |
 | Tayutama -Kiss on my Deity- (trial; the reference build) | `Tayutama` | 1.69 build 444 | In progress |
+<<<<<<< HEAD
 | Tayutama -Kiss on my Deity- | `Tayutama` | 1.69 build 451 | In progress |
 | Tayutama -It's happy days- | `TayutamaHD` | 1.69 build 472 | In progress |
 | Prism Rhythm | `PrismRhythm` | 1.494 | In progress |
@@ -51,10 +52,38 @@ The games we have been working on, with the engine build each one needs
 | Yumahorome | `Yumahorome` | 1.662 | In progress |
 | Arcana Alchemia | `ArcanaAlchemia` | 1.667 | In progress |
 | Haruka Ao no Hanayome ni | `HarukaAonoHanayomeni` | 1.669 | In progress |
+=======
+| Tayutama -Kiss on my Deity- | `Tayutama` | 1.69 build 451 | Very playable |
+| Tayutama -It's happy days- | `TayutamaHD` | 1.69 build 472 | Very playable |
+| Prism Rhythm | `PrismRhythm` | 1.494 | Very playable |
+| Diamic Days | `DiamicDays` | 1.529 | Very playable |
+| Gakuou -THE ROYAL SEVEN STARS- | `Gackoh` | 1.535 | Very playable |
+| Gakuou -It's Heartful Days!!- | `Gackoh_HD` | 1.547 | Boots, but crashes in prologue |
+| Hanairo Heptagram | `HanairoHeptagram` | 1.553 | Very playable |
+| Magical Charming! | `MagicalCharming!` | 1.573 | Boots, severe visual glitches |
+| Sekai to Sekai no Mannaka de | `SekaiToSekaiNoMannakaDe` | 1.588 | Boots, severe visual glitches |
+| Unmei Senjou no Phi | `UnmeisenjouNoPhi` | 1.599 | Boots, but crashes in prologue |
+| Kodomo no Asobi | `KodomoNoAsobi` | 1.616 | Boots, but crashes in prologue |
+| Tayutama 2 -After Stories- | `Tayutama2AS` | 1.640 | Somewhat playable, glitchy |
+| Wakabairo no Quartet | `WakabaironoQuartet` | 1.653 | Somewhat playable, glitchy |
+| Nekotsuku, Sakura. | `NekoTsukuSakura` | 1.654 | Somewhat playable, glitchy |
+| Madohi Shiroki no Kamikakushi | `MadoiShirokinoKamikakushi` | 1.659 | Boots, but crashes in prologue |
+| Yumahorome | `Yumahorome` | 1.662 | Boots, but crashes in prologue |
+| Arcana Alchemia | `ArcanaAlchemia` | 1.667 | Testing in progress |
+| Haruka Ao no Hanayome ni | `HarukaAonoHanayomeni` | 1.669 | Testing in progress |
+>>>>>>> 901469b763469045627d8dfc51aff4f2950a2028
 
 Only Lump of Sugar games have been tested so far.  We are interested in
 testing other BGI-based games: if you have one, tell us how it goes in
 our [Discord](https://discord.gg/3zFTJWUNt7).
+
+# Roadmap
+
+* Full compatibility with every Lump of Sugar game
+* Explore other Ethornell/BGI based games
+* RTL text layout support for Arabic/Hebrew/other language support for translated scenarios (Requires custom text layout code changes plus OpenBGI-specific opcodes.)
+* API layer for headless playback with external launchers (RetroArch and similar launchers.)
+* More compile targets (macOS, Haiku, console homebrew)
 
 ## Building
 
