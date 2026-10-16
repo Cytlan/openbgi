@@ -65,6 +65,12 @@ KnobReg_t* Knob_ActiveDrag(void)
 	return gKnobDrag;
 }
 
+// "91 DB" (1.588 on): the handle of the knob being dragged, 0 when none
+uint32_t Knob_DragHandle(void)
+{
+	return gKnobDrag ? gKnobDrag->handle : 0;
+}
+
 // Drop every registration (and the drag); shutdown and restart.
 void Knob_UnregisterAll(void)
 {

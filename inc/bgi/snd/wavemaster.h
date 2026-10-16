@@ -37,7 +37,15 @@
 #define WM_BGM_CHANNELS 0x10 // music channels
 #define WM_SE_SLOTS     0x40 // sound effect slots
 
-int Wm_Init(void);       // start the library and the audio device; 0, 1 already started, 5 no device
+int Wm_Init(void); // start the library and the audio device; 0, 1 already started, 5 no device
+/* An extra source mixed with the channels: `fn` adds its stereo 16-bit
+ * frames into `acc` (interleaved 32-bit accumulators, `frames` of them)
+ * on the mixer's thread, under the library lock.  The movie player feeds
+ * its sound track this way.  NULL removes it.  Wm_MixRunning tells
+ * whether the mixer pulls at all (the audio device opened). */
+typedef void (*WmExternalMix_t)(void* user, int32_t* acc, int frames);
+void Wm_SetExternalMix(WmExternalMix_t fn, void* user);
+int Wm_MixRunning(void);
 int Wm_StartTimer(void); // start the 20 ms fade timer; 0, or 0x14 when the library is not started
 int Wm_StopTimer(void);  // stop the fade timer; 0, or 0x14 when it was not running
 int Wm_Shutdown(void);   // stop everything, release the device; always 0

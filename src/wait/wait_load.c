@@ -253,6 +253,70 @@ Wait_t* WaitSeLoad_New(Thread_t* t, int slot, const char* arc, const char* name,
 	return &w->l.w;
 }
 
+// ---- sound effects from memory ("A0 28", 1.547 on) --------------------------
+
+typedef struct WaitSeMem
+{
+	Wait_t w;         // (WaitCounted)
+	int slot;         // the destination sound effect slot
+	const void* data; // the BW file in the script's memory
+	double gain;      // sample multiplier
+	int queued;       // the data has been handed to the sound loader
+	uint32_t status;  // the sound loader's status: -1 pending, 0 ok, 0x8xxxxxxx error
+} WaitSeMem_t;
+
+static void WaitSeMem_Destroy(Wait_t* base)
+{
+	WaitCount_Dec();
+	WaitCounted_Dtor(base);
+	BGI_Free(base);
+}
+
+/* the first poll queues the data with the sound loader; the next ones wait
+ * for its status and report its errors as script errors (the messages
+ * name no file: the data came from memory) */
+static int WaitSeMem_Poll(Wait_t* base)
+{
+	WaitSeMem_t* w = (WaitSeMem_t*)base;
+	Thread_t* t = base->thread;
+	Wait_Tick(base);
+	if(!w->queued)
+	{
+		Loader_QueueSe(&w->status, w->slot, w->data, 0, w->gain);
+		w->queued = 1;
+		return 0;
+	}
+	switch(w->status)
+	{
+		case 0xffffffffu: return 0;
+		case 0x80000001u: ScriptError(MSG_SE_MEM_NOT_BW, t); break;
+		case 0x80000002u: ScriptError(MSG_SE_MEM_NOT_MONO, t); break;
+		case 0x8fffffffu: ScriptError(MSG_SE_MEM_REGISTER_FATAL, t); break;
+		default: break;
+	}
+	return 1;
+}
+
+static const WaitVtbl_t WaitSeMem_Vtbl = {WaitSeMem_Destroy, WaitSeMem_Poll, Wait_SetTimer, Wait_IsDirtyBase,
+	Wait_OnMessage};
+
+/* load the BW file at `data` (in the script's memory, decoded whole before
+ * the wait ends) into effect slot `slot` with a sample gain ("A0 28" of
+ * 1.547 on) */
+Wait_t* WaitSeMem_New(Thread_t* t, int slot, const void* data, double gain)
+{
+	WaitSeMem_t* w = (WaitSeMem_t*)BGI_Alloc(sizeof *w);
+	WaitCounted_Ctor(&w->w, t);
+	WaitCount_Inc();
+	w->w.vt = &WaitSeMem_Vtbl;
+	w->slot = slot;
+	w->data = data;
+	w->gain = gain;
+	w->queued = 0;
+	w->status = 0xffffffffu;
+	return &w->w;
+}
+
 // ---- BF_Movie sequences (1.69/472 on) ---------------------------------------------
 
 typedef struct WaitSeqLoad // 0x244 bytes

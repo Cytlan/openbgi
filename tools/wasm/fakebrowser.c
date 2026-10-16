@@ -190,6 +190,14 @@ int WasmJs_FontOpen(const char* faceUtf8, int height, int width, int bold, int i
 	return gFontCount++;
 }
 
+// the advance of the stand-in glyph: its half- or full-width cell
+int WasmJs_FontAdvance(int id, int cp)
+{
+	if(id < 0 || id >= gFontCount)
+		return 0;
+	return cp < 0x80 ? gFonts[id].width : gFonts[id].width * 2;
+}
+
 void WasmJs_FontRender(int id, int cp, unsigned char* buf, int pitch, int w, int h, int mono)
 {
 	int gw, gh, x, y;

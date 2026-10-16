@@ -1328,6 +1328,63 @@ int OS_WriteNativeFile(const char* path, const void* data, uint32_t size)
 	return 0;
 }
 
+// the command-line tools are not built for the page: their native file system services answer "nothing there"
+int OS_NativeStat(const char* path, OsNativeStat_t* out)
+{
+	BGI_UNUSED(path);
+	BGI_UNUSED(out);
+	return OS_NATIVE_NONE;
+}
+
+int OS_NativeMkdir(const char* path)
+{
+	BGI_UNUSED(path);
+	return 0;
+}
+
+int OS_NativeRemove(const char* path)
+{
+	BGI_UNUSED(path);
+	return 0;
+}
+
+int OS_NativeList(const char* dir, OsNativeListFn fn, void* ctx)
+{
+	BGI_UNUSED(dir);
+	BGI_UNUSED(fn);
+	BGI_UNUSED(ctx);
+	return -1;
+}
+
+int OS_NativeSeek(FILE* f, uint64_t pos)
+{
+	return fseek(f, (long)pos, SEEK_SET) == 0;
+}
+
+void OS_NativeAbsolute(const char* path, char* out, size_t n)
+{
+	snprintf(out, n, "%s", path);
+}
+
+int OS_WorkerLimit(void)
+{
+	return 1;
+}
+
+int OS_RunWorkers(int n, int (*fn)(int index, void* ctx), void* ctx)
+{
+	int i, failed = 0;
+	for(i = 0; i < n; i++)
+		failed += fn(i, ctx) != 0;
+	return failed;
+}
+
+void OS_NativeArgs(int* argc, char*** argv)
+{
+	BGI_UNUSED(argc);
+	BGI_UNUSED(argv);
+}
+
 // the directory must exist on either side (the root always does); relative paths start there from now on
 int OS_SetCurrentDir(const char* dir)
 {

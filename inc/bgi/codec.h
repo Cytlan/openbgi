@@ -4,7 +4,8 @@
  *
  * codec.h - the data formats of the engine's files
  *
- * Declares the interface of hash.c, dsc.c, cbg.c and sdc.c:
+ * Declares the interface of hash.c, dsc.c, cbg.c and sdc.c, and of the
+ * encoders the archive tools add (dscenc.c, cbgenc.c):
  *
  *  * the "hash" pseudo-random generator that keys every obfuscated format
  *  * DSC FORMAT 1.00   generic Huffman + LZ compression (scripts, images, ...)
@@ -57,6 +58,11 @@ static inline uint32_t BGI_DscOutSize(const void* src)
 {
 	return ((const DscHeader_t*)src)->outSize;
 }
+/* compress `n` bytes into a DSC file (dscenc.c; BGI_Free the result), `*size`
+ * bytes.  `key` seeds the generator that obfuscates the code lengths; any
+ * value will do.  The engine has no such function: the archive tools use it
+ * to store what they rebuild the way the games store it. */
+uint8_t* BGI_DscEncode(const void* src, uint32_t n, uint32_t key, uint32_t* size);
 
 // ---- CompressedBG___ ---------------------------------------------------
 
@@ -76,7 +82,7 @@ typedef struct CbgHeader // file layout, 0x30 bytes
 	uint32_t encLen;   // +0x28 length of the encrypted weight table, bytes
 	uint8_t sum;       // +0x2c check: byte sum of the decrypted weight table
 	uint8_t xor ;      // +0x2d check: byte xor of the decrypted weight table
-	uint16_t version;  // +0x2e not read by the decoder
+	uint16_t version;  // +0x2e 1 (lossless, cbg.c) or 2 (DCT, cbg2.c)
 					   // +0x30: encLen encrypted bytes, then the Huffman bit stream
 } CbgHeader_t;
 
@@ -95,6 +101,25 @@ typedef struct RawImageHeader // 0x10 bytes
 
 // 1 when `data` starts with the CompressedBG magic (16 bytes are compared)
 int BGI_IsCbg(const void* data);
+
+// ---- shared between cbg.c (version 1) and cbg2.c (version 2) ----
+
+typedef struct CbgNode // a Huffman tree node
+{
+	uint32_t valid;    // still available for pairing
+	uint32_t weight;   // sum of the leaf weights below
+	uint32_t isParent; // 0 for the leaves, 1 otherwise
+	uint32_t parent;   // 0xffffffff until the node has been paired
+	uint32_t left;     // child for bit 0 (leaf: own index)
+	uint32_t right;    // child for bit 1 (leaf: own index)
+} CbgNode_t;
+
+#define CBG_NODES 511 // version 1: 256 leaves + 255 parents
+
+void CbgDecrypt(uint8_t* buf, uint32_t len, uint32_t key);                    // buf[i] -= the hash generator's bytes
+int CbgCheck(const uint8_t* buf, uint32_t len, uint8_t sum, uint8_t xr);      // 1 when the sum / xor checks hold
+int CbgBuildTree(CbgNode_t* nodes, const uint32_t* weights, uint32_t leaves); // 2 * leaves - 1 nodes; the root, -1 when all weights are 0
+uint32_t Cbg2_Decode(const void* src, void* dst);                             // cbg2.c: the version 2 decoder (BGI_CbgDecode's codes)
 /* decode into dst (RawImageHeader + pixels); dst must hold
  * BGI_CbgOutSize(src) bytes.  Returns 0 on success, 0x80000003 if the magic
  * is wrong, 0x80000004 when the checksum of the weight table fails. */
@@ -105,6 +130,11 @@ static inline uint32_t BGI_CbgOutSize(const void* src)
 	const CbgHeader_t* h = (const CbgHeader_t*)src;
 	return 0x10u + (uint32_t)h->width * h->height * ((h->bpp & 0xffffu) >> 3);
 }
+/* encode a decoded image (RawImageHeader + pixels) as a version 1
+ * CompressedBG file (cbgenc.c; BGI_Free the result), `*size` bytes: the
+ * lossless codec, which every build of the engine reads.  `key` seeds the
+ * generator that encrypts the weight table.  For the archive tools. */
+uint8_t* BGI_CbgEncode(const void* image, uint32_t key, uint32_t* size);
 
 // ---- SDC FORMAT 1.00 / DCFS FORMAT 1.00 (sdc.c) ------------------------
 
@@ -135,9 +165,12 @@ int SdcIsFormat(const void* data);
  * size, 0 when the magic or the checks fail */
 uint32_t SdcDecode(void* dst, const void* src);
 /* encode `size` bytes of src into dst as header + payload; dst must have
- * room for the header and the LZ output, which is at most
- * size + size / 128 + 1 bytes.  Returns the total number of bytes written,
- * 0 when the verification decode differs from the input */
+ * room for the header and the LZ output, which can be larger than the
+ * input: a literal run costs a byte more than it holds, and a two-byte
+ * match is coded as a two-byte copy that splits the literals around it, so
+ * a lone literal and such a copy in turn take four bytes for three -
+ * size + size / 3 + 2 bytes at the worst.  Returns the total number of
+ * bytes written, 0 when the verification decode differs from the input */
 uint32_t SdcEncode(void* dst, const void* src, uint32_t size);
 // the decoded size announced by the header
 static inline uint32_t SdcOutSize(const void* src)

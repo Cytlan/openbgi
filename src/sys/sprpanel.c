@@ -12,8 +12,11 @@
  * PanelVtbl_t hooks, how a button is shown: the sub-sprite's bitmap, the
  * per-button frame animation and the "swing" (a sequence of timed rotations
  * about the sprite's pivot).  Decisions are additionally reported as event
- * 0x10000006 (group<<16|index, or 0xffffffff for a cancel; flag), and a
- * decision does not end the panel.
+ * 0x10000006 (group<<16|index, or 0xffffffff for a cancel; flag), from
+ * 1.69/472 preceded by event 0x10000007 with the click position inside
+ * the button for a mouse decision (from 1.494 also sent, with 0xffffffff
+ * and the position inside the window, for a click beside the buttons),
+ * and a decision does not end the panel.
  */
 #include <string.h>
 #include "bgi/panel.h"
@@ -66,11 +69,12 @@ static int SpritePanel_CanDecide(ButtonPanel_t* p, int g, int i);
 static int SpritePanel_DecideAt(ButtonPanel_t* p, int g, int i, int flag);
 static int SpritePanel_Decide(ButtonPanel_t* p, int btn, int flag);
 static void SpritePanel_Stop(ButtonPanel_t* p);
+static void SpritePanel_ClickOutside(ButtonPanel_t* p);
 
 static const PanelVtbl_t SpritePanel_Vtbl = {
 	{SpritePanel_Destroy, ButtonPanel_Poll, ButtonPanel_OnMessage}, SpritePanel_Animate, SpritePanel_FinishOnDecide,
 	SpritePanel_SetFocus, SpritePanel_GetBitmap, SpritePanel_SetSelection, SpritePanel_CanDecide,
-	SpritePanel_DecideAt, SpritePanel_Decide, SpritePanel_Stop};
+	SpritePanel_DecideAt, SpritePanel_Decide, SpritePanel_Stop, SpritePanel_ClickOutside};
 
 // ========================================================================
 // construction
@@ -436,6 +440,9 @@ uint32_t SpritePanel_Start(ButtonPanel_t* p, const SpriteDesc_t* d)
 			Window_SubRefresh(p->win, &r, k);
 			// the hit object sits at (x, y); a disabled (merely shown) button cannot be hit
 			info->virt = Panel_MakeHitObject(p, sb[i].x, sb[i].y, &bmp, sb[i].enabled ? sb[i].hitMaskBmp : -2);
+			if(getenv("BGI_PANEL_DEBUG"))
+				fprintf(stderr, "  btn g%d i%d en=%d shown=%d x=%d y=%d bmp=%d mask=%d flags=%x size=%dx%d\n", g, i,
+					sb[i].enabled, sb[i].shown, sb[i].x, sb[i].y, no, sb[i].hitMaskBmp, sb[i].flags, bmp.w, bmp.h);
 		}
 	}
 	if(d->currentGroup != -1 && src[d->currentGroup].selected != -1)
@@ -621,7 +628,29 @@ static int SpritePanel_CanDecide(ButtonPanel_t* p, int g, int i)
 	return 1;
 }
 
-// the `decide` hook: ButtonPanel_Decide plus event 0x10000006 when it was recorded
+/* 1.69/472 on: event 0x10000007 (group<<16|index, y<<16|x) ahead of a
+ * mouse decision's 0x10000006 - the pointer position relative to the
+ * decided button's top left, (0, 0) when the pointer is not inside its
+ * rectangle (a decision by message) */
+static void SpritePanel_PushClickEvent(ButtonPanel_t* p, int btn, uint32_t who)
+{
+	int m[2], x = 0, y = 0;
+	Rect_t r;
+	if(gEngine->gen < GEN_1_69_472)
+		return;
+	GetMouseClientPos(m);
+	if(!p->buttons[btn].virt)
+		return;
+	p->buttons[btn].virt->vt->screenRect(p->buttons[btn].virt, &r);
+	if(m[0] >= r.l && m[0] <= r.r && m[1] >= r.t && m[1] <= r.b)
+	{
+		x = m[0] - r.l;
+		y = m[1] - r.t;
+	}
+	ButtonPanel_PushEvent(p, 0x10000007, who, ((uint32_t)y << 16) | ((uint32_t)x & 0xffffu));
+}
+
+// the `decide` hook: ButtonPanel_Decide plus event 0x10000006 (and the click position) when it was recorded
 static int SpritePanel_Decide(ButtonPanel_t* p, int btn, int flag)
 {
 	int r = ButtonPanel_Decide(p, btn, flag);
@@ -629,22 +658,50 @@ static int SpritePanel_Decide(ButtonPanel_t* p, int btn, int flag)
 	{
 		uint32_t who = 0xffffffffu;
 		if(btn != -1)
+		{
 			who = ((uint32_t)p->buttons[btn].group << 16) | (uint32_t)p->buttons[btn].index;
+			if(flag)
+				SpritePanel_PushClickEvent(p, btn, who);
+		}
 		ButtonPanel_PushEvent(p, 0x10000006, who, (uint32_t)flag);
 	}
 	return r;
 }
 
-// the `decideAt` hook: ButtonPanel_DecideAt plus event 0x10000006 when it was recorded
+// the `decideAt` hook: ButtonPanel_DecideAt plus event 0x10000006 (and the click position) when it was recorded
 static int SpritePanel_DecideAt(ButtonPanel_t* p, int g, int i, int flag)
 {
 	int r = ButtonPanel_DecideAt(p, g, i, flag);
 	if(r)
 	{
 		uint32_t who = (g != -1 && i != -1) ? (((uint32_t)g << 16) | (uint32_t)i) : 0xffffffffu;
+		if(who != 0xffffffffu && flag)
+		{
+			int btn;
+			for(btn = 0; btn < p->total; btn++)
+				if(p->buttons[btn].group == g && p->buttons[btn].index == i)
+					break;
+			if(btn < p->total && p->buttons[btn].virt)
+				SpritePanel_PushClickEvent(p, btn, who);
+		}
 		ButtonPanel_PushEvent(p, 0x10000006, who, (uint32_t)flag);
 	}
 	return r;
+}
+
+/* the `clickOutside` hook (1.494 on): a click beside the buttons is
+ * reported as event 0x10000007 (0xffffffff, y<<16|x) with the pointer
+ * position relative to the window */
+static void SpritePanel_ClickOutside(ButtonPanel_t* p)
+{
+	int m[2];
+	Rect_t r;
+	if(gEngine->gen < GEN_1_494)
+		return;
+	GetMouseClientPos(m);
+	p->win->obj.vt->screenRect(&p->win->obj, &r);
+	ButtonPanel_PushEvent(p, 0x10000007, 0xffffffffu,
+		((uint32_t)(m[1] - r.t) << 16) | ((uint32_t)(m[0] - r.l) & 0xffffu));
 }
 
 // the `finishOnDecide` hook: a decision does not end a sprite panel

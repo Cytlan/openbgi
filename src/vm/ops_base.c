@@ -1161,7 +1161,8 @@ void Vm_ListMissing(FILE* out)
 		VmHandler_t* table;
 	} fams[] = {{"main", vm_optable_main}, {"7F", vm_optable_7F}, {"80", vm_optable_80}, {"81", vm_optable_81},
 		{"90", vm_optable_90}, {"91", vm_optable_91}, {"92", vm_optable_92}, {"A0", vm_optable_A0},
-		{"B0", vm_optable_B0}, {"C0", vm_optable_C0}, {"D0", vm_optable_D0}, {"E0", vm_optable_E0}};
+		{"B0", vm_optable_B0}, {"C0", vm_optable_C0}, {"D0", vm_optable_D0}, {"E0", vm_optable_E0},
+		{"EF", vm_optable_EF}};
 	size_t f;
 	int total = 0;
 	for(f = 0; f < BGI_COUNTOF(fams); f++)
@@ -1198,6 +1199,7 @@ void Vm_TablesInit(void)
 	Vm_Optable81Init();
 	Vm_FillTable(vm_optable_D0, OPFAM_D0, NULL, 0);
 	Vm_FillTable(vm_optable_E0, OPFAM_E0, NULL, 0);
+	Vm_OptableEFInit(); // OpenBGI's own extensions
 }
 
 // the tables of the families that later builds added (docs/versions.md)
@@ -1205,6 +1207,7 @@ VmHandler_t vm_optable_7F[256]; // "7F xx", 1.667 on
 VmHandler_t vm_optable_81[256]; // "81 xx", 1.69 build 472 on (an empty family until 1.529; ops_sys81.c)
 VmHandler_t vm_optable_D0[256]; // "D0 xx", 1.535 on: the evaluation instructions
 VmHandler_t vm_optable_E0[256]; // "E0 xx", 1.588 on (its own table from 1.653)
+VmHandler_t vm_optable_EF[256]; // "EF xx": the OpenBGI extensions, a byte no original build uses (ops_obgi.c)
 
 /* read the second opcode byte and dispatch through the family table; a
  * sub-opcode without a handler raises the family's "undefined instruction"
@@ -1277,6 +1280,11 @@ static int Opcode_Eval(Thread_t* t) // D0 (1.535 on): the "D0 xx" evaluation fam
 static int Opcode_Ext2(Thread_t* t) // E0 (1.588 on): the "E0 xx" extension family
 {
 	return Dispatch(t, vm_optable_E0, MSG_UNDEF_EXTE0);
+}
+
+static int Opcode_Obgi(Thread_t* t) // EF: the "EF xx" OpenBGI extension family (ops_obgi.c)
+{
+	return Dispatch(t, vm_optable_EF, MSG_UNDEF_OBGI);
 }
 
 int Opcode_User(Thread_t* t); // FF: the user-defined instructions "FF xx" (userop.c)
@@ -1377,6 +1385,7 @@ void Vm_OptableMainInit(void)
 		{0x81, Opcode_Sys81, GEN_1_69_451, GEN_LAST},
 		{0xd0, Opcode_Eval, GEN_1_535, GEN_LAST},
 		{0xe0, Opcode_Ext2, GEN_1_588, GEN_LAST},
+		{0xef, Opcode_Obgi, GEN_FIRST, GEN_LAST},
 	};
 	Vm_FillTable(vm_optable_main, OPFAM_MAIN, ops, BGI_COUNTOF(ops));
 }

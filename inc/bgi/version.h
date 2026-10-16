@@ -80,6 +80,7 @@ typedef enum OpFamily
 	OPFAM_C0,
 	OPFAM_D0,
 	OPFAM_E0,
+	OPFAM_EF, // OpenBGI's own extension family (src/vm/ops_obgi.c): not in any original build
 	OPFAM_COUNT
 } OpFamily_t;
 

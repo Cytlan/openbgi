@@ -112,6 +112,15 @@ void Text_PaintGlyph(Bmp_t* cell, Glyph_t* g, int code, FontRaster_t* font, uint
 		Font_PaintGlyph(cell, g, code, font, colour);
 		return;
 	}
+	/* With UTF-8 text a code is a Unicode code point, and U+FF01 .. U+FFEE
+	 * are the full-width forms ("！", "，", "（"): a code that has neither a
+	 * picture nor a cell of the sheet is a character of the text there, not
+	 * a private code that draws nothing. */
+	if(gTextUtf8 && !Text_CharImage((uint32_t)code) && (code & 0xff) - 1 >= gGlyphCount)
+	{
+		Font_PaintGlyph(cell, g, code, font, colour);
+		return;
+	}
 	if(Text_CharImage((uint32_t)code))
 	{
 		// a picture of its own ("92 98"): clipped to the cell

@@ -329,6 +329,7 @@ extern VmHandler_t vm_optable_7F[256];   // the families of later builds (docs/v
 extern VmHandler_t vm_optable_81[256];   // "81 xx", 1.69 build 472 on (ops_sys81.c)
 extern VmHandler_t vm_optable_D0[256];   // "D0 xx", 1.535 on
 extern VmHandler_t vm_optable_E0[256];   // "E0 xx", 1.588 on
+extern VmHandler_t vm_optable_EF[256];   // "EF xx", the OpenBGI extensions (ops_obgi.c): every generation
 
 void Vm_TablesInit(void);       // fill the handler tables for the selected engine profile; once, before the first instruction
 void Vm_ListMissing(FILE* out); // --list-missing: the instructions of the profile without a handler
@@ -407,6 +408,7 @@ void Vm_Optable92Init(void);
 void Vm_OptableA0Init(void);
 void Vm_OptableB0Init(void);
 void Vm_OptableC0Init(void);
+void Vm_OptableEFInit(void);       // ops_obgi.c: the OpenBGI extensions
 int Opcode_Sys_Yield(Thread_t* t); // "80 5F": end the turn (scheduler code 1); in the original also the base wait class's poll
 
 // user-defined instructions "FF xx" (userop.c)

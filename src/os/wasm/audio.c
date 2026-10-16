@@ -288,3 +288,28 @@ void OS_MovieSetVolume(int32_t vol)
 {
 	BGI_UNUSED(vol);
 }
+
+// no helper programs in the browser: the movie player's ffmpeg route is unavailable
+OsPipeProc_t* OS_PipeProcStart(const char* const* argv)
+{
+	BGI_UNUSED(argv);
+	return NULL;
+}
+
+int OS_PipeProcRead(OsPipeProc_t* p, void* buf, int n)
+{
+	BGI_UNUSED(p);
+	BGI_UNUSED(buf);
+	BGI_UNUSED(n);
+	return -1;
+}
+
+void OS_PipeProcStop(OsPipeProc_t* p)
+{
+	BGI_UNUSED(p);
+}
+
+void OS_PathNative(const char* path, char* out, size_t n)
+{
+	snprintf(out, n, "%s", path);
+}

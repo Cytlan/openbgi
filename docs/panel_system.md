@@ -81,6 +81,8 @@ the focus and the current group), "90 BD" (the current group), "90 BE"
 | 0x10000004 selection changed | group<<16 \| index | direction |
 | 0x10000005 the cursor hit the grid's edge | group<<16 \| index | direction |
 | 0x10000006 (sprite panel) a button was decided | group<<16 \| index | flag |
+| 0x10000007 (sprite panel, 1.69/472 on) the click position of a mouse decision, queued ahead of its 0x10000006 | group<<16 \| index | y<<16 \| x, relative to the button |
+| 0x10000007 (sprite panel, 1.494 on) a click beside every button | 0xffffffff | y<<16 \| x, relative to the window |
 
 The direction is the key's: -1 / 1 previous / next, 0xffff / 1 left /
 right, 0xffff0000 / 0x10000 up / down, 0 for the mouse.
@@ -124,8 +126,13 @@ pointer is on the button and either pause or restart when it leaves.  Its
 four bitmaps are normal / focus / selected / selected+focus; `noRedecide`
 refuses a second decision of the selected button; `inputDisabled` starts
 the panel with its input off.  Decisions are additionally reported as
-event 0x10000006.  Everything else - groups, links, key maps, the event
-queue - is the ButtonPanel code through the shared vtable (`PanelVtbl_t`).
+event 0x10000006, from 1.69/472 preceded by the click position (event
+0x10000007) for a mouse decision, and from 1.494 a click beside every
+button is reported the same way with -1 for the button (the `clickOutside`
+hook) - the system programs of the later builds handle the buttons they
+keep disabled, and the tabs of their option screens, through that event.
+Everything else - groups, links, key maps, the event queue - is the
+ButtonPanel code through the shared vtable (`PanelVtbl_t`).
 
 ## Painting without a panel
 

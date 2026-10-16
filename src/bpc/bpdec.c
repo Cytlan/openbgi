@@ -300,7 +300,8 @@ static int CmpLocalDesc(const void* a, const void* b)
 static void DecideLocals(Dec_t* d)
 {
 	int i;
-	qsort(d->locals, (size_t)d->localCount, sizeof *d->locals, CmpLocalDesc);
+	if(d->localCount) // a function without locals has no list
+		qsort(d->locals, (size_t)d->localCount, sizeof *d->locals, CmpLocalDesc);
 	for(i = 0; i < d->localCount; i++)
 	{
 		Local_t* l = &d->locals[i];
@@ -2164,7 +2165,7 @@ static int WriteProgram(Dec_t* d, const uint8_t* asmMask, FILE* out)
 {
 	int i, fallbacks = 0;
 	fprintf(out, "// %s - decompiled by bpasm (docs/bpc.md)\n", d->opt->name ? d->opt->name : "program");
-	fprintf(out, "#engine %s\n\n", d->gen == GEN_COUNT ? "any" : kGenNames[d->gen]);
+	fprintf(out, "#engine %s\n%s\n", d->gen == GEN_COUNT ? "any" : kGenNames[d->gen], gAsmUtf8 ? "#encoding utf-8\n" : "");
 	for(i = 0; i < d->funcCount; i++)
 	{
 		if(d->funcLine)
@@ -2240,7 +2241,7 @@ int Bpc_Decompile(const uint8_t* file, uint32_t size, const BpcDecOptions_t* opt
 		}
 		{
 			FILE* log = tmpfile();
-			Bpc_Compile(text, len, opt->name ? opt->name : "program", opt->gen, log ? log : stderr, &res);
+			Bpc_Compile(text, len, opt->name ? opt->name : "program", opt->gen, NULL, log ? log : stderr, &res);
 			if(res.errors && log)
 			{ // the first message names a line: the function there is the one that failed
 				char msg[0x400];
@@ -2355,7 +2356,7 @@ int Bpc_Decompile(const uint8_t* file, uint32_t size, const BpcDecOptions_t* opt
 	if(whole)
 	{
 		fprintf(out, "// %s - decompiled by bpasm (docs/bpc.md)\n", opt->name ? opt->name : "program");
-		fprintf(out, "#engine %s\n\n", d.gen == GEN_COUNT ? "any" : kGenNames[d.gen]);
+		fprintf(out, "#engine %s\n%s\n", d.gen == GEN_COUNT ? "any" : kGenNames[d.gen], gAsmUtf8 ? "#encoding utf-8\n" : "");
 		fprintf(out, "__program {\n");
 		{
 			FILE* mem = tmpfile();

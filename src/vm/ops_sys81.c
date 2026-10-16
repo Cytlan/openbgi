@@ -165,6 +165,37 @@ static int Opcode_Sys81_SimulateClick(Thread_t* t) // 81 1E: kind → ok
 	return 0;
 }
 
+/* Can a file be created in the directory `dir`?  The original makes a
+ * temporary file there (GetTempFileName with the prefix "BGI"), writes
+ * to it and deletes it again, impersonating the logged-on user first
+ * when it runs with another token; 1 when all of that worked, 0 when
+ * not.  The scripts ask it about their user-data folder. */
+static int Opcode_Sys81_DirWritable(Thread_t* t) // 81 2F (1.616 on): dir → ok
+{
+	const char* dir = (const char*)PopPtr(t);
+	char path[0x210];
+	char name[32];
+	size_t n = strlen(dir);
+	OsFile_t* f;
+	int ok = 0;
+	snprintf(name, sizeof name, "BGI%04X.tmp", (unsigned)(OS_TicksMs() & 0xffffu));
+	if(n + 1 + strlen(name) >= sizeof path)
+	{
+		Thread_Push(t, 0);
+		return 0;
+	}
+	snprintf(path, sizeof path, "%s%s%s", dir, n && (dir[n - 1] == '\\' || dir[n - 1] == '/') ? "" : "\\", name);
+	f = OS_FileCreate(path);
+	if(f)
+	{
+		ok = OS_FileWrite(f, "BGI", 3) == 3;
+		OS_FileClose(f);
+		OS_FileDelete(path);
+	}
+	Thread_Push(t, (uint32_t)ok);
+	return 0;
+}
+
 /* `size` bytes from offset `off` of the raw (stored) file into buf - what
  * "80 31" did before 1.69 build 472 made it the decoded range; 0 ok, 1
  * not found, 2 / 3 range errors, -1 short read */
@@ -192,6 +223,27 @@ static int Opcode_Sys81_HttpGet(Thread_t* t) // 81 31: buf, url, off, size → c
 	return 0;
 }
 
+/* 1.662 on: the UI language the scripts ask the engine about, a Windows
+ * LANGID (the primary language in the low 10 bits): "81 02" sets it - 0
+ * takes the user's own from the OS - and returns it, "81 03" returns it
+ * (0 until "81 02" ran, as in the original).  The boot programs of the
+ * builds with other languages (Haruka Ao no Hanayome ni) pick their text
+ * by it. */
+static int32_t gUiLanguage;
+static int Opcode_Sys81_SetUiLanguage(Thread_t* t) // 81 02 (1.662 on): lang → lang
+{
+	int32_t lang = (int32_t)Thread_Pop(t);
+	gUiLanguage = lang ? lang : OS_UiLanguage();
+	Thread_Push(t, (uint32_t)gUiLanguage);
+	return 0;
+}
+
+static int Opcode_Sys81_GetUiLanguage(Thread_t* t) // 81 03 (1.662 on): → lang
+{
+	Thread_Push(t, (uint32_t)gUiLanguage);
+	return 0;
+}
+
 /* the "choose an entry of an archive" dialog of the development builds (a
  * resource dialog listing the archive's names, the chosen one copied
  * out).  Not provided: the four pointer operands are dropped and r is -1
@@ -210,6 +262,15 @@ static int Opcode_Sys81_ArcEntryDialog(Thread_t* t) // 81 3B: p1, p2, p3, p4 →
 static int Opcode_Sys81_SetFullscreenFit(Thread_t* t) // 81 63: mode → ok
 {
 	Thread_Push(t, (uint32_t)Display_SetFullscreenFit((int)Thread_Pop(t)));
+	return 0;
+}
+
+// 1.669 on: the size the renderer scales the picture to; ok 1 when its aspect is the desktop's (stored only)
+static int Opcode_Sys81_SetRenderSize(Thread_t* t) // 81 6C (1.669 on): w, h → ok
+{
+	int h = (int)Thread_Pop(t);
+	int w = (int)Thread_Pop(t);
+	Thread_Push(t, (uint32_t)Display_SetRenderSize(w, h));
 	return 0;
 }
 
@@ -433,6 +494,8 @@ void Vm_Optable81Init(void)
 		{0x11, Opcode_Sys81_KeyboardState, GEN_1_69_472, GEN_LAST},
 		{0x1F, Opcode_Sys81_SetTweenKeyMask, GEN_1_69_451, GEN_LAST},
 		{0x3A, Opcode_Sys81_BrowseFolder, GEN_1_69_472, GEN_LAST},
+		{0x02, Opcode_Sys81_SetUiLanguage, GEN_1_662, GEN_LAST},
+		{0x03, Opcode_Sys81_GetUiLanguage, GEN_1_662, GEN_LAST},
 		{0x0A, Opcode_Sys81_CpuBrand, GEN_1_529, GEN_LAST},
 		{0x0B, Opcode_Sys81_DisplayAdapter, GEN_1_529, GEN_LAST},
 		{0x0C, Opcode_Sys81_OsVersion, GEN_1_529, GEN_LAST},
@@ -441,12 +504,14 @@ void Vm_Optable81Init(void)
 		{0x0F, Opcode_Sys81_IsIconic, GEN_1_529, GEN_LAST},
 		{0x14, Opcode_Sys81_KeysWhenInactive, GEN_1_529, GEN_LAST},
 		{0x1E, Opcode_Sys81_SimulateClick, GEN_1_529, GEN_LAST},
+		{0x2F, Opcode_Sys81_DirWritable, GEN_1_616, GEN_LAST},
 		{0x30, Opcode_Sys81_LoadFileRangeRaw, GEN_1_529, GEN_LAST},
 		{0x31, Opcode_Sys81_HttpGet, GEN_1_529, GEN_LAST},
 		{0x3B, Opcode_Sys81_ArcEntryDialog, GEN_1_529, GEN_LAST},
 		{0x60, Opcode_Sys81_SetSizeEntry, GEN_1_494, GEN_LAST},
 		{0x63, Opcode_Sys81_SetFullscreenFit, GEN_1_529, GEN_LAST},
 		{0x64, Opcode_Sys81_SetWindowSize, GEN_1_529, GEN_LAST},
+		{0x6C, Opcode_Sys81_SetRenderSize, GEN_1_669, GEN_LAST},
 		{0x62, Opcode_Sys81_SetAdapterOfMonitor, GEN_1_599, GEN_LAST},
 		{0x18, Opcode_Sys81_TouchEnable, GEN_1_599, GEN_LAST},
 		{0x35, Opcode_Sys81_FileSizeFast, GEN_1_588, GEN_LAST},

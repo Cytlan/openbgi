@@ -28,7 +28,11 @@ unchanged and replaces the DirectSound part with a software mixer that
 runs in the OS layer's audio thread at 44.1 kHz stereo (the original's
 primary buffer format): effects play from their decoded samples, music is
 pulled from its decoder through the same ring / restart logic as the pump
-(`Voice_Pump` in `voice.c`).
+(`Voice_Pump` in `voice.c`).  The mixer has one external tap
+(`Wm_SetExternalMix`): a callback that adds to the 32-bit accumulator
+after the voices, which the ffmpeg movie player (`src/sys/moviefx.c`)
+uses for a movie's sound track; `Wm_MixRunning` tells whether the mixer
+is being pulled at all.
 
 ## Records and volumes
 

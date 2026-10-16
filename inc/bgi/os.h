@@ -89,6 +89,52 @@ void OS_Utf8ToNative(const char* utf8, char* out, size_t n);
 FILE* OS_NativeOpen(const char* path, const char* mode);
 uint8_t* OS_ReadNativeFile(const char* path, uint32_t* size);
 int OS_WriteNativeFile(const char* path, const void* data, uint32_t size);
+/* More of the native file system, for the command-line tools that work on
+ * directories of the host (bgidump, bgipack; the engine itself has no use
+ * for it): OS_NativeStat tells what a path is; OS_NativeMkdir creates a
+ * directory (1 when it exists afterwards; the parent has to exist);
+ * OS_NativeRemove deletes a file (1 when it is gone); OS_NativeList calls
+ * `fn` for every entry of a directory but "." and ".." - the name alone, in
+ * no particular order - and returns the number of entries, -1 when the
+ * directory cannot be read; OS_NativeSeek positions a stream opened with
+ * OS_NativeOpen at a 64-bit offset from its start (1 on success), which
+ * fseek cannot do where long is 32 bits wide; OS_NativeAbsolute gives the
+ * full path of a path that may be relative to the current directory (the
+ * path itself when the system cannot say).  OS_NativeArgs replaces
+ * main's arguments by native strings: a no-op on POSIX; on Windows they
+ * are taken again from the wide command line, so that a path the system's
+ * code page cannot spell still arrives intact.  OS_NATIVE_SEP is the
+ * separator to build native paths with. */
+#define OS_NATIVE_NONE 0 // OS_NativeStat: nothing of that name
+#define OS_NATIVE_FILE 1
+#define OS_NATIVE_DIR  2
+typedef struct OsNativeStat
+{
+	uint64_t size; // a file's size, bytes
+	int64_t mtime; // its last modification, milliseconds since 1970-01-01 UTC
+} OsNativeStat_t;
+typedef void (*OsNativeListFn)(void* ctx, const char* name, int isDir);
+int OS_NativeStat(const char* path, OsNativeStat_t* out); // OS_NATIVE_*; `out` may be NULL
+int OS_NativeMkdir(const char* path);
+int OS_NativeRemove(const char* path);
+int OS_NativeList(const char* dir, OsNativeListFn fn, void* ctx);
+int OS_NativeSeek(FILE* f, uint64_t pos);
+void OS_NativeAbsolute(const char* path, char* out, size_t n);
+/* Run fn(0, ctx) .. fn(n - 1, ctx) and return how many of them returned
+ * non-zero: in n child processes at once where the system can fork (each
+ * child has the parent's memory as it was and its own afterwards, so the
+ * functions hand their results back through files), one after the other in
+ * this process elsewhere.  OS_WorkerLimit is the n worth asking for: the
+ * number of processors where the workers run in parallel, 1 where they do
+ * not. */
+int OS_WorkerLimit(void);
+int OS_RunWorkers(int n, int (*fn)(int index, void* ctx), void* ctx);
+void OS_NativeArgs(int* argc, char*** argv);
+#if defined(_WIN32)
+#define OS_NATIVE_SEP '\\'
+#else
+#define OS_NATIVE_SEP '/'
+#endif
 /* Shift-JIS (CP932) to UTF-8, for the reimplementation's own text files;
  * `out` (n bytes) receives a NUL-terminated string, the result is its
  * length.  The back end supplies the code page 932 table (iconv,
@@ -302,6 +348,13 @@ int OS_DisplaySetMode(int fullscreen, int w, int h, int bpp);      // ChangeDisp
 void OS_DisplayRestore(void);                                      // the desktop mode again (ChangeDisplaySettings(NULL, 0))
 void OS_WindowSetFullscreen(int modeW, int modeH);                 // the window borderless over the mode
 void OS_WindowSetWindowed(int x, int y, int clientW, int clientH); // the framed window at the outer origin (x, y)
+/* The picture the engine draws and addresses is w x h ("81 64" of 1.529
+ * on lets the scripts size the window independently of it).  Called after
+ * OS_WindowSetWindowed; when the client area is of another size the back
+ * end shows the picture scaled into it, centred with its aspect kept, and
+ * maps the mouse the other way, so the engine keeps working in picture
+ * coordinates.  A client area of the picture's size is shown 1:1. */
+void OS_WindowSetPicture(int w, int h);
 
 /* The back buffer is plain memory owned by the graphics manager (the
  * original uses a top-down DIB section; see Gfx_SetupScreen).  An OsSurface
@@ -552,12 +605,11 @@ void OS_FontRender(OsFont_t* f, const char* sjis, int len, uint8_t* buf, int pit
  * ink. */
 OsFont_t* OS_FontOpenMono(const char* face, int size, int bold);
 void OS_FontRenderMono(OsFont_t* f, const char* sjis, int len, uint8_t* bits, int pitch, int w, int h);
-#if !defined(BGI_WASM)
 /* The advance of a character in pixels (GetTextExtentPoint32; the glyph's
- * advance under FreeType): the debugger sizes its text cell with it.  Not
- * part of the WebAssembly build, which has no debugger. */
+ * advance under FreeType; measureText on a page): the debugger sizes its
+ * text cell with it, and the right-to-left layout of the OpenBGI
+ * extensions places joining letters by it (src/gfx/text/layout_bidi.c). */
 int OS_FontCharAdvance(OsFont_t* f, const char* sjis, int len);
-#endif
 
 // -------------------------------------------------------------------------
 // Audio
@@ -610,6 +662,23 @@ int OS_MovieStart(int x, int y, int w, int h, int32_t volume, int32_t* lengthMs)
 void OS_MovieStop(void);             // stop, hide the video window, release the graph
 int OS_MovieIsRunning(void);         // IMediaSeeking: current position < stop position
 void OS_MovieSetVolume(int32_t vol); // IBasicAudio::put_Volume: -10000 (silent) .. 0; ignored without a graph
+
+/* A helper program with its standard output piped to the engine: the
+ * movie player of src/sys/moviefx.c runs ffmpeg and ffprobe this way
+ * where the native player cannot play a file (always, on POSIX).  argv
+ * is NULL-terminated; argv[0] names the program - a bare name is looked
+ * for next to the engine's binary (OS_BinaryDir) first, then on the
+ * PATH.  The strings are native (UTF-8 on POSIX, the engine's own on
+ * Windows); OS_PathNative turns an engine path into one.  The program's
+ * standard error is discarded.  OS_PipeProcRead blocks until some bytes
+ * arrive (the count), 0 at the program's end, -1 on an error.
+ * OS_PipeProcStop ends the program (killed when it still runs) and
+ * releases everything; it accepts NULL. */
+typedef struct OsPipeProc OsPipeProc_t;
+OsPipeProc_t* OS_PipeProcStart(const char* const* argv);
+int OS_PipeProcRead(OsPipeProc_t* p, void* buf, int n);
+void OS_PipeProcStop(OsPipeProc_t* p);
+void OS_PathNative(const char* path, char* out, size_t n); // an engine path as the native file system spells it
 
 // -------------------------------------------------------------------------
 // Dialogs, shell, registry
@@ -689,6 +758,10 @@ int OS_Version(int* platform, int* major, int* minor);
 /* "81 0C" of 1.529 on: the full OSVERSIONINFO - major, minor, build,
  * platform and the service pack string (up to 128 bytes) */
 void OS_VersionEx(uint32_t out[4], char* csd, size_t n);
+/* "81 02" of 1.662 on: the user's UI language as a Windows LANGID
+ * (GetUserDefaultUILanguage: primary language in the low 10 bits, 0x11
+ * Japanese, 0x09 English, 0x04 Chinese; the sublanguage above) */
+int OS_UiLanguage(void);
 // "81 0D": GlobalMemoryStatusEx, the physical memory in bytes (64 bit)
 void OS_MemoryStatusEx(uint64_t* totalPhys, uint64_t* availPhys);
 /* "81 0B": the display adapter (D3D adapter identifier of the original):

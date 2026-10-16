@@ -51,14 +51,14 @@ static void ButtonDown(HWND hwnd, int button, LPARAM lp)
 {
 	SetFocus(hwnd);
 	if(gWin32Handlers.mouse_button)
-		gWin32Handlers.mouse_button(button, 1, (int)(short)LOWORD(lp), (int)(short)HIWORD(lp));
+		gWin32Handlers.mouse_button(button, 1, Win32_FromWinX((int)(short)LOWORD(lp)), Win32_FromWinY((int)(short)HIWORD(lp)));
 }
 
 // a button release to the engine's handler
 static void ButtonUp(int button, LPARAM lp)
 {
 	if(gWin32Handlers.mouse_button)
-		gWin32Handlers.mouse_button(button, 0, (int)(short)LOWORD(lp), (int)(short)HIWORD(lp));
+		gWin32Handlers.mouse_button(button, 0, Win32_FromWinX((int)(short)LOWORD(lp)), Win32_FromWinY((int)(short)HIWORD(lp)));
 }
 
 /* WM_MOUSEACTIVATE while the movie's video window covers the picture: the
@@ -130,6 +130,7 @@ LRESULT CALLBACK Win32_MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 			PAINTSTRUCT ps;
 			BeginPaint(hwnd, &ps);
 			EndPaint(hwnd, &ps);
+			Win32_FillLetterbox(NULL); // the bars beside a scaled picture
 			if(gWin32Handlers.paint)
 				gWin32Handlers.paint();
 			return 0;

@@ -127,9 +127,14 @@ void Text_SetRubyFont(const char* face, int size, int widthPct, int dx, int dy);
 extern int32_t gTextFunc[TEXT_FUNC_MAX]; // [0] = function 0, [1 + n] = function 0x80000000 + n
 uint32_t Text_SetFunction(uint32_t func, int32_t param);
 int Text_SetScaleDivisor(int32_t v); // "91 99" (1.529 on): 1 ok, 0 bad
-extern int32_t gCharPitch;           // extra pixels per non-proportional character
-extern int32_t gHangBrackets;        // hang a leading bracket into the margin
-extern int32_t gTextIndent;          // line-start indent when ruby is on (the margin "91 98" leaves for readings), pixels
+/* 1.640 on, "92 9B": what the last rich layout into a bitmap ("91 9C" /
+ * "91 9D" / "92 9C") left behind - the pen position after its last
+ * character and the colour in effect there (after the colour tags) */
+extern int32_t gTextLastPos[2];
+extern uint32_t gTextLastColour;
+extern int32_t gCharPitch;    // extra pixels per non-proportional character
+extern int32_t gHangBrackets; // hang a leading bracket into the margin
+extern int32_t gTextIndent;   // line-start indent when ruby is on (the margin "91 98" leaves for readings), pixels
 
 // "91 98": the parameters of the rich output; 0 ok, 0x80000001 bad sizePct, 0x80000002 bad indent
 int Text_SetRichParams(int charDelay, int fadeSteps, int pitch, int sizePct, int indent, int hangBrackets);
@@ -161,6 +166,7 @@ typedef struct RichChar // one laid-out glyph
 	char* rubyWord;     // set on the base character of a ruby word: the word
 	int32_t rubyExtent; // width (height) the reading needs, pixels
 	int32_t kind;       // 0 normal, 1 shifted small (vertical), 2 ruby
+	int32_t srcOfs;     // (OpenBGI) the byte offset in the laid-out string of the character this glyph is for
 	struct RichChar* next;
 } RichChar_t;
 
@@ -175,6 +181,8 @@ int FontInfo_GlyphW(const FontInfo_t* fi); // size * widthPct / 100
 int Text_RubySize(int size);               // max(4, size * pct / 100)
 // width of `str` in `font`; out = {total, total - firstGap/2 - lastGap/2, total - lastGap/2}
 int Text_Measure(int32_t out[3], const char* str, int font, int proportional);
+// "92 99" (1.653 on): the ABC widths (three words per character) of `str` in `font`; 1 ok, 0 unknown font
+int Text_AbcWidths(int32_t* out, int32_t* outCount, const char* str, int font);
 // the same with the font given (the markup's temporary fonts)
 int Text_MeasureInfo(int32_t out[3], const char* str, const FontInfo_t* fi, int proportional);
 
@@ -245,6 +253,64 @@ int Text_DrawToBitmap(Bmp_t* dst, int* outLines, int x, int y, const char* str, 
 	const char* tags, int font, int proportional, int hang, int swing, int spacing,
 	uint32_t colour, uint32_t rubyColour, const int32_t style[5], int effect, int level);
 
+/* ---- the OpenBGI extensions ("EF xx", src/vm/ops_obgi.c; docs/obgi.md) ---------
+ * None of this is in an original build.  Everything is off until a script
+ * asks for it, and the engine then lays text out as the original does. */
+extern int32_t gTextDirection; // "EF 01": 0 the original left-to-right layout, 1 right-to-left paragraphs, 2 left-to-right paragraphs that may hold right-to-left text
+extern int32_t gTextWordWrap;  // "EF 03": lines break between words in the generations before 1.494 too
+extern int32_t gTextScroll;    // "EF 08": message text that does not fit its window scrolls (window.h: the text document)
+extern int32_t gTextScrollMs;  // the time a scroll of one line takes, ms
+typedef struct TextArrow       // one of the two scroll arrows shown on a window with more text than fits ("EF 09")
+{
+	Bmp_t bmp;    // the picture (a private copy; pixels NULL: the built-in triangle)
+	int32_t x, y; // where it goes in the window, pixels; -1: at the end of the first / last text line
+} TextArrow_t;
+extern TextArrow_t gTextArrows[2]; // [0] up, [1] down
+
+void Text_SetDirection(int mode); // 0 .. 2; anything else is taken as 0
+void Text_SetWordWrap(int on);
+void Text_SetScrolling(int on, int msPerLine); // "EF 08"; msPerLine <= 0 keeps the time (120 at start)
+// the picture of script bitmap `bmp` (-1: the built-in one) and the position of arrow `which`; 1 ok, 0 no such bitmap
+int Text_SetArrow(int which, int bmp, int x, int y);
+/* the picture of arrow `which` for a window whose font is `size` pixels,
+ * in `colour`: the script's, or the built-in triangle painted into *tmp
+ * (the caller frees tmp->pixels); the result points to one of the two */
+const Bmp_t* Text_ArrowBitmap(int which, int size, uint32_t colour, Bmp_t* tmp);
+/* the no-break run starting at `p` for the word wrap of "EF 03" (letters,
+ * digits and the punctuation attached to them, up to a space or a
+ * full-width character) copied to out; the byte count, 0 when `p` starts
+ * none */
+int Text_WrapWordRun(char* out, const char* p);
+/* the right-to-left layout core (layout_bidi.c): Text_LayoutCoreH hands
+ * over to it while gTextDirection is not 0; same arguments and result */
+int Text_LayoutCoreBidi(RichState_t* rich, int32_t* outLines, const char* str, int rubyOn, RubyDict_t* dict,
+	int32_t cur[2], const Rect_t* area, int adv, int font, int proportional,
+	int hang, uint32_t colour, const int32_t style[5]);
+/* draw `str` on one line (or several, at its line breaks) into `dst` with
+ * its first pixel column at x: the plain bitmap text ("92 1C") while the
+ * text direction is not 0.  *measure gets the width drawn.  1 ok, 0 for an
+ * unknown font. */
+int Text_DrawBidiLine(Bmp_t* dst, int* measure, int x, int y, const char* str, int font, uint32_t colour, int effect,
+	int level, int proportional);
+// the "swing" alignment of right-to-left lines: 1 centres each line in the area; 2 (right) is where they are already
+void Text_AlignBidi(RichState_t* rich, int32_t cur[2], const Rect_t* area, int swing);
+/* "EF 0A": how much of `src` fits into `lines` lines of window `win`
+ * (its font, width and line advance), laid out as a message from the start
+ * of a line.  That part - cut at the end of a line, at most `maxBytes`
+ * bytes, without the line break that ended it - is copied to `dst`
+ * (maxBytes + 1 bytes); the result is the number of bytes of `src` used
+ * up, break included.  0 when the window has no font. */
+int Text_Fit(Window_t* win, char* dst, const char* src, int lines, int maxBytes, int rubyOn, int hang);
+// "EF 0B": the width in pixels of `str` on one line in font `font`, as the message layout would place it; 0 for an unknown font
+int Text_LineWidth(const char* str, int font, int proportional);
+/* lay `str` out as Window_DrawText does (dictionary from `tags`, readings,
+ * alignment) but keep the nodes instead of drawing them: the text document
+ * of a scrolling window takes them.  Horizontal text only.  1 ok, 0 for an
+ * unknown font. */
+int Text_LayoutNodes(RichState_t* rich, int32_t* outLines, int32_t cur[2], const Rect_t* area, const char* str,
+	int parseTags, const char* tags, int font, int proportional, int hang, int swing, int spacing, uint32_t colour,
+	uint32_t rubyColour, const int32_t style[5]);
+
 // ---- the text wait classes (src/wait/wait_text.c) -------------------------------
 typedef struct WaitTextOut WaitTextOut_t;
 
@@ -293,6 +359,7 @@ struct WaitTextOut
 	int32_t linesLeft;      // lines still to scroll away in that clear
 	int32_t finishNow;      // end the wait at the next step
 	uint32_t layerKey;      // the input layer key pushed for the output
+	uint32_t rawInput;      // (OpenBGI) everything Input_Poll reported in this poll, for the scrolling of "EF 08"
 };
 
 typedef struct WaitTextRich // the paced rich output ("91 90", "91 92", "92 90")
@@ -302,6 +369,23 @@ typedef struct WaitTextRich // the paced rich output ("91 90", "91 92", "92 90")
 	int32_t rubyOn;      // readings are shown
 	int32_t style[5];    // the shadow style the glyphs were built with
 	uint32_t rubyColour; // the readings' colour
+	// (OpenBGI) the scrolling output of "EF 08", see wait_text_scroll.c; all zero in the original's mode
+	int32_t scrollOn;      // the nodes belong to the window's text document, which may scroll
+	uint32_t docSerial;    // that document's serial number
+	RichChar_t** docLink;  // where this output's nodes hang in the document
+	int32_t scrollFrom;    // a running scroll: where it started,
+	int32_t scrollTo;      // where it ends (also the resting position), document pixels
+	uint32_t scrollStart;  // and when it started (tick count); 0: no scroll running
+	uint32_t scrollTime;   // its duration, ms
+	int32_t morePause;     // the view is full and waits for input before the text goes on
+	int32_t pauseScroll;   // where the view stood when the pause began
+	uint32_t moreUntil;    // tick count the pause ends by itself (auto-advance); 0: never
+	int32_t cursorPlaced;  // the click cursor's line has been made room for
+	int32_t arrowsOn;      // bit 0: the up arrow is shown, bit 1: the down arrow
+	int32_t arrowLevel[2]; // the transparency they are shown at
+	uint32_t arrowBlink;   // tick count the down arrow last changed its blink phase
+	int32_t arrowPhase;    // 0 shown, 1 dimmed
+	uint32_t holdNext;     // tick count of the next repeat while an arrow is held down
 } WaitTextRich_t;
 
 extern const WaitTextVtbl_t WaitTextOut_Vtbl, WaitTextRich_Vtbl, WaitTextRichV_Vtbl;
@@ -329,5 +413,11 @@ int WaitTextRich_SetTextEx(WaitTextRich_t* w, const char* str, int rubyOn, int h
 void WaitTextRich_SetColours(WaitTextRich_t* w, uint32_t colour, uint32_t rubyColour);
 void WaitTextRich_SetRubyColour(WaitTextRich_t* w, uint32_t colour);
 void WaitTextRich_SetStyle(WaitTextRich_t* w, const int32_t s[5]);
+// the scrolling output of the OpenBGI extension "EF 08" (src/wait/wait_text_scroll.c), called by the classes above
+int WaitTextScroll_Active(WaitTextOut_t* t);  // the output's glyphs are in the window's text document
+void WaitTextScroll_Input(WaitTextOut_t* t);  // take the scroll input out of this poll's input
+int WaitTextScroll_HasMore(WaitTextOut_t* t); // text lies below the view
+int WaitTextScroll_Step(WaitTextOut_t* t);    // the step; 1 when the wait is over
+void WaitTextScroll_End(WaitTextOut_t* t);    // the output is destroyed
 
 #endif // BGI_GFX_TEXT_H_

@@ -263,6 +263,23 @@ static void Voice_Mix(Voice_t* v, int32_t* acc, int frames)
 
 /* the audio thread's callback: every voice summed into `frames` stereo
  * frames of `out`, clamped to 16 bits, 4096 frames at a time */
+// the external source (Wm_SetExternalMix), read on the mixer's thread under the lock
+static WmExternalMix_t gExternalMix;
+static void* gExternalMixUser;
+
+void Wm_SetExternalMix(WmExternalMix_t fn, void* user)
+{
+	OS_LockEnter(gWmLock);
+	gExternalMix = fn;
+	gExternalMixUser = user;
+	OS_LockLeave(gWmLock);
+}
+
+int Wm_MixRunning(void)
+{
+	return gAudioRunning;
+}
+
 void Mixer_Fill(void* user, int16_t* out, int frames)
 {
 	static int32_t acc[4096 * 2];
@@ -277,6 +294,8 @@ void Mixer_Fill(void* user, int16_t* out, int frames)
 			Voice_Mix(&gBgmVoices[i], acc, n);
 		for(i = 0; i < WM_SE_SLOTS; i++)
 			Voice_Mix(&gSeVoices[i], acc, n);
+		if(gExternalMix)
+			gExternalMix(gExternalMixUser, acc, n);
 		for(i = 0; i < n * 2; i++)
 		{
 			int32_t v = acc[i];

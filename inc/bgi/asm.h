@@ -153,10 +153,27 @@ size_t Asm_Format(const AsmInsn_t* in, EngineGen_t gen, char* buf, size_t n);
 
 // ---- string literals (strlit.c) ------------------------------------------------------------------
 
+/* The encoding of the strings in a compiled file.  A source is always
+ * UTF-8 text; normally a literal is converted to Shift-JIS (code page
+ * 932), which is what every engine before 1.653 expects.  For a game that
+ * runs with UTF-8 text ("81 00" of 1.653 on, or the OpenBGI instruction
+ * "EF 02" in any generation) the literals are kept as they are instead:
+ * the tools' `-u` option sets that as the default, a `#encoding utf-8`
+ * (or `#encoding sjis`) line in a source sets it from that line on. */
+extern int gAsmUtf8;                         // the literals are kept in UTF-8 right now
+void Asm_SetDefaultStringEncoding(int utf8); // the tools' -u option
+void Asm_ResetStringEncoding(void);          // back to the default: at the start of every file compiled or decompiled
+/* the argument of an `#encoding` line: `p` is just behind the word
+ * "encoding"; the name up to the end of the line is taken ("utf-8" /
+ * "utf8", "sjis" / "shift-jis" / "cp932") and the encoding switched.
+ * Returns where the lexer goes on; *ok is 0 for an unknown name. */
+const char* Asm_EncodingDirective(const char* p, const char* end, int* ok);
+
 /* Write `n` bytes of Shift-JIS as a quoted literal: UTF-8 text with the
  * escapes \n \r \t \\ \" and \xNN, chosen so that Asm_ReadStringLiteral
  * gets the same bytes back (non-ASCII bytes are written as \xNN when the
- * UTF-8 conversion would not be exact). */
+ * UTF-8 conversion would not be exact).  With gAsmUtf8 the bytes are
+ * UTF-8 already and written as they are (\xNN when they are not valid). */
 void Asm_WriteStringLiteral(FILE* out, const uint8_t* s, uint32_t n);
 /* Read the literal at `p` (its opening quote; the text ends at `end`) into
  * a malloc'ed buffer (`*outBytes`, `*outLen` bytes, no NUL added) and set

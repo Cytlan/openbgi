@@ -24,6 +24,7 @@
 #define BGI_BPC_H_
 
 #include "bgi/asm.h"
+#include "bgi/prep.h"
 
 // what Bpc_Decompile writes (zero the struct for the defaults)
 typedef struct BpcDecOptions
@@ -50,10 +51,12 @@ typedef struct BpcResult
 	int labelCount;
 } BpcResult_t;
 
-/* Compile source text (`len` bytes) for a generation (`#engine NAME` in
- * the text overrides `gen`) into *out.  Messages go to `log` (NULL:
- * stderr) as "<file>:<line>: error: ..."; `fileName` names the text in
- * them. */
-void Bpc_Compile(const char* text, size_t len, const char* fileName, EngineGen_t gen, FILE* log, BpcResult_t* out);
+/* Compile source text (`len` bytes, a NUL after them) for a generation
+ * (`#engine NAME` in the text overrides `gen`) into *out.  The text goes
+ * through the preprocessor (prep.h: `#include`, `#define`) first.
+ * Messages go to `log` (NULL: stderr) as "<file>:<line>: error: ...";
+ * `fileName` names the text in them and, unless `inc` (may be NULL) says
+ * otherwise, is the path its `#include` lines are relative to. */
+void Bpc_Compile(const char* text, size_t len, const char* fileName, EngineGen_t gen, const PrepIncludes_t* inc, FILE* log, BpcResult_t* out);
 
 #endif // BGI_BPC_H_

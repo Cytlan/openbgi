@@ -555,7 +555,8 @@ static void WriteSource(FILE* b, const Scn16Scene_t* s, const char* name)
 {
 	uint8_t* marks = FindLabels(s);
 	uint32_t i;
-	fprintf(b, "// %s - decompiled by bgiscn (docs/scenario.md)\n#style inline\n\n", name ? name : "scene");
+	fprintf(b, "// %s - decompiled by bgiscn (docs/scenario.md)\n#style inline\n%s\n", name ? name : "scene",
+		gAsmUtf8 ? "#encoding utf-8\n" : "");
 	for(i = 0; i < s->count; i++)
 	{
 		const Scn16Insn_t* in = &s->insns[i];
@@ -632,7 +633,7 @@ int Scn16_Decompile(const uint8_t* data, uint32_t size, const ScnDecOptions_t* o
 		uint8_t* back;
 		uint32_t backSize;
 		FILE* log = opt->verbose ? stderr : tmpfile();
-		int errors = Scn16_Compile(text, (size_t)len, opt->name ? opt->name : "scene", log ? log : stderr, &back, &backSize);
+		int errors = Scn16_Compile(text, (size_t)len, opt->name ? opt->name : "scene", NULL, log ? log : stderr, &back, &backSize);
 		if(log && log != stderr)
 			fclose(log);
 		if(errors || backSize != size || memcmp(back, data, size) != 0)
@@ -694,7 +695,7 @@ typedef struct Comp
 	int line;
 	int errors;
 	FILE* log;
-	const char* fileName;
+	const PrepText_t* prep; // the expanded text being compiled: where its lines came from
 	Token_t tok;
 	int peeked;
 	Token_t peek;
@@ -716,7 +717,11 @@ static void Errorf(Comp_t* c, int line, const char* fmt, ...)
 	c->errors++;
 	if(c->errors > 50)
 		return;
-	fprintf(c->log, "%s:%d: error: ", c->fileName, line);
+	{ // `line` is a line of the expanded text
+		int srcLine;
+		const char* file = Prep_Where(c->prep, line, &srcLine);
+		fprintf(c->log, "%s:%d: error: ", file, srcLine);
+	}
 	va_start(ap, fmt);
 	vfprintf(c->log, fmt, ap);
 	va_end(ap);
@@ -787,6 +792,13 @@ static void ReadToken(Comp_t* c, Token_t* t)
 			c->p++;
 		t->kind = T_DIRECTIVE;
 		snprintf(t->text, sizeof t->text, "%.*s", (int)(c->p - s), s);
+		if(strcmp(t->text, "encoding") == 0)
+		{ // "#encoding utf-8": takes effect here, before the next literal is read
+			int ok;
+			c->p = Asm_EncodingDirective(c->p, c->end, &ok);
+			if(!ok)
+				Errorf(c, c->line, "#encoding utf-8 or #encoding sjis");
+		}
 		return;
 	}
 	if(*c->p == '"')
@@ -1248,6 +1260,8 @@ int Scn16_IsSource(const char* text, size_t len)
 {
 	const char* p = text;
 	const char* end = text + len;
+	if(len >= 3 && memcmp(p, "\xEF\xBB\xBF", 3) == 0)
+		p += 3; // a byte order mark
 	// skip blank lines and comments up to the first directive
 	while(p < end)
 	{
@@ -1277,20 +1291,30 @@ int Scn16_IsSource(const char* text, size_t len)
 	return (size_t)(end - p) >= 6 && memcmp(p, "inline", 6) == 0 && (end - p == 6 || !IsIdentChar((unsigned char)p[6]));
 }
 
-int Scn16_Compile(const char* text, size_t len, const char* fileName, FILE* log, uint8_t** outData, uint32_t* outSize)
+int Scn16_Compile(const char* text, size_t len, const char* fileName, const PrepIncludes_t* inc, FILE* log, uint8_t** outData,
+	uint32_t* outSize)
 {
 	Comp_t c;
+	PrepText_t pre;
 	uint32_t textStart, size;
 	int k;
 	uint8_t* out;
-	memset(&c, 0, sizeof c);
-	c.p = text;
-	c.end = text + len;
-	c.line = 1;
-	c.log = log ? log : stderr;
-	c.fileName = fileName ? fileName : "source";
 	*outData = NULL;
 	*outSize = 0;
+	// the includes and the defined names first (prep.h): the scene is compiled from the expanded text
+	Prep_Expand(text, len, fileName ? fileName : "source", inc, log, &pre);
+	if(pre.errors)
+	{
+		k = pre.errors;
+		Prep_Free(&pre);
+		return k;
+	}
+	memset(&c, 0, sizeof c);
+	c.p = pre.text;
+	c.end = pre.text + pre.len;
+	c.line = 1;
+	c.log = log ? log : stderr;
+	c.prep = &pre;
 	Next(&c);
 	if(c.tok.kind != T_DIRECTIVE || strcmp(c.tok.text, "style") != 0 || Peek(&c)->kind != T_IDENT ||
 		strcmp(Peek(&c)->text, "inline") != 0)
@@ -1304,7 +1328,8 @@ int Scn16_Compile(const char* text, size_t len, const char* fileName, FILE* log,
 	{
 		if(c.tok.kind == T_DIRECTIVE)
 		{
-			Errorf(&c, c.tok.line, "no directive but '#style inline' in a 16-bit scene");
+			if(strcmp(c.tok.text, "encoding") != 0) // (the lexer has switched the encoding of the literals)
+				Errorf(&c, c.tok.line, "#%s: a 16-bit scene knows '#style inline', '#encoding', '#include', '#define' and '#undef'", c.tok.text);
 			Next(&c);
 			continue;
 		}
@@ -1324,8 +1349,10 @@ int Scn16_Compile(const char* text, size_t len, const char* fileName, FILE* log,
 	textStart = c.textsLen ? (c.codeLen + 15) & ~15u : c.codeLen;
 	size = textStart + c.textsLen;
 	out = (uint8_t*)calloc(size + 1, 1);
-	memcpy(out, c.code, c.codeLen);
-	memcpy(out + textStart, c.texts, c.textsLen);
+	if(c.codeLen)
+		memcpy(out, c.code, c.codeLen);
+	if(c.textsLen) // a scene without a message has no text table
+		memcpy(out + textStart, c.texts, c.textsLen);
 	for(k = 0; k < c.textRefCount; k++)
 	{
 		uint32_t v = textStart + c.textRefs[k].text;
@@ -1356,6 +1383,7 @@ int Scn16_Compile(const char* text, size_t len, const char* fileName, FILE* log,
 	free(c.fixups);
 	free(c.textRefs);
 	free(c.labels);
+	Prep_Free(&pre);
 	if(c.errors)
 	{
 		free(out);

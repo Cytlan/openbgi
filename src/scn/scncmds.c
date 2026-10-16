@@ -119,13 +119,10 @@ static void FreeProg(Prog_t* p)
 }
 
 // load every "*._bp" entry of the archive whose name starts with "scr" plus script._bp
-static int LoadPrograms(const char* path, Prog_t** out, int* count)
+static int LoadPrograms(ArcRead_t* a, Prog_t** out, int* count)
 {
-	ArcRead_t* a = ArcRead_Open(path);
 	uint32_t i;
 	int n = 0;
-	if(!a)
-		return 0;
 	*out = (Prog_t*)calloc(a->count + 1, sizeof **out);
 	for(i = 0; i < a->count; i++)
 	{
@@ -158,7 +155,6 @@ static int LoadPrograms(const char* path, Prog_t** out, int* count)
 		else
 			FreeProg(p);
 	}
-	ArcRead_Close(a);
 	*count = n;
 	return 1;
 }
@@ -458,11 +454,23 @@ static void ModuleTag(const char* module, char* out, size_t n)
 
 int Scn_ScanCommands(const char* sysprgPath, ScnCmdTable_t* out)
 {
+	ArcRead_t* a = ArcRead_Open(sysprgPath);
+	int ok;
+	memset(out, 0, sizeof *out);
+	if(!a)
+		return 0;
+	ok = Scn_ScanCommandsArc(a, sysprgPath, out);
+	ArcRead_Close(a);
+	return ok;
+}
+
+int Scn_ScanCommandsArc(ArcRead_t* a, const char* sysprgPath, ScnCmdTable_t* out)
+{
 	Prog_t* progs = NULL;
 	int count = 0, i, cap = 0, ctrl = -1;
 	uint32_t table = 0, vecBase = 0, subs[H_COUNT] = {0};
 	memset(out, 0, sizeof *out);
-	if(!LoadPrograms(sysprgPath, &progs, &count))
+	if(!LoadPrograms(a, &progs, &count))
 		return 0;
 	for(i = 0; i < count; i++)
 		if(strcmp(progs[i].name, "scrctrl") == 0)

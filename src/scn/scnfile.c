@@ -247,7 +247,8 @@ uint8_t* Scn_Save(const ScnFile_t* f, uint32_t* size)
 	}
 	for(i = 0; i < f->codeLen; i++)
 		Wr32(out + base + 4 * i, f->code[i]);
-	memcpy(out + base + f->codeLen * 4, f->strings, f->stringsLen);
+	if(f->stringsLen)
+		memcpy(out + base + f->codeLen * 4, f->strings, f->stringsLen);
 	*size = total;
 	return out;
 }

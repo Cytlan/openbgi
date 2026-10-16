@@ -112,6 +112,51 @@ int Text_MeasureInfo(int32_t out[3], const char* str, const FontInfo_t* fi, int 
 	return 1;
 }
 
+/* "92 99" (1.653 on): the ABC widths of every character of `str` in
+ * font `font` - A the blank columns before the ink, B the ink width, C
+ * the blank columns after it up to the fixed advance (the full glyph
+ * width, half of it for a single-byte character) - as three words per
+ * character into `out` (NULL counts only); *outCount receives the number
+ * of characters.  The original asks GDI for the ABC of each glyph; here
+ * the ink extent of the rasterised glyph stands in.  1 ok, 0 unknown
+ * font. */
+int Text_AbcWidths(int32_t* out, int32_t* outCount, const char* str, int font)
+{
+	FontInfo_t fi;
+	Bmp_t cell;
+	int glyphW, n = 0;
+	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+		return 0;
+	Bmp_AllocScreen(&cell, 2 * fi.size, fi.size, 1);
+	glyphW = FontInfo_GlyphW(&fi);
+	while(*str)
+	{
+		Bmp_t view = cell;
+		Glyph_t g;
+		uint32_t code;
+		int len = TextGetChar(&code, str);
+		int adv = TextIsWide(code, len) ? glyphW : glyphW / 2;
+		if(out)
+		{
+			int a, b;
+			Text_PaintGlyph(&view, &g, (int)code, fi.font, 0xffffff);
+			a = g.left;
+			b = g.right >= g.left ? g.right - g.left + 1 : 0;
+			if(!b)
+				a = 0;
+			out[n * 3] = a;
+			out[n * 3 + 1] = b;
+			out[n * 3 + 2] = adv - a - b;
+		}
+		n++;
+		str += len;
+	}
+	BGI_Free(cell.pixels);
+	if(outCount)
+		*outCount = n;
+	return 1;
+}
+
 // ---- the link sections and tags of the markup -------------------------------------------------
 
 /* "91 9E" (1.529 on): the "<l>..</l>" (or "<L>..</L>") sections of `str`;

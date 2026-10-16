@@ -109,7 +109,14 @@ Directives: `.engine NAME` (overrides `-e`), `.str "text"[, "text"]`
 listing and become Shift-JIS (CP932) in the file; `\xNN` inserts a byte,
 `\n \r \t \\ \"` as usual.  The disassembler writes a string in UTF-8 only
 when the conversion there and back is exact (CP932 has duplicate codes
-for a few characters), else as escaped bytes.
+for a few characters), else as escaped bytes.  For a game whose text is
+UTF-8, `-u` (or a line `#encoding utf-8` in a source) keeps the strings as
+they are written (`docs/bpc.md`, "Strings in UTF-8").
+
+The second byte of the families is named after the family: `sys.yield`,
+`gfx0.sprite_create`, `snd.se_play`, and `obgi.text_scroll` for OpenBGI's
+own instructions, the "EF xx" family, which every engine profile has
+(`docs/obgi.md`).
 
 ## How the disassembler finds the code
 

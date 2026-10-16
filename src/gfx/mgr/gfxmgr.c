@@ -27,6 +27,7 @@
 #include "bgi/gfx/gfxmgr.h"
 #include "bgi/gfx/objects.h"
 #include "bgi/gfx/text.h"
+#include "bgi/gfx/bmpops.h"
 #include "bgi/gfx.h"
 #include "bgi/engine.h"
 #include "bgi/file.h"
@@ -381,6 +382,7 @@ void Gfx_Destroy(void)
 		BmpMgr_Delete(gBmpMgr);
 		gBmpMgr = NULL;
 	}
+	ToneCurve_FreeAll(); // (the original keeps them on the manager)
 	if(gArcMgr)
 	{
 		FileSet_Delete(gArcMgr); // (original: the pointer is left dangling; nothing uses it afterwards)

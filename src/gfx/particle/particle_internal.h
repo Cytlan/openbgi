@@ -66,6 +66,8 @@ struct Particle // base, 0x28 bytes
 	/* 1.494 on: the frame of an animated pattern ("C0 18"): 16.16 frame
 	 * position and its advance per tick */
 	int32_t framePos, frameRate;
+	// 1.640 on: the same for the pattern's alternate image ("C0 1A", type 1)
+	int32_t altPos, altRate;
 };
 
 typedef struct ParticleA // type 0, 0x34 bytes
@@ -131,6 +133,11 @@ typedef struct PatternAnim
 	int32_t rate1, rate2;       // frames per tick, 16.16: base and random spread
 } PatternAnim_t;
 extern PatternAnim_t gPatternAnim[2][PTCL_PATTERNS]; // [type][pattern]
+/* 1.640 on: the "alternate image" of a type 1 pattern ("C0 1A"): a second
+ * animation, mixed into the picture by a level of 0 .. 0x100 ("C0 1B";
+ * 0 shows the picture alone, 0x100 the alternate frame alone) */
+extern PatternAnim_t gPatternAlt[PTCL_PATTERNS];
+extern int32_t gPatternAltLevel[PTCL_PATTERNS];
 
 // ---- patterns.c ---------------------------------------------------------------------------
 // a random integer: ((rand << 15) | rand) % |n + 1|, i.e. 0 .. n for n >= 0

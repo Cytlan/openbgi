@@ -252,6 +252,7 @@ void Vm_FrameServices(void)
 	Knob_Update();
 	Input_Poll(1, 1);
 	presented = PresentFrame();
+	Movie_Tick();         // the ffmpeg player's frame, when a movie plays that way
 	Dbg_OverlayPresent(); // the debugger over the picture, when it has no window of its own
 	if(BGI_TRY(f))
 	{

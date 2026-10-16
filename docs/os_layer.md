@@ -25,7 +25,7 @@ engine's own code use them.
 | time | `OS_TicksMs`, `OS_SleepMs`, `OS_LocalTime`, the 0.5 ms idle sleep | timeGetTime, waitable timers |
 | threads | locks, threads with a priority, atomics | CRITICAL_SECTION, CreateThread |
 | machine | memory status, names, CPUID / TSC for `src/sys/cpu.c` | GlobalMemoryStatus, cpuid |
-| window | create / show / move / title / minimise / close, screen size, frame metrics, display modes, full screen, DC blits of the back buffer, events, cursor, key state | the main window, DirectDraw mode switch, BitBlt / StretchDIBits |
+| window | create / show / move / title / minimise / close, screen size, frame metrics, display modes, full screen, the picture size inside a larger or smaller client (`OS_WindowSetPicture`, the "81 64" window size of 1.529 on), DC blits of the back buffer, events, cursor, key state | the main window, DirectDraw mode switch, BitBlt / StretchDIBits |
 | child windows | `OS_Child*` | the "B0 1x" pop-ups |
 | text entry | `OS_Edit*` | the subclassed EDIT control |
 | dialogs | `OS_MessageBox`, `OS_DialogInput1/2/Profile`, file / folder pickers, the installer dialogs | MessageBox, resources 0x71 / 0x72 / 0x77 |
@@ -33,6 +33,8 @@ engine's own code use them.
 | debugger | `OS_DebugWindowOpen/Close/Alive/Present` and the `debug_*` events: a second top-level window for `src/dbg/` (not in the WebAssembly build; a back end returning 0 gets the overlay) | none |
 | audio | `OS_AudioStart/Stop/Available` (a pull callback), MCI, PlaySound | DirectSound, mciSendCommand |
 | movies | `OS_Movie*` | the DirectShow graph |
+| child processes | `OS_PipeProcStart/Read/Stop`, `OS_PathNative`: a program started with its standard output on a pipe, for the ffmpeg movie player (`src/sys/moviefx.c`) | CreateProcess |
+| the tools' file system | `OS_NativeStat`, `OS_NativeMkdir`, `OS_NativeRemove`, `OS_NativeList`, `OS_NativeSeek`, `OS_NativeAbsolute`, `OS_NativeArgs`: directories of the host for `bgidump` / `bgipack` (`docs/dump.md`), by native path; `OS_WorkerLimit`, `OS_RunWorkers`: a job shared out among forked processes (one after the other on Windows).  `src/os/*/native.c` | none |
 | shell | ShellExecute, wallpaper, processes, shortcuts, registry, special folders, IPC to a running instance | |
 
 Events reach the engine through `OsEventHandlers_t` from `OS_PumpMessages()`
@@ -68,7 +70,10 @@ nanosleep.
 `dbgwin.c`).  The main window is a fixed-size top-level; full screen sets
 `_NET_WM_STATE_FULLSCREEN` and scales the display mode the engine asked
 for onto the screen, centred, translating every coordinate the engine
-sees (cursor, mouse events, `OS_WindowGetRect`) back into the mode space.
+sees (cursor, mouse events, `OS_WindowGetRect`) back into the mode space;
+the same mapping serves a windowed client of another size than the
+picture (`OS_WindowSetPicture`, the "81 64" window size), where the
+picture is scaled into the client.
 Blits convert the 16-bit RGB555 or 32-bit back buffer rows to the
 visual's layout and `XPutImage` them; `OS_StretchToWindow` filters
 bilinearly when the engine asked for HALFTONE.  Keys are mapped from
@@ -109,9 +114,17 @@ horizontal emboldening, like GDI's overstrike.
 
 **Audio** (`audio.c`) - ALSA when `pkg-config alsa` succeeds at build time
 (20 ms periods on `default`), else a silent thread that pulls the mixer
-at the same pace.  MCI, PlaySound and movies report failure (no CD audio,
-no `.wav` jingle, "90 F0" returns 0 as for a file that could not be
-rendered).
+at the same pace.  MCI and PlaySound report failure (no CD audio, no
+`.wav` jingle); `OS_MovieOpen` answers `OS_MOVIE_FAILED`, on which the
+engine's movie player (`src/gfx/movie.c`) falls back to `src/sys/moviefx.c`:
+`ffprobe` for the length and frame rate, one `ffmpeg` child decoding the
+video to raw BGRA frames at the picture size and another the sound to
+16-bit stereo at 44100 Hz, both read through `OS_PipeProcStart` /
+`OS_PipeProcRead` (`pipeproc.c`: posix_spawn with the output on a pipe, a
+bare program name tried next to the binary first); the frames are shown
+on the engine's clock through `Window_DcBlit`, the sound goes into the
+Wave Master mixer through its external tap (`Wm_SetExternalMix`).  Without
+the programs the movie is skipped and "90 F0" returns 0, as before.
 
 ## The Win32 back end
 
@@ -258,4 +271,15 @@ IGraphBuilder::RenderFile (its three special results mapped to
 main window at the picture rectangle, IMediaEventEx::SetNotifyWindow with
 WM_APP, IMediaSeeking for the length (stop position converted to media
 time, / 10000) and the running test, IBasicAudio for the volume, and the
-release order of the original's stop routine.
+release order of the original's stop routine.  A file the graph cannot
+render falls back to the ffmpeg player of the POSIX back end when
+`ffmpeg.exe` / `ffprobe.exe` are found (`pipeproc.c`: CreateProcessW
+with an inheritable pipe as the standard output, the arguments quoted
+the way the C runtime parses them).
+
+**The window size** - a windowed client of another size than the
+picture ("81 64" of 1.529 on, `OS_WindowSetPicture`) is handled as the
+full-screen mapping: the picture is StretchDIBits'ed into the client
+with black bars where the aspect differs, and the cursor positions,
+mouse events and `OS_ScreenToClient` / `OS_ClientToScreen` are mapped
+between the two spaces.

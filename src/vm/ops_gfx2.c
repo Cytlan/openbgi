@@ -532,6 +532,49 @@ static int Opcode_Gfx2_SetLinkColour(Thread_t* t)
 	return 0;
 }
 
+/* 92 99 (1.653 on): out, count, str, fontNo, size, widthPct, bold → r
+ * The ABC widths of the characters of `str` in the numbered font (three
+ * words each: blank columns before the ink, the ink width, blank columns
+ * after it) into `out` (0 counts only) and their number into *count;
+ * cnfgsmpltxt2._bp lays its font sample out by them.  r is 0, or the
+ * font's error (0x80000001 bad size, ..2 bad width, ..3 bad number) -
+ * pushed, not raised. */
+static int Opcode_Gfx2_TextAbcWidths(Thread_t* t)
+{
+	int bold = (int)Thread_Pop(t), widthPct = (int)Thread_Pop(t), size = (int)Thread_Pop(t);
+	int fontNo = (int)Thread_Pop(t);
+	const char* str = (const char*)PopPtr(t);
+	int32_t* count = (int32_t*)PopPtr(t);
+	int32_t* out = (int32_t*)PopPtr(t);
+	int handle, r = BmpOp_FontOpen(&handle, fontNo, size, widthPct, bold);
+	if(r == 0)
+		Text_AbcWidths(out, count, str, handle);
+	Thread_Push(t, (uint32_t)r);
+	return 0;
+}
+
+/* 92 9B (1.640 on): no, out →
+ * A parameter of the last rich text layout into a bitmap ("91 9C" / "91
+ * 9D" / "92 9C") into *out: 0x100 the pen position after its last
+ * character (two words), 0x101 the text colour in effect there (the colour
+ * tags applied).  snsctrl._bp continues a message where the last one
+ * ended.  Any other number is a script error. */
+static int Opcode_Gfx2_TextLayoutParam(Thread_t* t)
+{
+	int32_t* out = (int32_t*)PopPtr(t);
+	uint32_t no = Thread_Pop(t);
+	switch(no)
+	{
+		case 0x100:
+			out[0] = gTextLastPos[0];
+			out[1] = gTextLastPos[1];
+			break;
+		case 0x101: out[0] = (int32_t)gTextLastColour; break;
+		default: GFX_ERROR(t, MSG_BAD_TEXT_PARAM_NO, no);
+	}
+	return 0;
+}
+
 /* 92 98 (1.588 on): code, bmp, x, y, w, h →
  * Give the private text code 0xFF01 .. 0xFFFF its own picture: the w x h
  * region of bitmap `bmp` at (x, y) (bmp = -1 drops the picture).  The
@@ -574,7 +617,7 @@ static int Opcode_Gfx2_AlphaToScreenGray(Thread_t* t)
 }
 
 // -------------------------------------------------------------------------
-// 92 F2, 92 F4 : video textures (1.494 on)
+// 92 F2, 92 F4, 92 F5 : video textures (1.494 on)
 // -------------------------------------------------------------------------
 
 /* 92 F2 (1.494 on): name, arc, a, b, bmp → code
@@ -614,7 +657,7 @@ static int Opcode_Gfx2_MoviePlayArc(Thread_t* t)
 	return 0;
 }
 
-/* 92 F1 (1.494 on): &no, &info, name, arc, streamed →
+/* 92 F1 (1.494 on): &no, &info, arc, name, streamed →
  * The BF_Movie sequence load of "90 F4" (the wait pushes 0 ok / 1 / 2 not
  * a movie when it ends; the thread blocks on it).  `streamed` asks for
  * the form that keeps only the header and index in memory and reads the
@@ -624,8 +667,8 @@ static int Opcode_Gfx2_MoviePlayArc(Thread_t* t)
 static int Opcode_Gfx2_SeqLoad(Thread_t* t)
 {
 	int streamed = (int)Thread_Pop(t);
-	const char* arc = (const char*)PopPtr(t);
 	const char* name = (const char*)PopPtr(t);
+	const char* arc = (const char*)PopPtr(t);
 	int32_t* info = (int32_t*)PopPtr(t);
 	int32_t* outNo = (int32_t*)PopPtr(t);
 	(void)streamed;
@@ -639,6 +682,21 @@ static int Opcode_Gfx2_VideoTextureControl(Thread_t* t)
 	Thread_Pop(t);
 	Thread_Pop(t);
 	Thread_Push(t, 1);
+	return 0;
+}
+
+/* 92 F5 (1.573 on): bmp, out → code
+ * The playing position of the slot's video texture into *out: 0 ok, 1 the
+ * slot has no video texture, 4 no such slot (or the texture has no
+ * player).  No slot has one here, so 1 for a valid slot and *out is left
+ * alone (moviemngr._bp polls it only after a successful "92 F2"). */
+static int Opcode_Gfx2_VideoTexturePosition(Thread_t* t)
+{
+	Bmp_t b;
+	int bmp;
+	PopPtr(t);
+	bmp = (int)Thread_Pop(t);
+	Thread_Push(t, BmpMgr_GetInfo(gBmpMgr, &b, bmp) ? 1u : 4u);
 	return 0;
 }
 
@@ -657,11 +715,14 @@ void Vm_Optable92Init(void)
 		{0x98, Opcode_Gfx2_TextSetCharImage, GEN_1_588, GEN_LAST},
 		{0x9D, Opcode_Gfx2_SetLinkFont, GEN_1_529, GEN_LAST},
 		{0x9E, Opcode_Gfx2_TakeLinks, GEN_1_529, GEN_LAST},
+		{0x99, Opcode_Gfx2_TextAbcWidths, GEN_1_653, GEN_LAST},
+		{0x9B, Opcode_Gfx2_TextLayoutParam, GEN_1_640, GEN_LAST},
 		{0x9F, Opcode_Gfx2_SetLinkColour, GEN_1_529, GEN_LAST},
 		{0xF0, Opcode_Gfx2_MoviePlayArc, GEN_1_494, GEN_LAST},
 		{0xF1, Opcode_Gfx2_SeqLoad, GEN_1_547, GEN_LAST},
 		{0xF2, Opcode_Gfx2_VideoTextureAttach, GEN_1_494, GEN_LAST},
 		{0xF4, Opcode_Gfx2_VideoTextureControl, GEN_1_547, GEN_LAST},
+		{0xF5, Opcode_Gfx2_VideoTexturePosition, GEN_1_573, GEN_LAST},
 		{0x1A, Opcode_Gfx2_AlphaToScreenGray, GEN_1_494, GEN_LAST},
 		{0x37, Opcode_Gfx2_ObjSetFixedOffset2, GEN_1_69_472, GEN_1_69_472}, // the other builds have it at "91 36" from 1.494
 		{0x00, Opcode_Gfx2_DefineRipple, GEN_FIRST, GEN_LAST},

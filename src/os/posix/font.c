@@ -18,6 +18,12 @@
  * a file to use instead.  One FT_Face is shared by every font opened on the
  * same file; each OsFont owns an FT_Size so sizes do not interfere.
  *
+ * A character the face has no glyph for is looked up in another font
+ * (fontconfig's best match for the character, or a few well-known files),
+ * scaled to the same cell and put on the same baseline.  GDI does much the
+ * same for the scripts its fonts lack; here it is what lets Arabic or
+ * Hebrew text appear in a window whose font is a Japanese one.
+ *
  * GDI draws into an 8-bit palette DIB in the original, where it never
  * antialiases, so OS_FontRender() rasterises in monochrome; the engine does
  * its own oversampling and filtering (src/gfx/font.c).  The dialogs and the
@@ -55,14 +61,28 @@ typedef struct FaceRec
 	int refs; // the OsFonts using it; freed when the last one closes
 } FaceRec_t;
 
+#define FALLBACK_MAX  4 // other fonts one OsFont may borrow glyphs from
+#define FALLBACK_MISS 8 // character blocks remembered as having no fallback
+
+typedef struct Fallback // another font that has glyphs the face lacks
+{
+	FaceRec_t* rec; // the shared face
+	FT_Size size;   // scaled to this font's cell
+} Fallback_t;
+
 struct OsFont
 {
-	FaceRec_t* rec;      // the shared face
-	FT_Size size;        // this font's scaling of the shared face
+	FaceRec_t* rec;              // the shared face
+	FT_Size size;                // this font's scaling of the shared face
+	Fallback_t fb[FALLBACK_MAX]; // the fallback fonts opened so far
+	int fbCount;
+	uint32_t fbMiss[FALLBACK_MISS]; // blocks (code point >> 8) no font was found for: not searched again
+	int fbMissCount;
 	int height, width;   // as requested (pixels)
 	int bold;            // synthetic emboldening when the face is not bold itself
 	int italic;          // as requested
 	int oblique;         // shear the outlines: the face itself is not italic
+	int serif;           // the face name asked for the serif (Mincho) class: fallback fonts follow it
 	int ascent;          // baseline row inside the cell
 	FT_F26Dot6 emW, emH; // the character size handed to FreeType
 	FT_Pos boldStrength; // 26.6 horizontal emboldening, 0 = none
@@ -509,6 +529,11 @@ OsFont_t* OS_FontOpen(const char* face, int height, int width, int bold, int ita
 	f->width = width;
 	f->bold = bold;
 	f->italic = italic;
+	{
+		char utf8[0x200];
+		OsPosix_SjisToUtf8(face, utf8, sizeof utf8);
+		f->serif = IsMinchoName(utf8);
+	}
 
 	CellMetrics(ft, &asc, &desc);
 	cell = asc + desc;
@@ -558,11 +583,17 @@ OsFont_t* OS_FontOpen(const char* face, int height, int width, int bold, int ita
 	return f;
 }
 
-// release the size and the face reference; accepts NULL
+// release the size and the face reference (and those of the fallback fonts); accepts NULL
 void OS_FontClose(OsFont_t* f)
 {
+	int i;
 	if(!f)
 		return;
+	for(i = 0; i < f->fbCount; i++)
+	{
+		FT_Done_Size(f->fb[i].size);
+		FaceRelease(f->fb[i].rec);
+	}
 	FT_Done_Size(f->size);
 	FaceRelease(f->rec);
 	free(f);
@@ -576,25 +607,141 @@ static uint32_t SjisCodePoint(const char* sjis, int len)
 	return OsCommon_CodePoint(sjis, len, OsPosix_SjisChar);
 }
 
+// ---- fallback fonts ------------------------------------------------------------
+
+/* a font file that has a glyph for `cp`, other than the font's own: asked
+ * of fontconfig (the best scalable match of the font's class that covers
+ * the character), or found among a few well-known files that cover the
+ * scripts Japanese fonts lack; 0 when there is none */
+static int ResolveFallbackFile(OsFont_t* f, uint32_t cp, char* out, size_t n, int* index)
+{
+	static const char* const kFiles[] = {"DejaVuSans.ttf", "NotoSansArabic-Regular.ttf", "NotoNaskhArabic-Regular.ttf",
+		"NotoSansHebrew-Regular.ttf", "FreeSans.ttf", "FreeSerif.ttf", "unifont.otf", "unifont.ttf", NULL};
+	static const char* const kDirs[] = {"/usr/share/fonts", "/usr/local/share/fonts", NULL};
+	const char* const* name;
+	const char* const* dir;
+	*index = 0;
+#ifdef BGI_HAVE_FONTCONFIG
+	if(FcInit())
+	{
+		FcPattern* pat = FcPatternCreate();
+		FcCharSet* cs = FcCharSetCreate();
+		FcPattern* match;
+		FcResult res;
+		FcChar8* file = NULL;
+		int ok = 0;
+		FcCharSetAddChar(cs, (FcChar32)cp);
+		FcPatternAddCharSet(pat, FC_CHARSET, cs);
+		FcPatternAddString(pat, FC_FAMILY, (const FcChar8*)(f->serif ? "serif" : "sans-serif"));
+		FcPatternAddInteger(pat, FC_WEIGHT, f->bold ? FC_WEIGHT_BOLD : FC_WEIGHT_REGULAR);
+		FcPatternAddBool(pat, FC_SCALABLE, FcTrue);
+		FcConfigSubstitute(NULL, pat, FcMatchPattern);
+		FcDefaultSubstitute(pat);
+		match = FcFontMatch(NULL, pat, &res);
+		if(match && FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch)
+		{
+			snprintf(out, n, "%s", (const char*)file);
+			if(FcPatternGetInteger(match, FC_INDEX, 0, index) != FcResultMatch)
+				*index = 0;
+			ok = 1;
+		}
+		if(match)
+			FcPatternDestroy(match);
+		FcCharSetDestroy(cs);
+		FcPatternDestroy(pat);
+		if(ok)
+			return 1; // (the caller checks that the file really has the glyph)
+	}
+#endif
+	BGI_UNUSED(cp);
+	for(name = kFiles; *name; name++)
+		for(dir = kDirs; *dir; dir++)
+			if(FindFontFile(*dir, *name, 0, out, n))
+				return 1;
+	return 0;
+}
+
+/* the face and size to draw `cp` with when the font's own face has no
+ * glyph for it: one of the fallbacks already open, or a newly found one,
+ * scaled so that its cell is as tall as the font's and stretched like it.
+ * 0 when no font has the character (remembered per block of 256). */
+static int FallbackFor(OsFont_t* f, uint32_t cp, FT_Face* outFace, FT_Size* outSize)
+{
+	char path[1024];
+	int i, index = 0;
+	FaceRec_t* rec;
+	FT_Size size;
+	FT_Pos asc, desc, cell;
+	FT_F26Dot6 emH, emW;
+
+	for(i = 0; i < f->fbCount; i++)
+	{
+		if(FT_Get_Char_Index(f->fb[i].rec->face, cp))
+		{
+			*outFace = f->fb[i].rec->face;
+			*outSize = f->fb[i].size;
+			return 1;
+		}
+	}
+	for(i = 0; i < f->fbMissCount; i++)
+		if(f->fbMiss[i] == cp >> 8)
+			return 0;
+	rec = NULL;
+	if(f->fbCount < FALLBACK_MAX && ResolveFallbackFile(f, cp, path, sizeof path, &index))
+		rec = FaceAcquire(path, index);
+	if(rec && (rec == f->rec || FT_Get_Char_Index(rec->face, cp) == 0))
+	{ // the font itself again, or a file without the glyph after all
+		FaceRelease(rec);
+		rec = NULL;
+	}
+	if(rec && FT_New_Size(rec->face, &size) != 0)
+	{
+		FaceRelease(rec);
+		rec = NULL;
+	}
+	if(!rec)
+	{
+		if(f->fbMissCount < FALLBACK_MISS)
+			f->fbMiss[f->fbMissCount++] = cp >> 8;
+		return 0;
+	}
+	CellMetrics(rec->face, &asc, &desc);
+	cell = asc + desc;
+	emH = (FT_F26Dot6)(((int64_t)f->height * 64 * rec->face->units_per_EM + cell / 2) / cell);
+	emW = (FT_F26Dot6)((int64_t)emH * f->emW / (f->emH ? f->emH : 1)); // as wide or narrow as the font itself
+	FT_Activate_Size(size);
+	FT_Set_Char_Size(rec->face, emW, emH, 72, 72);
+	f->fb[f->fbCount].rec = rec;
+	f->fb[f->fbCount].size = size;
+	f->fbCount++;
+	*outFace = rec->face;
+	*outSize = size;
+	return 1;
+}
+
 /* load, optionally embolden and shear, and render one glyph with the
- * font's size active (mono or 8-bit coverage as `mode` says); the result
- * is in the face's glyph slot.  0 when the glyph cannot be loaded or
+ * font's size active (mono or 8-bit coverage as `mode` says), from the
+ * font's face or - for a character it lacks - a fallback font's.  The
+ * glyph slot holding the result, NULL when the glyph cannot be loaded or
  * rendered. */
-static int LoadGlyph(OsFont_t* f, uint32_t cp, FT_Render_Mode mode)
+static FT_GlyphSlot LoadGlyph(OsFont_t* f, uint32_t cp, FT_Render_Mode mode)
 {
 	FT_Face ft = f->rec->face;
+	FT_Size size = f->size;
 	FT_UInt gi = FT_Get_Char_Index(ft, cp);
 	FT_Int32 flags = FT_LOAD_NO_BITMAP | (mode == FT_RENDER_MODE_MONO ? FT_LOAD_TARGET_MONO : FT_LOAD_TARGET_NORMAL);
-	FT_Activate_Size(f->size);
+	if(gi == 0 && cp > 0x20 && FallbackFor(f, cp, &ft, &size))
+		gi = FT_Get_Char_Index(ft, cp);
+	FT_Activate_Size(size);
 	if(gi == 0 && cp != 0x20)
 		gi = FT_Get_Char_Index(ft, 0x25a1); // "□" for an unmapped character, as GDI shows a box
 	if(FT_Load_Glyph(ft, gi, flags) != 0)
-		return 0;
+		return NULL;
 	if(f->boldStrength && ft->glyph->format == FT_GLYPH_FORMAT_OUTLINE)
 		FT_Outline_EmboldenXY(&ft->glyph->outline, f->boldStrength, 0);
 	if(f->oblique && ft->glyph->format == FT_GLYPH_FORMAT_OUTLINE)
 		FT_GlyphSlot_Oblique(ft->glyph);
-	return FT_Render_Glyph(ft->glyph, mode) == 0;
+	return FT_Render_Glyph(ft->glyph, mode) == 0 ? ft->glyph : NULL;
 }
 
 /* clear the buffer and draw the character in monochrome (0 / 255), its
@@ -607,9 +754,8 @@ void OS_FontRender(OsFont_t* f, const char* sjis, int len, uint8_t* buf, int pit
 	int r;
 	for(r = 0; r < h; r++)
 		memset(buf + (size_t)r * (size_t)pitch, 0, (size_t)w);
-	if(!f || !LoadGlyph(f, SjisCodePoint(sjis, len), FT_RENDER_MODE_MONO))
+	if(!f || !(g = LoadGlyph(f, SjisCodePoint(sjis, len), FT_RENDER_MODE_MONO)))
 		return;
-	g = f->rec->face->glyph;
 	x0 = g->bitmap_left;
 	y0 = f->ascent - g->bitmap_top; // the bitmap's top row relative to the cell top
 	for(y = 0; y < (int)g->bitmap.rows; y++)
@@ -635,9 +781,8 @@ void OS_FontRenderMono(OsFont_t* f, const char* sjis, int len, uint8_t* bits, in
 	FT_GlyphSlot g;
 	int x0, y0, y, x;
 	memset(bits, 0, (size_t)pitch * (size_t)h);
-	if(!f || !LoadGlyph(f, SjisCodePoint(sjis, len), FT_RENDER_MODE_MONO))
+	if(!f || !(g = LoadGlyph(f, SjisCodePoint(sjis, len), FT_RENDER_MODE_MONO)))
 		return;
-	g = f->rec->face->glyph;
 	x0 = g->bitmap_left;
 	y0 = f->ascent - g->bitmap_top;
 	for(y = 0; y < (int)g->bitmap.rows; y++)
@@ -660,9 +805,10 @@ void OS_FontRenderMono(OsFont_t* f, const char* sjis, int len, uint8_t* bits, in
 // the glyph's advance rounded to whole pixels; 0 for a glyph that cannot be loaded
 int OS_FontCharAdvance(OsFont_t* f, const char* sjis, int len)
 {
-	if(!f || !LoadGlyph(f, SjisCodePoint(sjis, len), FT_RENDER_MODE_MONO))
+	FT_GlyphSlot g;
+	if(!f || !(g = LoadGlyph(f, SjisCodePoint(sjis, len), FT_RENDER_MODE_MONO)))
 		return 0;
-	return (int)((f->rec->face->glyph->advance.x + 32) >> 6);
+	return (int)((g->advance.x + 32) >> 6);
 }
 
 // ---- antialiased text for the back end's own windows ---------------------------
@@ -697,9 +843,9 @@ int OsPosix_FontDraw(OsFont_t* f, uint32_t* dst, int pitch, int w, int h, int x,
 		FT_GlyphSlot g;
 		int yy, xx;
 		sjis += NextChar(sjis, &cp);
-		if(!LoadGlyph(f, cp, FT_RENDER_MODE_NORMAL))
+		g = LoadGlyph(f, cp, FT_RENDER_MODE_NORMAL);
+		if(!g)
 			continue;
-		g = f->rec->face->glyph;
 		for(yy = 0; yy < (int)g->bitmap.rows; yy++)
 		{
 			int dy = y + f->ascent - g->bitmap_top + yy;

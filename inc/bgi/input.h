@@ -116,6 +116,7 @@ void GetMouseClientPos(int xy[2]);                                     // "80 08
 void ClientToScreenPos(int out[2], const int in[2]);                   // the inverse
 void MouseMove_Start(int x, int y, int steps, int a4, int a5, int a6); // "80 1F": (x, y, curve, duration ms, fps, cancelOnMove)
 void SetCursorAutoHide(uint32_t ms);                                   // "B0 05"
+int Cursor_IsVisible(void);                                            // "B0 06": not auto-hidden
 void Cursor_Refresh(void);                                             // show again before a dialog
 void Cursor_Update(void);                                              // per pass
 void Mouse_ProbeSwap(void);                                            // cache SwapMouseButton state

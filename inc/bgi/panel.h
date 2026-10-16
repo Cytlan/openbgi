@@ -287,6 +287,7 @@ typedef struct PanelVtbl
 	int (*decideAt)(ButtonPanel_t* p, int g, int i, int flag);                          // record a decision by (group, index); 1 ok
 	int (*decide)(ButtonPanel_t* p, int btn, int flag);                                 // record a decision by flat index, -1 cancel; 1 ok
 	void (*stop)(ButtonPanel_t* p);                                                     // release the tables and the input layers
+	void (*clickOutside)(ButtonPanel_t* p);                                             // a click with no button under the pointer
 } PanelVtbl_t;
 #define PANEL_VT(p) ((const PanelVtbl_t*)(p)->p.vt)
 

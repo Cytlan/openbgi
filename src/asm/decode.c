@@ -40,6 +40,7 @@ static const FamName_t kFamilies[] = {
 	{0xc0, "ext1", OPFAM_C0},
 	{0xd0, "eval", OPFAM_D0},
 	{0xe0, "ext2", OPFAM_E0},
+	{0xef, "obgi", OPFAM_EF}, // the OpenBGI extensions
 	{0xff, "user", OPFAM_COUNT},
 };
 

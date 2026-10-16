@@ -1297,6 +1297,17 @@ static int Opcode_Gfx1_BmpDrawTextStyled(Thread_t* t)
 }
 
 // -------------------------------------------------------------------------
+// 91 DB : knobs
+// -------------------------------------------------------------------------
+
+// the handle of the knob the mouse is dragging ("90 D0" registry), 0 when none
+static int Opcode_Gfx1_KnobDragHandle(Thread_t* t) // 91 DB (1.588 on): → h
+{
+	Thread_Push(t, Knob_DragHandle());
+	return 0;
+}
+
+// -------------------------------------------------------------------------
 // 91 B8 .. 91 BF : the sprite panel
 // -------------------------------------------------------------------------
 
@@ -1426,6 +1437,7 @@ void Vm_Optable91Init(void)
 		{0xB8, Opcode_Gfx1_SprPanelCreate, GEN_FIRST, GEN_LAST},
 		{0xBA, Opcode_Gfx1_SprPanelStart, GEN_FIRST, GEN_LAST},
 		{0xBF, Opcode_Gfx1_SetKeyMap, GEN_FIRST, GEN_LAST},
+		{0xDB, Opcode_Gfx1_KnobDragHandle, GEN_1_588, GEN_LAST},
 	};
 	Vm_FillTable(vm_optable_91, OPFAM_91, ops, BGI_COUNTOF(ops));
 }

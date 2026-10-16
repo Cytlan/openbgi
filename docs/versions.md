@@ -91,7 +91,12 @@ file itself is rewritten only when the launcher records a game.
 
 Magic strings found in the executables: `PackFile` archives, `DSC FORMAT
 1.00` compression and `bw` audio in every build; `CompressedBG___`
-pictures from 1.64 on (1.58 has no CBG decoder); `BURIKO ARC20` archives
+pictures from 1.64 on (1.58 has no CBG decoder) - version 1, the
+lossless one of `src/core/cbg.c`, in every build with a decoder, and from
+1.573 on version 2 as well (the word at +0x2E), the DCT codec of
+`src/core/cbg2.c` that the backgrounds, event pictures and sprites of
+Magical Charming!, Sekachu and the later games are stored in (the system
+graphics stay version 1 / DSC); `BURIKO ARC20` archives
 from 1.573 on next to `PackFile` (a 16-byte header - the 12-byte magic
 and the entry count - then 0x80-byte entries: the name, lower-cased on
 loading, at +0, the data offset at +0x60 and the size at +0x64, with the
@@ -184,6 +189,21 @@ profile of its own build.  The reimplementation keeps it in
 * Changes inside the services the handlers call (file formats, the
   renderer, the sound library) are handled where they occur, with a
   comment naming the build that introduced them.
+* Not every opcode of the later builds has a handler yet (`--list-missing`
+  prints the gaps of a profile).  Of the ones the system programs of the
+  games use, only `81 B0` / `81 B7` (1.573 on, the string distance the
+  `recoveryrip._bp` of Magical Charming! computes) are known to be
+  missing; the system programs of the Lump of Sugar games use no other
+  missing one.  A few are placeholders: `90 5D` (1.588 on), the 3-D
+  sprite of those builds - "90 5C" with rotations about the X, Y and Z
+  axes - takes the rotations and ignores them (the scene-select screens
+  of 1.653 on pass 0 for all three, which is the flat "90 5C" picture;
+  a rotated one shows unrotated); `B0 8C` (1.616 on), the list-selection dialog
+  the title of Haruka Ao no Hanayome ni offers its languages in, answers
+  "cancelled"; `81 6C` (1.669), the renderer's output size, is stored
+  only; the video textures of "91 F0 .. F7" / "92 F2 .. F5" have no
+  player.  A missing opcode stops the game with "not implemented" naming
+  it; please report the program and the opcode.
 
 ## Appendix: every opcode with the version it first appears in
 

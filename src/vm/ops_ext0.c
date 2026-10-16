@@ -120,6 +120,14 @@ static int Opcode_Ext0_CursorAutoHide(Thread_t* t) // B0 05: ms →
 	return 0;
 }
 
+/* 1.529 on: 1 while the cursor is visible, 0 while the auto-hide has it
+ * hidden; the system programs count a hover only while it is visible */
+static int Opcode_Ext0_CursorIsVisible(Thread_t* t) // B0 06 (1.529 on): → visible
+{
+	Thread_Push(t, (uint32_t)Cursor_IsVisible());
+	return 0;
+}
+
 /* start the screen quake and block the thread on its wait object (scheduler
  * code 2).  StartQuake allocates the wait before validating the parameters;
  * a rejected one is raised as a script error, which does not return, so the
@@ -448,6 +456,23 @@ static int Opcode_Ext0_DialogInput2(Thread_t* t) // B0 85: out1, out2, title, la
 	return 0;
 }
 
+/* 1.616 on: a dialog (resource 0x79 of those builds) that offers the
+ * entries of `items` (a text, one entry per line) under `caption` and
+ * copies the chosen one into `out` (`size` bytes); 1 chosen, 0 cancelled.
+ * The title program of Haruka Ao no Hanayome ni picks the game's
+ * language with it after the "change the language?" question.  The
+ * dialog is not provided: the operands are dropped and 0 (cancelled) is
+ * pushed, so the game keeps its language. */
+static int Opcode_Ext0_DialogSelect(Thread_t* t) // B0 8C (1.616 on): out, size, caption, items → chosen
+{
+	PopPtr(t); // items
+	PopPtr(t); // caption
+	Thread_Pop(t);
+	PopPtr(t);
+	Thread_Push(t, 0);
+	return 0;
+}
+
 /* the player profile dialog: four 0x100-byte text buffers that hold the
  * initial texts and receive the entries (surname, given name, nickname,
  * first-person pronoun) and the birthday as 0-based month and day indices,
@@ -594,6 +619,7 @@ void Vm_OptableB0Init(void)
 		{0x03, Opcode_Ext0_WindowSetPos, GEN_1_69_472, GEN_LAST},
 		{0x04, Opcode_Ext0_CursorSprite, GEN_FIRST, GEN_LAST},
 		{0x05, Opcode_Ext0_CursorAutoHide, GEN_FIRST, GEN_LAST},
+		{0x06, Opcode_Ext0_CursorIsVisible, GEN_1_529, GEN_LAST},
 		{0x08, Opcode_Ext0_Quake, GEN_FIRST, GEN_LAST},
 		{0x10, Opcode_Ext0_ChildCreate, GEN_FIRST, GEN_LAST},
 		{0x11, Opcode_Ext0_ChildDestroy, GEN_FIRST, GEN_LAST},
@@ -628,6 +654,7 @@ void Vm_OptableB0Init(void)
 		{0x82, Opcode_Ext0_MsgBoxConfirm, GEN_FIRST, GEN_LAST},
 		{0x84, Opcode_Ext0_DialogInput1, GEN_FIRST, GEN_LAST},
 		{0x85, Opcode_Ext0_DialogInput2, GEN_FIRST, GEN_LAST},
+		{0x8C, Opcode_Ext0_DialogSelect, GEN_1_616, GEN_LAST},
 		{0x8F, Opcode_Ext0_DialogProfile, GEN_FIRST, GEN_LAST},
 		{0xF0, Opcode_Ext0_SetWallpaper, GEN_FIRST, GEN_LAST},
 	};

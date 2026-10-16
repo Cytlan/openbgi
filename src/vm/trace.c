@@ -122,6 +122,8 @@ static int TraceFamilyOf(const uint8_t* code, int* op)
 		return OPFAM_D0;
 	if(code[0] == 0xe0)
 		return OPFAM_E0;
+	if(code[0] == 0xef)
+		return OPFAM_EF;
 	for(i = 0; i < 8; i++)
 		if(code[0] == kLead[i])
 			return kFam[i];
@@ -134,7 +136,7 @@ static int TraceFamilyOf(const uint8_t* code, int* op)
  * ignored.  One valid entry switches the selective trace on. */
 static void TraceParseOps(const char* p)
 {
-	static const char* const kNames[OPFAM_COUNT] = {"main", "7f", "80", "81", "90", "91", "92", "a0", "b0", "c0", "d0", "e0"};
+	static const char* const kNames[OPFAM_COUNT] = {"main", "7f", "80", "81", "90", "91", "92", "a0", "b0", "c0", "d0", "e0", "ef"};
 	while(*p)
 	{
 		const char* colon = strchr(p, ':');

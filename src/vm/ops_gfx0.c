@@ -1219,11 +1219,13 @@ static int Opcode_Gfx0_BgZoom(Thread_t* t) // 90 49: bmp, scale, option →
 
 /* type 11: the mosaic transition from `front` to `back` (a bitmap, black or
  * white) at `level`; `style` must be 0, `link` 0 or 1 (1 also mosaics the
- * back bitmap, by 0x100 - level) */
-static int Opcode_Gfx0_BgFlip(Thread_t* t) // 90 4A: front, back, style, link, level →
+ * back bitmap, by 0x100 - level).  The link is on top of the stack, the
+ * level below it (the manager's 0x428bb0 takes the fifth argument as the
+ * link and the fourth as the level). */
+static int Opcode_Gfx0_BgFlip(Thread_t* t) // 90 4A: front, back, style, level, link →
 {
-	int level = (int)Thread_Pop(t);
 	int link = (int)Thread_Pop(t);
+	int level = (int)Thread_Pop(t);
 	int style = (int)Thread_Pop(t);
 	int back = (int)Thread_Pop(t);
 	int front = (int)Thread_Pop(t);
@@ -1232,7 +1234,7 @@ static int Opcode_Gfx0_BgFlip(Thread_t* t) // 90 4A: front, back, style, link, l
 		case 1: GFX_ERROR(t, MSG_BG_FRONT_UNUSABLE, front); break;
 		case 2: GFX_ERROR(t, MSG_BG_BACK_UNUSABLE, back); break;
 		case 3: GFX_ERROR(t, MSG_BAD_STYLE, style); break;
-		case 4: GFX_ERROR(t, MSG_BAD_LINK_STATE, level); break; // the original reports the level, not the link
+		case 4: GFX_ERROR(t, MSG_BAD_LINK_STATE, link); break;
 		default: break;
 	}
 	return 0;
@@ -1586,6 +1588,55 @@ static int Opcode_Gfx0_SpriteSetProjected(Thread_t* t) // 90 5C: h, fx, fy, fz, 
 	int32_t fy = (int32_t)Thread_Pop(t);
 	int32_t fx = (int32_t)Thread_Pop(t);
 	uint32_t h = Thread_Pop(t);
+	CheckBitmapNo(bmp1, t);
+	CheckMixRatio(mixRatio, t);
+	CheckEffectMode(effect, t);
+	CheckAlpha(level, t);
+	CheckPriority(prio, t);
+	switch(GfxCall_SpriteSetProjected(h, fx, fy, fz, bmp1, bmp2, (int)mixRatio, levelRoute, ox, oy, angle, projDist,
+		projPos, smooth, (int)effect, (int)level, (int)prio))
+	{
+		case 1: GFX_ERROR(t, MSG_BMP2_INVALID, bmp1, bmp2); break;
+		case 2: GFX_ERROR(t, MSG_BMP2_SIZE_MODE_MISMATCH, bmp1, bmp2); break;
+		case 8: GFX_ERROR(t, MSG_BAD_PROJ_SCALE, projDist); break;
+		case 0xff: ScriptError(MSG_BAD_SPRITE_HANDLE, t); break;
+		default: break;
+	}
+	return 0;
+}
+
+/* 90 5D (1.588 on): "90 5C" with three more 16.16 angles between the
+ * rotation and the projection distance - the rotations about the X, Y and
+ * Z axes of the 3-D sprite class of those builds (tweened like the angle;
+ * the Z value goes into the perspective with projDist).  The scene-select
+ * screens of 1.653 on (scrslct._bp) call it with all three at 0, which is
+ * the flat picture of "90 5C"; non-zero rotations are not implemented and
+ * are ignored, so such a sprite shows unrotated (docs/versions.md). */
+static int Opcode_Gfx0_SpriteSetProjected3D(Thread_t* t) // 90 5D: h, fx, fy, fz, bmp1, bmp2, mixRatio, levelRoute, ox, oy, angle, rotX, rotY, rotZ, projDist, projPos, smooth, effect, level, prio →
+{
+	uint32_t prio = Thread_Pop(t);
+	uint32_t level = Thread_Pop(t);
+	uint32_t effect = Thread_Pop(t);
+	int smooth = (int)Thread_Pop(t);
+	int projPos = (int)Thread_Pop(t);
+	int projDist = (int)Thread_Pop(t);
+	int32_t rotZ = (int32_t)Thread_Pop(t);
+	int32_t rotY = (int32_t)Thread_Pop(t);
+	int32_t rotX = (int32_t)Thread_Pop(t);
+	int32_t angle = (int32_t)Thread_Pop(t);
+	int oy = (int)Thread_Pop(t);
+	int ox = (int)Thread_Pop(t);
+	int levelRoute = (int)Thread_Pop(t);
+	uint32_t mixRatio = Thread_Pop(t);
+	int bmp2 = (int)Thread_Pop(t);
+	int bmp1 = (int)Thread_Pop(t);
+	int32_t fz = (int32_t)Thread_Pop(t);
+	int32_t fy = (int32_t)Thread_Pop(t);
+	int32_t fx = (int32_t)Thread_Pop(t);
+	uint32_t h = Thread_Pop(t);
+	(void)rotX;
+	(void)rotY;
+	(void)rotZ;
 	CheckBitmapNo(bmp1, t);
 	CheckMixRatio(mixRatio, t);
 	CheckEffectMode(effect, t);
@@ -2655,6 +2706,51 @@ static int Opcode_Gfx0_KnobRelease(Thread_t* t) // 90 DF: h →
 }
 
 // -------------------------------------------------------------------------
+// 90 CC, 90 CD : tone curves (1.616 on; src/gfx/tonecurve.c)
+// -------------------------------------------------------------------------
+
+/* register tone curve `id` from the six via-point words at `points` (x, y
+ * of the R, G and B curves), or remove it when `points` is 0.  Script
+ * error: no curve `id` to remove.  Out-of-range points register nothing
+ * and pass silently, as in the original (its handler compares the
+ * registration's code against the wrong value). */
+static int Opcode_Gfx0_ToneCurveRegister(Thread_t* t) // 90 CC (1.616 on): id, points →
+{
+	const int32_t* points = (const int32_t*)PopPtr(t);
+	int32_t id = (int32_t)Thread_Pop(t);
+	if(ToneCurve_Register(id, points) == 0x8000000fu)
+		GFX_ERROR(t, MSG_TONE_BAD_ID, id);
+	return 0;
+}
+
+/* dst becomes src (32-bit) through curve `curveId` with the monochrome
+ * mix (colour, level 0 .. 256) and the colour film (effect 8 / 0x26,
+ * colour, level 0 .. 256); see BmpOp_ToneCurve for the errors */
+static int Opcode_Gfx0_ToneCurveApply(Thread_t* t) // 90 CD (1.616 on): dst, src, monoColour, monoLevel, curveId, filmColour, effect, filmLevel →
+{
+	int filmLevel = (int)Thread_Pop(t);
+	int effect = (int)Thread_Pop(t);
+	uint32_t filmColour = Thread_Pop(t);
+	int32_t curveId = (int32_t)Thread_Pop(t);
+	int monoLevel = (int)Thread_Pop(t);
+	uint32_t monoColour = Thread_Pop(t);
+	int src = (int)Thread_Pop(t);
+	int dst = (int)Thread_Pop(t);
+	switch(BmpOp_ToneCurve(dst, src, curveId, monoColour, monoLevel, filmColour, effect, filmLevel))
+	{
+		case 0x80000009u: GFX_ERROR(t, MSG_TONE_DST_INVALID, dst); break;
+		case 0x8000000au: GFX_ERROR(t, MSG_GEN_SRC_INVALID, src); break;
+		case 0x8000000fu: GFX_ERROR(t, MSG_TONE_NO_CURVE, curveId); break;
+		case 0x80000011u: GFX_ERROR(t, MSG_TONE_MODE_UNSUPPORTED, src); break;
+		case 0x80000013u: GFX_ERROR(t, MSG_TONE_EFFECT_UNSUPPORTED, effect); break;
+		case 0x80000014u: GFX_ERROR(t, MSG_TONE_BAD_FILM_LEVEL, filmLevel); break;
+		case 0x80000015u: GFX_ERROR(t, MSG_TONE_BAD_MONO_LEVEL, monoLevel); break;
+		default: break;
+	}
+	return 0;
+}
+
+// -------------------------------------------------------------------------
 // 90 E0 .. 90 E9 : groups
 // -------------------------------------------------------------------------
 
@@ -3046,6 +3142,7 @@ void Vm_Optable90Init(void)
 		{0x5B, Opcode_Gfx0_SpriteSetTransform, GEN_1_64, GEN_1_64},
 		{0x5B, Opcode_Gfx0_SpriteSetRipple, GEN_1_66, GEN_LAST},
 		{0x5C, Opcode_Gfx0_SpriteSetProjected, GEN_FIRST, GEN_LAST},
+		{0x5D, Opcode_Gfx0_SpriteSetProjected3D, GEN_1_588, GEN_LAST},
 		{0x60, Opcode_Gfx0_FilterCreate, GEN_FIRST, GEN_LAST},
 		{0x61, Opcode_Gfx0_FilterDelete, GEN_FIRST, GEN_LAST},
 		{0x64, Opcode_Gfx0_FilterShow, GEN_FIRST, GEN_LAST},
@@ -3128,6 +3225,8 @@ void Vm_Optable90Init(void)
 		{0xDD, Opcode_Gfx0_KnobSwapGlobal, GEN_FIRST, GEN_LAST},
 		{0xDE, Opcode_Gfx0_KnobCapture, GEN_FIRST, GEN_LAST},
 		{0xDF, Opcode_Gfx0_KnobRelease, GEN_FIRST, GEN_LAST},
+		{0xCC, Opcode_Gfx0_ToneCurveRegister, GEN_1_616, GEN_LAST},
+		{0xCD, Opcode_Gfx0_ToneCurveApply, GEN_1_616, GEN_LAST},
 		{0xE0, Opcode_Gfx0_GroupCreate, GEN_FIRST, GEN_LAST},
 		{0xE1, Opcode_Gfx0_GroupDelete, GEN_FIRST, GEN_LAST},
 		{0xE4, Opcode_Gfx0_GroupShow, GEN_FIRST, GEN_LAST},

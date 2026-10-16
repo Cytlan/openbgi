@@ -2474,6 +2474,8 @@ static void WriteHeader(Dec_t* d, const ScnDecOptions_t* opt, const FuncRange_t*
 	fprintf(out, "// %s - decompiled by bgiscn (docs/scenario.md)\n", opt->name ? opt->name : "scenario");
 	fprintf(out, "#style %s\n", d->style == SCN_STYLE_LIBRARY ? (d->raw ? "library-raw" : "library") : d->lineMarkers ? "scenario-line"
 																													  : "scenario");
+	if(gAsmUtf8)
+		fprintf(out, "#encoding utf-8\n");
 	if(d->f->importCount)
 	{
 		fputs("#import", out);
@@ -2905,7 +2907,7 @@ int Scn_Decompile(const ScnFile_t* f, const ScnDecOptions_t* opt, FILE* out)
 				free(text);
 				break;
 			}
-			Scn_Compile(text, len, opt->name ? opt->name : "scenario", opt->cmds, NULL, &res);
+			Scn_Compile(text, len, opt->name ? opt->name : "scenario", opt->cmds, NULL, NULL, &res);
 			if(res.errors == 0)
 			{
 				back = Scn_Save(&res.file, &backSize);

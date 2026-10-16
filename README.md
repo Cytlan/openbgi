@@ -18,6 +18,10 @@ end (a canvas, the game's files over a websocket; `docs/wasm.md`).
 please report bugs and issues in our
 [Discord](https://discord.gg/3zFTJWUNt7).
 
+**OpenBGI is not a Visual Novel development platform.**  If you wish to
+develop a VN on the Ethornell/BGI platform, then you must contact Buriko
+Co., Ltd.
+
 ## Games
 
 The games we have been working on, with the engine build each one needs
@@ -25,28 +29,28 @@ The games we have been working on, with the engine build each one needs
 
 | Game | Product name | Engine version | Status |
 |---|---|---|---|
-| Nursery Rhyme (trial) | `NurseryRhymeTrial` | 1.58 | Testing in progress |
-| Nursery Rhyme | `NurseryRhyme` | 1.64 | Very playable |
-| Itsuka, Todoku, Ano Sora ni. | `ItsukaTodokuAnoSorani` | 1.66 | Mostly playable |
+| Nursery Rhyme (trial) | `NurseryRhymeTrial` | 1.58 | In progress |
+| Nursery Rhyme | `NurseryRhyme` | 1.64 | In progress |
+| Itsuka, Todoku, Ano Sora ni. | `ItsukaTodokuAnoSorani` | 1.66 | In progress |
 | Tayutama -Kiss on my Deity- (trial; the reference build) | `Tayutama` | 1.69 build 444 | In progress |
-| Tayutama -Kiss on my Deity- | `Tayutama` | 1.69 build 451 | Very playable |
-| Tayutama -It's happy days- | `TayutamaHD` | 1.69 build 472 | Very playable |
-| Prism Rhythm | `PrismRhythm` | 1.494 | Very playable |
-| Diamic Days | `DiamicDays` | 1.529 | Very playable |
-| Gakuou -THE ROYAL SEVEN STARS- | `Gackoh` | 1.535 | Very playable |
-| Gakuou -It's Heartful Days!!- | `Gackoh_HD` | 1.547 | Boots, but crashes in prolouge |
-| Hanairo Heptagram | `HanairoHeptagram` | 1.553 | Very playable |
-| Magical Charming! | `MagicalCharming!` | 1.573 | Boots, severe visual glitches |
-| Sekai to Sekai no Mannaka de | `SekaiToSekaiNoMannakaDe` | 1.588 | Boots, severe visual glitches |
-| Unmei Senjou no Phi | `UnmeisenjouNoPhi` | 1.599 | Boots, but crashes in prolouge |
-| Kodomo no Asobi | `KodomoNoAsobi` | 1.616 | Boots, but crashes in prolouge |
-| Tayutama 2 -After Stories- | `Tayutama2AS` | 1.640 | Somewhat playable, glitchy |
-| Wakabairo no Quartet | `WakabaironoQuartet` | 1.653 | Somewhat playable, glitchy |
-| Nekotsuku, Sakura. | `NekoTsukuSakura` | 1.654 | Somewhat playable, glitchy |
-| Madohi Shiroki no Kamikakushi | `MadoiShirokinoKamikakushi` | 1.659 | Boots, but crashes in prolouge |
-| Yumahorome | `Yumahorome` | 1.662 | Boots, but crashes in prolouge |
-| Arcana Alchemia | `ArcanaAlchemia` | 1.667 | Testing in progress |
-| Haruka Ao no Hanayome ni | `HarukaAonoHanayomeni` | 1.669 | Testing in progress |
+| Tayutama -Kiss on my Deity- | `Tayutama` | 1.69 build 451 | In progress |
+| Tayutama -It's happy days- | `TayutamaHD` | 1.69 build 472 | In progress |
+| Prism Rhythm | `PrismRhythm` | 1.494 | In progress |
+| Diamic Days | `DiamicDays` | 1.529 | In progress |
+| Gakuou -THE ROYAL SEVEN STARS- | `Gackoh` | 1.535 | In progress |
+| Gakuou -It's Heartful Days!!- | `Gackoh_HD` | 1.547 | In progress |
+| Hanairo Heptagram | `HanairoHeptagram` | 1.553 | In progress |
+| Magical Charming! | `MagicalCharming!` | 1.573 | In progress |
+| Sekai to Sekai no Mannaka de | `SekaiToSekaiNoMannakaDe` | 1.588 | In progress |
+| Unmei Senjou no Phi | `UnmeisenjouNoPhi` | 1.599 | In progress |
+| Kodomo no Asobi | `KodomoNoAsobi` | 1.616 | In progress |
+| Tayutama 2 -After Stories- | `Tayutama2AS` | 1.640 | In progress |
+| Wakabairo no Quartet | `WakabaironoQuartet` | 1.653 | In progress |
+| Nekotsuku, Sakura. | `NekoTsukuSakura` | 1.654 | In progress |
+| Madohi Shiroki no Kamikakushi | `MadoiShirokinoKamikakushi` | 1.659 | In progress |
+| Yumahorome | `Yumahorome` | 1.662 | In progress |
+| Arcana Alchemia | `ArcanaAlchemia` | 1.667 | In progress |
+| Haruka Ao no Hanayome ni | `HarukaAonoHanayomeni` | 1.669 | In progress |
 
 Only Lump of Sugar games have been tested so far.  We are interested in
 testing other BGI-based games: if you have one, tell us how it goes in
@@ -60,9 +64,11 @@ our [Discord](https://discord.gg/3zFTJWUNt7).
     make wasm         the browser through Emscripten (emcc) -> bin/wasm/openbgi.html;
                       `node tools/wasm/server.js <game dir>` serves it (docs/wasm.md)
     make tools        the command-line tools: bin/bpasm, the assembler /
-                      disassembler of the game's programs (docs/asm.md), and
+                      disassembler of the game's programs (docs/asm.md);
                       bin/bgiscn, the decompiler / compiler of the scenario
-                      files, for translations (docs/scenario.md)
+                      files (docs/scenario.md); bin/bgidump and bin/bgipack,
+                      which turn a game's archives into editable files and
+                      back, for translations (docs/dump.md)
     make check        syntax-check every translation unit with -pedantic
     make test         build and run tests/
     make clean
@@ -103,6 +109,21 @@ game - the disc is meant to be installed, not run.  The engine hides the
 marker from the scripts, so such a copy starts; `--disc-marker` gives
 the original's behaviour back.
 
+Movies: the frame-sequence movies of the later builds (`docs/bfmovie.md`)
+are decoded by the engine itself.  The opening movies in common formats
+(`.mpg`, `.wmv`, ...) go through DirectShow on Windows, as in the
+original; on Linux, and on Windows when DirectShow cannot render a file,
+the engine plays them through the `ffmpeg` and `ffprobe` programs when it
+finds them on the PATH or next to `bgi` (no library is linked: the video
+comes in through a pipe, the sound through the engine's own mixer).
+Without them the movie is skipped (a note on stderr says so) and the
+game goes on, as before.
+
+The later builds (1.529 on) open their window at the size their scripts
+ask for, which is the game's own resolution scaled down when the
+picture would not fit the screen - the picture is scaled into the window
+as the original does with the "81 64" instruction.
+
 The engine's own messages (script errors, notices, the installer) are
 shown in English; `--lang=ja` or `BGI_LANG=ja` selects the Japanese
 originals, which stay in the binary (`tools/messages.txt` holds both, the
@@ -124,11 +145,25 @@ into common formats (images as .bmp, sounds as .wav - Vorbis only with a
 decoder built in -, BF_Movie frames as one .bmp each); `--entry=NAME`
 picks one entry.  `bin/bpasm` (`make tools`) disassembles and assembles
 the programs (`docs/asm.md`) and decompiles them to the C-like source
-they were written in and compiles that back (`docs/bpc.md`);
+they were written in and compiles that back (`docs/bpc.md`; an edited
+source may name the engine's memory through declared variables -
+`global int gAbort @ 1124;` - and records - `stSprite[i].x` -, keep its
+texts as `#define`d constants and share all of it through `#include`);
 `bin/bgiscn` does the same for the scenario files of every build (the
 1.494+ containers, the headerless files of 1.66 / 1.69, the 16-bit
-scenes of 1.64) and repacks the archive, which is how a game's text is
-translated (`docs/scenario.md`).
+scenes of 1.64) and repacks the archive (`docs/scenario.md`).
+
+For what the original cannot do - a message longer than its window,
+UTF-8 text in every generation, languages written from right to left -
+OpenBGI has instructions of its own, the "EF xx" family, which a game's
+programs call when they are rebuilt for it (`docs/obgi.md`).
+
+To translate a game, `bin/bgidump GAMEDIR DUMPDIR` dumps every archive at
+once - the programs and scenario files decompiled, the pictures as PNG,
+the sounds as Ogg Vorbis, the tables as JSON - and `bin/bgipack DUMPDIR
+OUTDIR` builds the archives again from the dump, compiling and encoding
+what was edited and copying the rest from the originals unchanged
+(`docs/dump.md`).
 
 `--debug` opens the debugger with the game (`--debug=pause` holds the
 scripts until F5); F12 in the game's window opens and closes it at any
@@ -154,11 +189,16 @@ directories offer for "ＭＳ ゴシック" / "ＭＳ 明朝".
                     sound, sysobj/ for the script-visible system objects)
     src/core/       archives, decoders (DSC, CBG, SDC, BF_Movie), files and
                     paths, save files, strings, the loader queue, JSON;
-                    arcread.c, the tools' archive reader
-    src/asm/        the assembler / disassembler of the programs (bin/bpasm)
+                    arcread.c, the tools' archive reader, and what only
+                    the tools use: the DSC, CBG and BF_Movie encoders, PNG
+                    and zlib streams
+    src/asm/        the assembler / disassembler of the programs (bin/bpasm); the
+                    preprocessor of the source languages (#include, #define)
     src/bpc/        the decompiler / compiler of the programs (bin/bpasm -D / -C)
     src/scn/        the scenario files: container, command table scan,
                     decompiler and compiler (bin/bgiscn)
+    src/dump/       dumping a game's archives into editable files and
+                    packing them again (bin/bgidump, bin/bgipack)
     src/vm/         the script machine: threads, the scheduler, the opcode
                     families (ops_base, ops_sys, ops_sys81, ops_gfx0 .. 2,
                     ops_snd, ops_ext0, ops_ext1), the tracing aids
@@ -194,6 +234,7 @@ builds, `sound.md` the Wave Master library and the BW container,
 `os_layer.md` the OS interface, `wasm.md` the browser build, `asm.md` the
 assembler / disassembler and its listing format, `scenario.md` the
 scenario files, their source language and the translation workflow,
+`dump.md` the dump and pack tools and the files of a dump,
 `debugger.md` the debugger, `panel_system.md`, `particle_rain.md` and
 `child_edit_dialogs.md` the subsystems they name.
 
@@ -202,8 +243,9 @@ print and take their default button), `BGI_TRACE`, `BGI_TRACE_FROM`,
 `BGI_TRACE_LAST`, `BGI_TRACE_OPS` (instruction traces, see
 `src/vm/trace.c`), `BGI_OPSTAT=<file>` (the executed opcodes),
 `BGI_INPUT_DEBUG=1`, `BGI_SND_DEBUG=1` (music opens, loop restarts),
-`BGI_DEBUG_OVERLAY=1` (the debugger over the game's picture instead of
-in a window of its own).
+`BGI_PANEL_DEBUG=1` (the buttons of every panel at its start and the
+events it queues), `BGI_DEBUG_OVERLAY=1` (the debugger over the game's
+picture instead of in a window of its own).
 
 ## License
 

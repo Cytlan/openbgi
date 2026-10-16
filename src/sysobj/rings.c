@@ -146,3 +146,32 @@ uint32_t Ring_Get(void* dst, uint32_t id, uint32_t idx)
 	}
 	return 2;
 }
+
+/* "80 9E" (1.616 on): remove `count` records of ring `id` from index `idx`
+ * on (0 = newest; fewer when the list ends first): 0 ok, 1 unknown ring,
+ * 2 index out of range (past the last record). */
+uint32_t Ring_Remove(uint32_t id, uint32_t idx, uint32_t count)
+{
+	Ring_t* r = Ring_Find(id);
+	RingItem_t **link, *it;
+	uint32_t i;
+	if(!r)
+		return 1;
+	link = &r->items;
+	for(i = 0; i < idx; i++)
+	{
+		if(!*link)
+			return 2;
+		link = &(*link)->next;
+	}
+	if(!*link)
+		return 2;
+	for(i = 0; i < count && *link; i++)
+	{
+		it = *link;
+		*link = it->next;
+		BGI_Free(it->data);
+		BGI_Free(it);
+	}
+	return 0;
+}

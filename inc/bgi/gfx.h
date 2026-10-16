@@ -57,6 +57,16 @@ int Movie_Stop(void); // 1 when there was a graph to release
 int Movie_IsPlaying(void);
 int Movie_SetVolume(uint32_t v);   // 0 .. 0x80; 0 for anything above
 void Movie_OnEvent(int completed); // the WM_APP notification of the window procedure
+void Movie_Tick(void);             // every pass: the ffmpeg player's frame, and its end
+
+/* The ffmpeg player (src/sys/moviefx.c): used when the OS layer's own
+ * player cannot play the file - always on POSIX.  Needs the ffmpeg
+ * program (and ffprobe for the length) on the PATH or beside the binary. */
+int MovieFx_Start(const char* path, int x, int y, int w, int h, int32_t volume, int32_t* lengthMs);
+void MovieFx_Stop(void);
+int MovieFx_IsRunning(void);
+void MovieFx_SetVolume(int32_t volume);
+int MovieFx_Tick(void); // 1 while running, 0 when it just ended or nothing runs
 
 // ---- manager-wide operations --------------------------------------------
 void Gfx_ResetAll(void);      // reset + free every bitmap slot
@@ -85,6 +95,7 @@ void Knob_ReleaseAll(void);                      // empty the captured list (shu
 int Knob_Release(uint32_t h);                    // "90 DF": 1 if it was captured
 int Knob_Capture(uint32_t h);                    // "90 DE": 1 if the handle is a knob
 uint32_t Knob_PollChanged(void);                 // "90 DB": last flagged handle, flags cleared
+uint32_t Knob_DragHandle(void);                  // "91 DB" (1.588 on): the handle of the knob being dragged, 0 when none
 void Knob_SetGlobal(int on);                     // "90 DD": the wheel goes to the captured knob
 int Knob_GetGlobal(void);
 extern int gKnobGlobal;

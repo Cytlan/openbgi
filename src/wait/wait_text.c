@@ -12,6 +12,10 @@
  *                  fade ("91 90", "91 92", "92 90")
  *   WaitTextRichV  the same for vertical writing (a window with draw style 1)
  *
+ * OpenBGI adds one thing the original does not have: with "EF 08" a
+ * horizontal WaitTextRich whose text is longer than the window scrolls.
+ * That lives in wait_text_scroll.c; the hooks here are marked "(OpenBGI)".
+ *
  * A text wait owns the window's text layer while it runs: it pushes an input
  * layer (so clicks and keys reach it), draws into the window, marks the
  * touched rectangles dirty, and finishes when the string is exhausted (and,
@@ -251,18 +255,23 @@ static void WaitTextOut_SetParam(WaitTextOut_t* w, uint32_t v)
 static int WaitTextOut_Poll(Wait_t* base)
 {
 	WaitTextOut_t* w = (WaitTextOut_t*)base;
-	int done;
+	int done, scrolling;
 
 	Wait_Tick(base);
-	w->input = Input_Poll(w->layerKey, w->layerKey) & 0x80002181u;
+	w->rawInput = Input_Poll(w->layerKey, w->layerKey);
+	w->input = w->rawInput & 0x80002181u;
 	if(!w->allowSkip)
 		w->input &= 0x7fffffffu;
 	if(!w->allowKeys)
 		w->input &= ~0x2080u;
+	scrolling = WaitTextScroll_Active(w); // OpenBGI "EF 08": a long message scrolls
+	if(scrolling)
+		WaitTextScroll_Input(w); // the wheel, the up / down keys and the arrows move the view
 	if(w->input)
 	{
 		WaitTextOut_SetFast(w, 1);
-		if(gTextInputFinishes)
+		// (with text still below the view, input turns the page instead of finishing)
+		if(gTextInputFinishes && !(scrolling && WaitTextScroll_HasMore(w)))
 			WaitTextOut_FinishNow(w);
 	}
 	done = VT(w)->step(w);
@@ -697,6 +706,8 @@ static void WaitTextRich_Ctor(WaitTextRich_t* w, Thread_t* t, Window_t* win)
 static void WaitTextRich_Dtor(WaitTextRich_t* w)
 {
 	w->t.w.vt = &WaitTextRich_Vtbl.base;
+	if(w->scrollOn)
+		WaitTextScroll_End(&w->t); // (OpenBGI) the nodes stay in the window's text document
 	RichState_Free(&w->rich);
 	WaitTextOut_Dtor(&w->t);
 }
@@ -727,8 +738,14 @@ int WaitTextRich_Prepare(WaitTextRich_t* w, const char* str, int rubyOn, int han
 	int32_t cur[2], style[5], lines;
 	Rect_t area;
 	int adv, font, proportional, ok;
+	/* OpenBGI "EF 08": with scrolling on, a horizontal output lays its text
+	 * out in the coordinates of the window's text document and hands the
+	 * nodes to it (window.h); wait_text_scroll.c then does the stepping */
+	TextDoc_t* doc = (Window_DocActive(win) && w->t.w.vt == &WaitTextRich_Vtbl.base) ? Window_Doc(win) : NULL;
 
 	Window_GetCursor(win, cur);
+	if(doc)
+		cur[1] += doc->scrollY;
 	Window_GetTextArea(win, &area);
 	adv = Window_LineAdvance(win);
 	font = Window_GetFont(win);
@@ -744,7 +761,15 @@ int WaitTextRich_Prepare(WaitTextRich_t* w, const char* str, int rubyOn, int han
 	if(rubyOn)
 		VT(&w->t)->rubyPlace(&w->t, &w->rich, font, w->rubyColour, style, &gRubyDict);
 	VT(&w->t)->align(&w->t, &w->rich, cur, &area, font, hang, style, Window_GetSwingStyle(win));
-	Window_SetCursor(win, cur[0], cur[1]);
+	Window_SetCursor(win, cur[0], cur[1] - (doc ? doc->scrollY : 0));
+	if(doc)
+	{
+		w->docLink = Window_DocAppend(win, &w->rich);
+		w->rich.head = *w->docLink; // this output's part of the document
+		w->docSerial = doc->serial;
+		w->scrollTo = doc->scrollY;
+		w->scrollOn = 1;
+	}
 	w->rubyOn = rubyOn;
 	SET_TIMER(&w->t, 0);
 	return ok;
@@ -753,6 +778,13 @@ int WaitTextRich_Prepare(WaitTextRich_t* w, const char* str, int rubyOn, int han
 // replace the text (drops the previous layout first); 1 ok
 int WaitTextRich_SetTextEx(WaitTextRich_t* w, const char* str, int rubyOn, int hang, int plainStyle)
 {
+	if(w->scrollOn)
+	{ // (OpenBGI) the previous layout is in the window's text document: take it out again
+		if(WaitTextScroll_Active(&w->t))
+			Window_DocCut(w->t.win, w->docLink);
+		w->rich.head = NULL;
+		w->scrollOn = 0;
+	}
 	RichState_Free(&w->rich);
 	return WaitTextRich_Prepare(w, str, rubyOn, hang, plainStyle);
 }
@@ -868,6 +900,8 @@ static void RichShowStep(WaitTextRich_t* w)
 static int WaitTextRich_Step(WaitTextOut_t* t)
 {
 	WaitTextRich_t* w = (WaitTextRich_t*)t;
+	if(WaitTextScroll_Active(t)) // OpenBGI "EF 08"
+		return WaitTextScroll_Step(t);
 	if(!(Wait_TimerExpired(&t->w) || t->fast || t->finishNow || t->autoAdvanceAt != 0))
 		return 0;
 	if(RichAllShown(w))

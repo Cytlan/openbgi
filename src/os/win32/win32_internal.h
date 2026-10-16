@@ -39,6 +39,14 @@ extern int gWin32CursorShape;            // the shape "80 67" selected (0..4), a
  * 16-bit surface is RGB 5-5-5 and a 32-bit one 0x00RRGGBB.  biWidth is
  * taken from the pitch so any 4-byte padding is honoured. */
 void Win32_SurfaceHeader(BITMAPINFOHEADER* bi, const OsSurface_t* s, int rows);
+/* the mapping between the engine's picture and a windowed client area of
+ * another size ("81 64"; OS_WindowSetPicture): picture pixels <-> client
+ * pixels; the identity while the two are of one size or in full screen */
+int Win32_ToWinX(int x);
+int Win32_ToWinY(int y);
+int Win32_FromWinX(int x);
+int Win32_FromWinY(int y);
+void Win32_FillLetterbox(HDC hdc); // the black bars beside the scaled picture (nothing when it is not scaled)
 
 // ---- the window procedures (wndproc.c, child.c, edit.c) --------------------------------------
 

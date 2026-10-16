@@ -137,6 +137,7 @@ void Blit_AddColour(Bmp_t* dst, const Bmp_t* src, uint32_t colour, int level);  
  * above 0x100, 4 no overlap, 7 gray not GRAY8, 8 gray and src differ in
  * size. */
 int Blit_ThroughGray(Bmp_t* dst, int x, int y, const Bmp_t* src, const Bmp_t* gray, int param, int level);
+int Blit_ThroughGrayScreen(Bmp_t* dst, int x, int y, const Bmp_t* src, const Bmp_t* gray, int param, int level);
 /* "90 1A", effector mode 0, background type 6: src read through one or two
  * PM_VECTOR maps (vec2 may be NULL) mixed by level; amount != 0 samples
  * bilinearly.  0 ok, 1 modes differ, 3 level above 0x100, 0xc / 0xd vec1 /
@@ -172,7 +173,7 @@ int Blit_ScaleTo(Bmp_t* dst, const Bmp_t* src, int32_t ox, int32_t oy, int32_t f
 	int32_t sx, int32_t sy, int32_t cx, int32_t cy, int32_t hx, int32_t hy, int smooth);
 int Blit_Scale2(Bmp_t* dst, const Bmp_t* src, int32_t ox, int32_t oy, int32_t fullW, int32_t fullH,
 	int32_t sx, int32_t sy, int smooth);
-int Blit_ApplyMask(Bmp_t* dst, const Bmp_t* src, const Bmp_t* gray); // "91 1E" and the sprite mask of "90 55": the GRAY8 map becomes the alpha of dst (ARGB32); 0 ok, 7 not GRAY8
+int Blit_ApplyMask(Bmp_t* dst, const Bmp_t* src, const Bmp_t* gray); // "91 1E" and the sprite mask of "90 55": the GRAY8 map (or the alpha of an ARGB32 one) becomes the alpha of dst (ARGB32); 0 ok, 7 neither kind
 /* sprite mode 3 ("90 5A"): src (ARGB32) revealed over dst (RGB32) where
  * the GRAY8 pattern is below the threshold of `progress` (0 .. 0x100)
  * widened by `mode`; the To variant writes the revealed part into an

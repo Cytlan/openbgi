@@ -36,6 +36,19 @@ Optional, detected with `pkg-config` at build time:
   silence of the right length, so that games whose every sound is Vorbis
   still run.  `docs/sound.md` describes the container.
 
+Optional at run time, not linked:
+
+* **ffmpeg and ffprobe**: the opening movies in common formats (`.mpg`,
+  `.wmv`, ...), which the Windows original hands to DirectShow.  The
+  engine starts the two programs as child processes when a movie is to be
+  played - found on the PATH or next to `bgi` / `bgi.exe` - and reads the
+  decoded frames and sound through pipes (`src/sys/moviefx.c`,
+  `docs/os_layer.md`).  Without them the movie is skipped, as before.  On
+  Windows DirectShow is tried first and the programs take over only when
+  it cannot render the file.  `make test` generates a short clip with
+  `ffmpeg` for `bin/test_moviefx` and skips that part when the program is
+  missing.
+
 `OPT=...` replaces the optimisation flags (`-O2 -g` by default).
 
 ## Targets
@@ -43,7 +56,7 @@ Optional, detected with `pkg-config` at build time:
 | target | what it builds or does |
 |--------|------------------------|
 | `make` | the Linux engine, `bin/bgi` |
-| `make test` | builds and runs the unit tests of `tests/` (`bin/test_*`): the assembler, the BF_Movie decoder, the blitters, the archive reader and the DSC / CBG decoders, the extraction options, the sound codecs and library, the text engine, the VM's base instructions and the WebAssembly file layer against a mock server |
+| `make test` | builds and runs the unit tests of `tests/` (`bin/test_*`): the assembler, the BF_Movie decoder, the blitters, the archive reader and the DSC / CBG decoders, the extraction options, the games table, the ffmpeg movie player, the sound codecs and library, the text engine, the VM's base instructions, the WebAssembly file layer against a mock server and the Win32 string conversions |
 | `make check` | syntax-checks every translation unit of the Linux build with `-pedantic` |
 | `make check-win` | syntax-checks the Win32 back end against the stub SDK headers (below; no MinGW needed) |
 | `make check-wasm` | syntax-checks the WebAssembly back end against a stub Emscripten header (below; no emcc needed) |
@@ -51,7 +64,7 @@ Optional, detected with `pkg-config` at build time:
 | `make wasm` | the browser build through Emscripten, `bin/wasm/openbgi.html` with its `.js` and `.wasm` |
 | `make wasm-sim` | the WebAssembly back end as a native Linux binary, `bin/openbgi-wasmsim`, with no browser involved |
 | `make wasm-test` | the asset server's protocol test under node |
-| `make tools` | the command-line tools: `bin/bpasm`, the assembler / disassembler (`docs/asm.md`) and decompiler / compiler (`docs/bpc.md`) of the game's programs, and `bin/bgiscn`, the decompiler / compiler of the scenario files (`docs/scenario.md`) |
+| `make tools` | the command-line tools: `bin/bpasm`, the assembler / disassembler (`docs/asm.md`) and decompiler / compiler (`docs/bpc.md`) of the game's programs; `bin/bgiscn`, the decompiler / compiler of the scenario files (`docs/scenario.md`); `bin/bgidump` and `bin/bgipack`, which dump a game's archives into editable files and pack them again (`docs/dump.md`).  `make PLATFORM=win32 tools` builds them as `.exe` through MinGW |
 | `make msg` | regenerates `inc/bgi/msg.h` from `tools/messages.txt` |
 | `make clean` | removes `obj/` and `bin/` |
 

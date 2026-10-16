@@ -73,6 +73,7 @@ typedef struct Window
 	int32_t table[16];        // 16 values supplied by "90 A7": the per-item colours of a text menu
 	int32_t punchItems;       // cut the item shapes out of the text
 	int32_t layerOrder[3];    // 1.494: the passes of the composite ("90 82"): 0 frame, 1 text with its items, 2 sub-sprites
+	struct TextDoc* doc;      // (OpenBGI) the text document of a scrolling window, or NULL (window_doc.c)
 } Window_t;
 
 extern const DispObjVtbl_t Window_Vtbl;
@@ -165,6 +166,46 @@ void Window_GetCursor(Window_t* w, int32_t out[2]);            // "91 8D"
 int Window_CursorAtLineStart(Window_t* w);                     // "91 8E"
 void Window_SetTable(Window_t* w, const int32_t* tableOrNull); // "90 A7"
 int Window_GetTable(Window_t* w, int32_t out[16]);             // hasTable
+
+/* ---- the text document (OpenBGI extension "EF 08", window_doc.c) ----------------
+ * While message scrolling is on, the glyphs drawn into a window's text
+ * layer are also kept as a list ("document") in their own coordinates, so
+ * that text below the text area exists and the view can move over it:
+ * a glyph at document position (x, y) appears at (x, y - scrollY) in the
+ * layer.  The cursor stays in layer coordinates and moves with the view.
+ * Clearing the text layer drops the document. */
+struct RichChar;
+struct RichState;
+typedef struct TextDoc
+{
+	struct RichChar* head;  // every glyph since the layer was cleared, in the order drawn
+	struct RichChar** tail; // where the next ones are appended
+	int32_t scrollY;        // pixels the view has moved down
+	uint32_t serial;        // unique per document: a text output keeps it to notice that the document was dropped
+} TextDoc_t;
+#define WIN_ITEM_ARROW_UP   6 // the item layers the scroll arrows use
+#define WIN_ITEM_ARROW_DOWN 7
+
+int Window_DocActive(Window_t* w);  // scrolling is on and the window writes horizontally
+TextDoc_t* Window_Doc(Window_t* w); // the document, created empty when there is none
+void Window_DocDrop(Window_t* w);   // forget it (the layer keeps its pixels)
+int Window_DocScroll(Window_t* w);  // pixels scrolled; 0 without a document
+/* append the nodes of `rich` (document coordinates), which is left empty;
+ * the result is the link they now hang on (for a later Window_DocCut) */
+struct RichChar** Window_DocAppend(Window_t* w, struct RichState* rich);
+void Window_DocCut(Window_t* w, struct RichChar** link); // free the nodes from `link` on
+int Window_DocMaxScroll(Window_t* w);                    // how far the view can go: the last line, with the cursor's, at the bottom (whole lines)
+void Window_DocSetScroll(Window_t* w, int y);            // move the view (clamped to 0 ..), the cursor with it, and redraw
+void Window_DocRedraw(Window_t* w);                      // paint the text area from the shown nodes
+// 1 when the glyph's line ends inside the text area with the view at `scrollY`, 0 when it reaches below
+int Window_DocFits(Window_t* w, const struct RichChar* c, int scrollY);
+/* draw one node at its place in the view with `effect` / `level`
+ * (Window_DrawBmpToText); 1 and *outScreen the touched screen rectangle,
+ * 0 when it lies outside the text area */
+int Window_DocDrawNode(Window_t* w, Rect_t* outScreen, const struct RichChar* c, int effect, int level);
+// Window_DrawText through the document (the nodes are kept, the view follows the text); 1 drawn, 0 unknown font
+int Window_DocDrawText(Window_t* w, const char* str, int parseTags, const char* tags, int hang, uint32_t colour,
+	uint32_t rubyColour, const int32_t style[5]);
 
 // compositing
 int Window_RecompositeAll(Window_t* w);                                // returns ready

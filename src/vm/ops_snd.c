@@ -216,6 +216,28 @@ static int Opcode_Snd_SeLoadEx(Thread_t* t)
 	return 2;
 }
 
+/* A0 28 (1.547 on): slot, data, mode, gain16, rate16 →
+ * "A0 21" for a BW file the script holds in memory (bsctrl2._bp reads a
+ * voice file into a heap block and plays it as an effect): the data is
+ * decoded whole before the wait ends, so the script may free it after.
+ * `mode` (1 in every script) and the 16.16 playback rate (1.0 there; the
+ * original's "A0 21" of these builds passes 1.0 for it as well) are
+ * accepted and left alone - the effect plays at the file's rate. */
+static int Opcode_Snd_SeLoadMem(Thread_t* t)
+{
+	int32_t gain16;
+	const void* data;
+	int slot;
+	Thread_Pop(t); // rate16
+	gain16 = (int32_t)Thread_Pop(t);
+	Thread_Pop(t); // mode
+	data = PopPtr(t);
+	slot = (int)Thread_Pop(t);
+	CheckSeSlot(slot, t);
+	Thread_SetWait(t, WaitSeMem_New(t, slot, data, gain16 / 65536.0));
+	return 2;
+}
+
 static int Opcode_Snd_SeUnload(Thread_t* t) // A0 22: slot →
 {
 	int slot = (int)Thread_Pop(t);
@@ -306,7 +328,7 @@ static int Opcode_Snd_PlayWave(Thread_t* t) // A0 C0: name → r
 
 /* Fill vm_optable_A0 for the selected engine profile.  Every entry names
  * the opcode, its handler and the generations that have it; the family
- * never changed, so all of them cover GEN_FIRST .. GEN_LAST (see
+ * only gained "A0 28" in 1.547, the rest cover GEN_FIRST .. GEN_LAST (see
  * Vm_FillTable). */
 void Vm_OptableA0Init(void)
 {
@@ -329,6 +351,7 @@ void Vm_OptableA0Init(void)
 		{0x24, Opcode_Snd_SePlay, GEN_FIRST, GEN_LAST},
 		{0x25, Opcode_Snd_SeStop, GEN_FIRST, GEN_LAST},
 		{0x26, Opcode_Snd_SeFadeOut, GEN_FIRST, GEN_LAST},
+		{0x28, Opcode_Snd_SeLoadMem, GEN_1_547, GEN_LAST},
 		{0x80, Opcode_Snd_CdOpen, GEN_FIRST, GEN_LAST},
 		{0x81, Opcode_Snd_CdClose, GEN_FIRST, GEN_LAST},
 		{0x84, Opcode_Snd_CdPlay, GEN_FIRST, GEN_LAST},

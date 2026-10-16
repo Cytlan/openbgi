@@ -69,7 +69,10 @@ The frames of the "streamed" types 0x10000 / 0x10001 have a 0xC0-byte
 header with the offsets at +0xC0 and go through another decoder, with
 the frame data read from the archive on demand.  No game examined ships
 such a file; the engine here reports them as code 0x8000000A (and once on
-stderr) if one turns up.
+stderr) if one turns up.  Their frame codec is known, though: the DCT
+codec of `src/core/cbg2.c` - a version 2 CompressedBG is decoded by the
+original as a one-frame movie of type 0x10001 - with the per-band block
+bitmap marking the blocks a frame changes.
 
 ## The registry and the instructions
 

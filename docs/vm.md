@@ -46,7 +46,9 @@ handler pushes; `tests/vm.c` exercises the base set through a small
 assembler.
 
 Other builds of the engine have more families (`81`, `D0`, `E0`, `7F`)
-and more opcodes; `docs/versions.md` lists them.
+and more opcodes; `docs/versions.md` lists them.  `EF` is not the
+original's: it is the family of OpenBGI's own instructions
+(`ops_obgi.c`, `docs/obgi.md`), present in every profile.
 
 ## Tagged pointers
 
@@ -95,7 +97,12 @@ stack); `BGI_TRACE_FROM=<ms>` delays it, `BGI_TRACE_LAST=<n>` keeps a
 ring instead and dumps it when a message box opens, `BGI_TRACE_OPS=
 FAM:OP,..` follows chosen instructions with their stack arguments and
 results; `BGI_OPSTAT=<file>` writes a histogram of the executed opcodes
-("family opcode count" lines) when the machine stops.  `bin/bpasm -d`
+("family opcode count" lines) when the machine stops; `--list-missing`
+prints the opcodes of the selected profile that have no handler yet, and
+`internal/re_tools/missingops.py` (not part of the release) tells which
+of them a game's programs use.  `BGI_PANEL_DEBUG=1` prints the buttons of
+every panel as it starts and the events it queues (`docs/panel_system.md`).
+`bin/bpasm -d`
 disassembles a program from a file or an archive into a listing with
 labels, names and strings (`docs/asm.md`), and the debugger (`--debug`,
 `docs/debugger.md`) shows the threads, their listings and stacks live.

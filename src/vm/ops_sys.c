@@ -1581,6 +1581,14 @@ static int Opcode_Sys_RingGet(Thread_t* t) // 80 9D: buf, id, idx → code
 	return 0;
 }
 
+// 1.616 on: remove `count` records from index `idx` (0 is the newest) on; 0 ok, 1 unknown ring, 2 index out of range
+static int Opcode_Sys_RingRemove(Thread_t* t) // 80 9E (1.616 on): id, idx, count → code
+{
+	uint32_t count = Thread_Pop(t), idx = Thread_Pop(t), id = Thread_Pop(t);
+	Thread_Push(t, Ring_Remove(id, idx, count));
+	return 0;
+}
+
 // -------------------------------------------------------------------------
 // 80 A0 .. 80 AF : the event queue and display-object priorities
 // -------------------------------------------------------------------------
@@ -2365,6 +2373,7 @@ void Vm_Optable80Init(void)
 		{0x9A, Opcode_Sys_RingCount, GEN_FIRST, GEN_LAST},
 		{0x9C, Opcode_Sys_RingPush, GEN_FIRST, GEN_LAST},
 		{0x9D, Opcode_Sys_RingGet, GEN_FIRST, GEN_LAST},
+		{0x9E, Opcode_Sys_RingRemove, GEN_1_616, GEN_LAST},
 		{0xA0, Opcode_Sys_MsgqGet, GEN_FIRST, GEN_LAST},
 		{0xA1, Opcode_Sys_MsgqPost, GEN_FIRST, GEN_LAST},
 		{0xA8, Opcode_Sys_SubobjSetEnabled, GEN_FIRST, GEN_LAST},

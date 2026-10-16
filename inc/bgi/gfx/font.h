@@ -81,6 +81,11 @@ int FontRaster_Init(FontRaster_t* f, const char* face, int size, int widthPct, i
 void FontRaster_Close(FontRaster_t* f);
 // fetch (render if needed) the glyph of a Shift-JIS code; *out is a copy, the result points to it
 const Glyph_t* FontRaster_Glyph(FontRaster_t* f, Glyph_t* out, int code);
+/* OpenBGI extension: the font's own advance of a character in pixels,
+ * rounded down (so that letters which join overlap rather than gap); the
+ * original places every glyph by its cell or its ink and never asks.  0
+ * for a character the font cannot measure. */
+int FontRaster_Advance(FontRaster_t* f, int code);
 
 // ---- the cache of open fonts (owned by the bitmap manager) -----------------
 typedef struct FontReq // a pre-build request of "90 0E"

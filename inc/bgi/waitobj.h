@@ -35,7 +35,8 @@ Wait_t* WaitEncode2_New(struct Thread* t, void* dst, const void* src, uint32_t w
 // the background loads (src/wait/wait_load.c); errors are raised as script errors
 Wait_t* WaitBmpLoad_New(struct Thread* t, int bmpNo, const char* arc, const char* name); // "90 10"
 Wait_t* WaitSeLoad_New(struct Thread* t, int slot, const char* arc, const char* name, int fadeInMs,
-	double gain); // "A0 20" / "A0 21"
+	double gain);                                                                 // "A0 20" / "A0 21"
+Wait_t* WaitSeMem_New(struct Thread* t, int slot, const void* data, double gain); // "A0 28" (1.547 on): a BW file in memory
 // 1.69/472 on: "90 F4" (pushes 0 ok / 1 / 2 not a movie) and the deferred "90 F6" (pushes 0 / 3 / 5 / 8)
 Wait_t* WaitSeqLoad_New(struct Thread* t, const char* arc, const char* name, int32_t* outNo, int32_t* info);
 Wait_t* WaitSeqDecode_New(struct Thread* t, int bmpNo, int no, uint32_t frame);

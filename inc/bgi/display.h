@@ -126,6 +126,7 @@ void GetCursorBufferPos(int xy[2]);     // the cursor in back-buffer coordinates
 void SetCursorBufferPos(int x, int y);  // move the cursor to a back-buffer position
 int Display_SetFullscreenFit(int mode); // "81 63": 1 when 0 .. 2 (stored only)
 int Display_GetFullscreenFit(void);
+int Display_SetRenderSize(int w, int h);             // "81 6C" (1.669 on): 1 when the aspect is the desktop's (stored only)
 void Display_SetWindowSize(int w, int h);            // "81 64" (stored only)
 void Display_GetWindowSize(int* w, int* h);          // "81 67": the stored size, else the picture size
 void Display_GetDesktopSize(int out[2], int adjust); // "81 0E"

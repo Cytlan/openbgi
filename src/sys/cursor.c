@@ -163,6 +163,15 @@ void SetCursorAutoHide(uint32_t ms)
 	}
 }
 
+/* "B0 06" (1.529 on): whether the cursor is visible - not hidden by the
+ * auto-hide (the sprite cursor of "B0 04" counts as visible).  The 1.616
+ * and later originals also ask Windows whether touch input suppressed the
+ * cursor; there is no such state here. */
+int Cursor_IsVisible(void)
+{
+	return !gHideEnabled || gHideShown;
+}
+
 // Show an auto-hidden cursor again (before a dialog or message box).
 void Cursor_Refresh(void)
 {

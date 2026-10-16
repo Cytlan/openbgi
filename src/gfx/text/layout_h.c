@@ -25,7 +25,12 @@
  * colours, ruby, delays), keeps Latin words together, swallows a space
  * that would end a line, and knows the outline style; those parts are
  * gated on the generation.  *outLines receives the line count, `cur` the
- * cursor behind the text.  1 ok, 0 when the font is unknown. */
+ * cursor behind the text.  1 ok, 0 when the font is unknown.
+ *
+ * OpenBGI extensions (docs/obgi.md): with gTextWordWrap ("EF 03") the word
+ * keeping and the swallowed space also apply before 1.494, and while
+ * gTextDirection ("EF 01") is not 0 the whole layout is done by
+ * Text_LayoutCoreBidi instead. */
 int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int rubyOn, RubyDict_t* dict,
 	int32_t cur[2], const Rect_t* area, int adv, int font, int proportional,
 	int hang, uint32_t colour, const int32_t style[5])
@@ -44,6 +49,8 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 	char word[0x400], run[0x100], tagBuf[0x100], buf[TEXT_CHAR_MAX];
 	char* wordRun;
 
+	if(gTextDirection != 0) // OpenBGI "EF 01": bidirectional text has a layout of its own
+		return Text_LayoutCoreBidi(rich, outLines, str, rubyOn, dict, cur, area, adv, font, proportional, hang, colour, style);
 	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
 		return 0;
 	memset(&m, 0, sizeof m);
@@ -186,7 +193,7 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 		cw = FontInfo_GlyphW(cf);
 		len = TextGetChar(&code, p);
 		dbcs = TextIsWide(code, len);
-		if(m.on && hang)
+		if((m.on || gTextWordWrap) && hang)
 		{
 			// a space that would end the line is dropped with a line break
 			// instead, unless the one before it was a space too
@@ -205,6 +212,7 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 		}
 
 		node = Layout_NewNode(m.delay);
+		node->srcOfs = pos;
 		Bmp_Fill(&view, NULL, 0);
 		Text_PaintGlyph(&view, &g, (int)code, cf->font, m.colour);
 		if(underline || m.linkStart)
@@ -236,14 +244,25 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 		advanceX = width + gap - (gap >> 1) + Layout_Pitch(proportional, cf);
 		nextPos = pos + len;
 		nextPtr = str + nextPos;
-		if(m.on)
+		if(m.on || gTextWordWrap)
 		{
-			int n = Markup_WordRun(wordRun, p);
+			/* the word that starts here; `chars` is its length in characters.
+			 * The original's runs are single-byte text, where that is the
+			 * byte count n; the runs of the "EF 03" word wrap for the older
+			 * generations may hold multi-byte letters. */
+			int n = m.on ? Markup_WordRun(wordRun, p) : Text_WrapWordRun(wordRun, p);
+			int chars = n;
+			if(!m.on)
+			{
+				int k;
+				for(chars = 0, k = 0; k < n; chars++)
+					k += TextCharLen(wordRun + k);
+			}
 			if(n < 1)
 				lineStart = 0;
 			else if(wordSkip > 0)
 				wordSkip--;
-			else if(!lineStart && n >= 2)
+			else if(!lineStart && chars >= 2)
 			{
 				// a Latin word is kept together: it needs its whole width
 				// now (not at the start of a line, where it cannot move)
@@ -251,7 +270,7 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 				Text_MeasureInfo(mm, wordRun, cf, proportional);
 				if(advanceX < mm[0])
 					advanceX = mm[0];
-				wordSkip = skipChars = n - 1;
+				wordSkip = skipChars = chars - 1;
 				nextPtr = p + n;
 			}
 		}
@@ -338,6 +357,7 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 	}
 	BGI_Free(wordRun);
 	BGI_Free(cell.pixels);
+	gTextLastColour = m.colour; // for "92 9B"
 	Markup_Free(&m);
 	return 1;
 }
@@ -379,6 +399,7 @@ static void RubyEmitH(RichChar_t* base, const RubyNode_t* entry, const FontInfo_
 		node->x = startX;
 		node->y = y;
 		node->kind = 2;
+		node->srcOfs = base->srcOfs;
 		Bmp_Fill(&cell, NULL, 0);
 		Font_PaintGlyph(&cell, &g, code, rfi->font, colour);
 		Layout_GlyphBitmap(&node->glyph, w + sdxOn, size + sdyOn, &cell, &g, code, rfi->font, style, sdx, sdy, 0);
@@ -454,6 +475,11 @@ void Text_AlignH(RichState_t* rich, int32_t cur[2], const Rect_t* area, int font
 
 	if(swing == 0)
 		return;
+	if(gTextDirection == 1)
+	{ // (OpenBGI) right-to-left lines start at the right edge
+		Text_AlignBidi(rich, cur, area, swing);
+		return;
+	}
 	// pass 1: one record per line with its right edge
 	for(c = rich->head; c; c = c->next)
 	{

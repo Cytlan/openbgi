@@ -294,6 +294,19 @@ const Glyph_t* FontRaster_Glyph(FontRaster_t* f, Glyph_t* out, int code)
 	return out;
 }
 
+/* the font's own advance of `code` (see font.h): the OS layer measures at
+ * the oversampled size, so the value is scaled back down */
+int FontRaster_Advance(FontRaster_t* f, int code)
+{
+	char str[8];
+	int len;
+	if(!f || !f->os)
+		return 0;
+	len = TextPutChar(str, (uint32_t)code);
+	str[len] = 0;
+	return OS_FontCharAdvance(f->os, str, len) / gAaScale;
+}
+
 // ---- FontCache ---------------------------------------------------------------------------------
 
 FontCache_t* FontCache_New(void)

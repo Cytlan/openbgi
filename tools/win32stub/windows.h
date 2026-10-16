@@ -29,7 +29,7 @@
 
 #define WINAPI
 #define CALLBACK
-#define TRUE 1
+#define TRUE  1
 #define FALSE 0
 #define CONST const
 
@@ -65,50 +65,274 @@ typedef LRESULT(CALLBACK* WNDPROC)(HWND, UINT, WPARAM, LPARAM);
 typedef INT_PTR(CALLBACK* DLGPROC)(HWND, UINT, WPARAM, LPARAM);
 typedef DWORD(WINAPI* LPTHREAD_START_ROUTINE)(LPVOID);
 
-typedef struct { DWORD Data1; WORD Data2; WORD Data3; BYTE Data4[8]; } GUID, IID, CLSID;
+typedef struct
+{
+	DWORD Data1;
+	WORD Data2;
+	WORD Data3;
+	BYTE Data4[8];
+} GUID, IID, CLSID;
 typedef const GUID* REFIID;
-typedef struct { LONG left, top, right, bottom; } RECT;
-typedef struct { LONG x, y; } POINT;
-typedef struct { LONG cx, cy; } SIZE;
-typedef struct { HWND hwnd; UINT message; WPARAM wParam; LPARAM lParam; DWORD time; POINT pt; } MSG;
-typedef struct { HDC hdc; BOOL fErase; RECT rcPaint; BOOL fRestore, fIncUpdate; BYTE rgbReserved[32]; } PAINTSTRUCT;
-typedef struct { UINT cbSize, style; WNDPROC lpfnWndProc; int cbClsExtra, cbWndExtra; HINSTANCE hInstance; HICON hIcon; HCURSOR hCursor; HBRUSH hbrBackground; LPCWSTR lpszMenuName, lpszClassName; HICON hIconSm; } WNDCLASSEXW;
-typedef struct { WCHAR dmDeviceName[32]; WORD dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; DWORD dmFields; DWORD dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency; } DEVMODEW;
-typedef struct { DWORD biSize; LONG biWidth, biHeight; WORD biPlanes, biBitCount; DWORD biCompression, biSizeImage; LONG biXPelsPerMeter, biYPelsPerMeter; DWORD biClrUsed, biClrImportant; } BITMAPINFOHEADER;
-typedef struct { BYTE rgbBlue, rgbGreen, rgbRed, rgbReserved; } RGBQUAD;
-typedef struct { BITMAPINFOHEADER bmiHeader; RGBQUAD bmiColors[1]; } BITMAPINFO;
-typedef struct { WORD wFormatTag, nChannels; DWORD nSamplesPerSec, nAvgBytesPerSec; WORD nBlockAlign, wBitsPerSample, cbSize; } WAVEFORMATEX;
-typedef struct WAVEHDR { LPSTR lpData; DWORD dwBufferLength, dwBytesRecorded; DWORD_PTR dwUser; DWORD dwFlags, dwLoops; struct WAVEHDR* lpNext; DWORD_PTR reserved; } WAVEHDR;
-typedef struct { DWORD_PTR dwCallback; MCIDEVICEID wDeviceID; LPCWSTR lpstrDeviceType, lpstrElementName, lpstrAlias; } MCI_OPEN_PARMSW;
-typedef struct { DWORD_PTR dwCallback; DWORD dwTimeFormat, dwAudio; } MCI_SET_PARMS;
-typedef struct { DWORD_PTR dwCallback; } MCI_GENERIC_PARMS;
-typedef struct { DWORD_PTR dwCallback, dwReturn; DWORD dwItem, dwTrack; } MCI_STATUS_PARMS;
-typedef struct { DWORD_PTR dwCallback; DWORD dwFrom, dwTo; } MCI_PLAY_PARMS;
-typedef struct { DWORD lStructSize; HWND hwndOwner; HINSTANCE hInstance; LPCWSTR lpstrFilter; LPWSTR lpstrCustomFilter; DWORD nMaxCustFilter, nFilterIndex; LPWSTR lpstrFile; DWORD nMaxFile; LPWSTR lpstrFileTitle; DWORD nMaxFileTitle; LPCWSTR lpstrInitialDir, lpstrTitle; DWORD Flags; WORD nFileOffset, nFileExtension; LPCWSTR lpstrDefExt; LPARAM lCustData; void* lpfnHook; LPCWSTR lpTemplateName; } OPENFILENAMEW;
+typedef struct
+{
+	LONG left, top, right, bottom;
+} RECT;
+typedef struct
+{
+	LONG x, y;
+} POINT;
+typedef struct
+{
+	LONG cx, cy;
+} SIZE;
+typedef struct
+{
+	HWND hwnd;
+	UINT message;
+	WPARAM wParam;
+	LPARAM lParam;
+	DWORD time;
+	POINT pt;
+} MSG;
+typedef struct
+{
+	HDC hdc;
+	BOOL fErase;
+	RECT rcPaint;
+	BOOL fRestore, fIncUpdate;
+	BYTE rgbReserved[32];
+} PAINTSTRUCT;
+typedef struct
+{
+	UINT cbSize, style;
+	WNDPROC lpfnWndProc;
+	int cbClsExtra, cbWndExtra;
+	HINSTANCE hInstance;
+	HICON hIcon;
+	HCURSOR hCursor;
+	HBRUSH hbrBackground;
+	LPCWSTR lpszMenuName, lpszClassName;
+	HICON hIconSm;
+} WNDCLASSEXW;
+typedef struct
+{
+	WCHAR dmDeviceName[32];
+	WORD dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+	DWORD dmFields;
+	DWORD dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+} DEVMODEW;
+typedef struct
+{
+	DWORD biSize;
+	LONG biWidth, biHeight;
+	WORD biPlanes, biBitCount;
+	DWORD biCompression, biSizeImage;
+	LONG biXPelsPerMeter, biYPelsPerMeter;
+	DWORD biClrUsed, biClrImportant;
+} BITMAPINFOHEADER;
+typedef struct
+{
+	BYTE rgbBlue, rgbGreen, rgbRed, rgbReserved;
+} RGBQUAD;
+typedef struct
+{
+	BITMAPINFOHEADER bmiHeader;
+	RGBQUAD bmiColors[1];
+} BITMAPINFO;
+typedef struct
+{
+	WORD wFormatTag, nChannels;
+	DWORD nSamplesPerSec, nAvgBytesPerSec;
+	WORD nBlockAlign, wBitsPerSample, cbSize;
+} WAVEFORMATEX;
+typedef struct WAVEHDR
+{
+	LPSTR lpData;
+	DWORD dwBufferLength, dwBytesRecorded;
+	DWORD_PTR dwUser;
+	DWORD dwFlags, dwLoops;
+	struct WAVEHDR* lpNext;
+	DWORD_PTR reserved;
+} WAVEHDR;
+typedef struct
+{
+	DWORD_PTR dwCallback;
+	MCIDEVICEID wDeviceID;
+	LPCWSTR lpstrDeviceType, lpstrElementName, lpstrAlias;
+} MCI_OPEN_PARMSW;
+typedef struct
+{
+	DWORD_PTR dwCallback;
+	DWORD dwTimeFormat, dwAudio;
+} MCI_SET_PARMS;
+typedef struct
+{
+	DWORD_PTR dwCallback;
+} MCI_GENERIC_PARMS;
+typedef struct
+{
+	DWORD_PTR dwCallback, dwReturn;
+	DWORD dwItem, dwTrack;
+} MCI_STATUS_PARMS;
+typedef struct
+{
+	DWORD_PTR dwCallback;
+	DWORD dwFrom, dwTo;
+} MCI_PLAY_PARMS;
+typedef struct
+{
+	DWORD lStructSize;
+	HWND hwndOwner;
+	HINSTANCE hInstance;
+	LPCWSTR lpstrFilter;
+	LPWSTR lpstrCustomFilter;
+	DWORD nMaxCustFilter, nFilterIndex;
+	LPWSTR lpstrFile;
+	DWORD nMaxFile;
+	LPWSTR lpstrFileTitle;
+	DWORD nMaxFileTitle;
+	LPCWSTR lpstrInitialDir, lpstrTitle;
+	DWORD Flags;
+	WORD nFileOffset, nFileExtension;
+	LPCWSTR lpstrDefExt;
+	LPARAM lCustData;
+	void* lpfnHook;
+	LPCWSTR lpTemplateName;
+} OPENFILENAMEW;
 typedef struct _ITEMIDLIST* LPITEMIDLIST;
 typedef const struct _ITEMIDLIST* LPCITEMIDLIST;
 typedef int(CALLBACK* BFFCALLBACK)(HWND, UINT, LPARAM, LPARAM);
-typedef struct { HWND hwndOwner; LPITEMIDLIST pidlRoot; LPWSTR pszDisplayName; LPCWSTR lpszTitle; UINT ulFlags; BFFCALLBACK lpfn; LPARAM lParam; int iImage; } BROWSEINFOW;
-typedef struct { DWORD dwSize, dwICC; } INITCOMMONCONTROLSEX;
-typedef struct { DWORD style, dwExtendedStyle; WORD cdit; short x, y, cx, cy; } DLGTEMPLATE;
-typedef struct { DWORD dwOSVersionInfoSize, dwMajorVersion, dwMinorVersion, dwBuildNumber, dwPlatformId; WCHAR szCSDVersion[128]; } OSVERSIONINFOW;
-typedef union { struct { DWORD LowPart; LONG HighPart; } u; LONGLONG QuadPart; } LARGE_INTEGER;
-typedef struct { UINT wPeriodMin, wPeriodMax; } TIMECAPS;
-typedef struct { DWORD dwLength, dwMemoryLoad; size_t dwTotalPhys, dwAvailPhys, dwTotalPageFile, dwAvailPageFile, dwTotalVirtual, dwAvailVirtual; } MEMORYSTATUS;
-typedef struct { DWORD dwLength, dwMemoryLoad; unsigned long long ullTotalPhys, ullAvailPhys, ullTotalPageFile, ullAvailPageFile, ullTotalVirtual, ullAvailVirtual, ullAvailExtendedVirtual; } MEMORYSTATUSEX;
-typedef struct { DWORD cb; WCHAR DeviceName[32]; WCHAR DeviceString[128]; DWORD StateFlags; WCHAR DeviceID[128]; WCHAR DeviceKey[128]; } DISPLAY_DEVICEW;
-typedef struct { LONG lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight; BYTE lfItalic, lfUnderline, lfStrikeOut, lfCharSet, lfOutPrecision, lfClipPrecision, lfQuality, lfPitchAndFamily; WCHAR lfFaceName[32]; } LOGFONTW;
-typedef struct { LONG tmHeight, tmAscent, tmDescent; } TEXTMETRICW;
-typedef int (CALLBACK* FONTENUMPROCW)(const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM);
-typedef struct { DWORD dwLowDateTime, dwHighDateTime; } FILETIME;
-typedef struct { WORD wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, wMilliseconds; } SYSTEMTIME;
-typedef struct { DWORD dwFileAttributes; FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime; DWORD nFileSizeHigh, nFileSizeLow, dwReserved0, dwReserved1; WCHAR cFileName[260]; WCHAR cAlternateFileName[14]; } WIN32_FIND_DATAW;
-typedef struct { DWORD cb; LPWSTR lpReserved, lpDesktop, lpTitle; DWORD dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags; WORD wShowWindow, cbReserved2; BYTE* lpReserved2; HANDLE hStdInput, hStdOutput, hStdError; } STARTUPINFOW;
-typedef struct { HANDLE hProcess, hThread; DWORD dwProcessId, dwThreadId; } PROCESS_INFORMATION;
-typedef struct { void* DebugInfo; LONG LockCount, RecursionCount; HANDLE OwningThread, LockSemaphore; ULONG_PTR SpinCount; } CRITICAL_SECTION;
-typedef struct { DWORD dwOemId; DWORD dwPageSize; void* lpMinimumApplicationAddress; void* lpMaximumApplicationAddress; DWORD_PTR dwActiveProcessorMask; DWORD dwNumberOfProcessors; } SYSTEM_INFO;
-typedef struct { DWORD nLength; void* lpSecurityDescriptor; BOOL bInheritHandle; } SECURITY_ATTRIBUTES;
-typedef struct { DWORD DeviceType, DeviceNumber, PartitionNumber; } STORAGE_DEVICE_NUMBER;
+typedef struct
+{
+	HWND hwndOwner;
+	LPITEMIDLIST pidlRoot;
+	LPWSTR pszDisplayName;
+	LPCWSTR lpszTitle;
+	UINT ulFlags;
+	BFFCALLBACK lpfn;
+	LPARAM lParam;
+	int iImage;
+} BROWSEINFOW;
+typedef struct
+{
+	DWORD dwSize, dwICC;
+} INITCOMMONCONTROLSEX;
+typedef struct
+{
+	DWORD style, dwExtendedStyle;
+	WORD cdit;
+	short x, y, cx, cy;
+} DLGTEMPLATE;
+typedef struct
+{
+	DWORD dwOSVersionInfoSize, dwMajorVersion, dwMinorVersion, dwBuildNumber, dwPlatformId;
+	WCHAR szCSDVersion[128];
+} OSVERSIONINFOW;
+typedef union
+{
+	struct
+	{
+		DWORD LowPart;
+		LONG HighPart;
+	} u;
+	LONGLONG QuadPart;
+} LARGE_INTEGER;
+typedef struct
+{
+	UINT wPeriodMin, wPeriodMax;
+} TIMECAPS;
+typedef struct
+{
+	DWORD dwLength, dwMemoryLoad;
+	size_t dwTotalPhys, dwAvailPhys, dwTotalPageFile, dwAvailPageFile, dwTotalVirtual, dwAvailVirtual;
+} MEMORYSTATUS;
+typedef struct
+{
+	DWORD dwLength, dwMemoryLoad;
+	unsigned long long ullTotalPhys, ullAvailPhys, ullTotalPageFile, ullAvailPageFile, ullTotalVirtual, ullAvailVirtual, ullAvailExtendedVirtual;
+} MEMORYSTATUSEX;
+typedef struct
+{
+	DWORD cb;
+	WCHAR DeviceName[32];
+	WCHAR DeviceString[128];
+	DWORD StateFlags;
+	WCHAR DeviceID[128];
+	WCHAR DeviceKey[128];
+} DISPLAY_DEVICEW;
+typedef struct
+{
+	LONG lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight;
+	BYTE lfItalic, lfUnderline, lfStrikeOut, lfCharSet, lfOutPrecision, lfClipPrecision, lfQuality, lfPitchAndFamily;
+	WCHAR lfFaceName[32];
+} LOGFONTW;
+typedef struct
+{
+	LONG tmHeight, tmAscent, tmDescent;
+} TEXTMETRICW;
+typedef int(CALLBACK* FONTENUMPROCW)(const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM);
+typedef struct
+{
+	DWORD dwLowDateTime, dwHighDateTime;
+} FILETIME;
+typedef struct
+{
+	WORD wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, wMilliseconds;
+} SYSTEMTIME;
+typedef struct
+{
+	DWORD dwFileAttributes;
+	FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+	DWORD nFileSizeHigh, nFileSizeLow, dwReserved0, dwReserved1;
+	WCHAR cFileName[260];
+	WCHAR cAlternateFileName[14];
+} WIN32_FIND_DATAW;
+typedef struct
+{
+	DWORD dwFileAttributes;
+	FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+	DWORD nFileSizeHigh, nFileSizeLow;
+} WIN32_FILE_ATTRIBUTE_DATA;
+typedef struct
+{
+	DWORD cb;
+	LPWSTR lpReserved, lpDesktop, lpTitle;
+	DWORD dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+	WORD wShowWindow, cbReserved2;
+	BYTE* lpReserved2;
+	HANDLE hStdInput, hStdOutput, hStdError;
+} STARTUPINFOW;
+typedef struct
+{
+	HANDLE hProcess, hThread;
+	DWORD dwProcessId, dwThreadId;
+} PROCESS_INFORMATION;
+typedef struct
+{
+	void* DebugInfo;
+	LONG LockCount, RecursionCount;
+	HANDLE OwningThread, LockSemaphore;
+	ULONG_PTR SpinCount;
+} CRITICAL_SECTION;
+typedef struct
+{
+	DWORD dwOemId;
+	DWORD dwPageSize;
+	void* lpMinimumApplicationAddress;
+	void* lpMaximumApplicationAddress;
+	DWORD_PTR dwActiveProcessorMask;
+	DWORD dwNumberOfProcessors;
+} SYSTEM_INFO;
+typedef struct
+{
+	DWORD nLength;
+	void* lpSecurityDescriptor;
+	BOOL bInheritHandle;
+} SECURITY_ATTRIBUTES;
+typedef struct
+{
+	DWORD DeviceType, DeviceNumber, PartitionNumber;
+} STORAGE_DEVICE_NUMBER;
 
 // COM interfaces are opaque; their methods are the implicit COBJMACROS calls
 typedef struct IUnknown IUnknown;
@@ -123,24 +347,24 @@ typedef struct IPersistFile IPersistFile;
 extern const GUID CLSID_FilterGraph, IID_IGraphBuilder, IID_IMediaControl, IID_IMediaEventEx, IID_IVideoWindow,
 	IID_IMediaSeeking, IID_IBasicAudio, TIME_FORMAT_MEDIA_TIME, CLSID_ShellLink, IID_IShellLinkW, IID_IPersistFile;
 
-#define RGB(r, g, b) ((COLORREF)(((BYTE)(r)) | (((WORD)(g)) << 8) | (((DWORD)(b)) << 16)))
-#define LOWORD(l) ((WORD)((DWORD_PTR)(l) & 0xffff))
-#define HIWORD(l) ((WORD)(((DWORD_PTR)(l) >> 16) & 0xffff))
-#define MAKELPARAM(l, h) ((LPARAM)(DWORD)(((WORD)(l)) | ((DWORD)((WORD)(h))) << 16))
-#define MAKELRESULT(l, h) ((LRESULT)(DWORD)(((WORD)(l)) | ((DWORD)((WORD)(h))) << 16))
-#define MAKEINTRESOURCEA(i) ((LPSTR)(ULONG_PTR)((WORD)(i)))
-#define MAKEINTRESOURCEW(i) ((LPWSTR)(ULONG_PTR)((WORD)(i)))
-#define IDC_ARROW MAKEINTRESOURCEA(32512) // without UNICODE the SDK's IDC_* are narrow: a W call needs a cast
-#define FAILED(hr) ((HRESULT)(hr) < 0)
-#define SUCCEEDED(hr) ((HRESULT)(hr) >= 0)
-#define INVALID_HANDLE_VALUE ((HANDLE)(LONG_PTR)-1)
-#define HWND_TOPMOST ((HWND)-1)
-#define HKEY_LOCAL_MACHINE ((HKEY)(ULONG_PTR)0x80000002)
-#define HKEY_CURRENT_USER ((HKEY)(ULONG_PTR)0x80000001)
-#define HKEY_CLASSES_ROOT ((HKEY)(ULONG_PTR)0x80000000)
-#define ZeroMemory(p, n) memset((p), 0, (n))
-#define GetWindowLongPtrW GetWindowLongW
-#define SetWindowLongPtrW SetWindowLongW
+#define RGB(r, g, b)         ((COLORREF)(((BYTE)(r)) | (((WORD)(g)) << 8) | (((DWORD)(b)) << 16)))
+#define LOWORD(l)            ((WORD)((DWORD_PTR)(l) & 0xffff))
+#define HIWORD(l)            ((WORD)(((DWORD_PTR)(l) >> 16) & 0xffff))
+#define MAKELPARAM(l, h)     ((LPARAM)(DWORD)(((WORD)(l)) | ((DWORD)((WORD)(h))) << 16))
+#define MAKELRESULT(l, h)    ((LRESULT)(DWORD)(((WORD)(l)) | ((DWORD)((WORD)(h))) << 16))
+#define MAKEINTRESOURCEA(i)  ((LPSTR)(ULONG_PTR)((WORD)(i)))
+#define MAKEINTRESOURCEW(i)  ((LPWSTR)(ULONG_PTR)((WORD)(i)))
+#define IDC_ARROW            MAKEINTRESOURCEA(32512) // without UNICODE the SDK's IDC_* are narrow: a W call needs a cast
+#define FAILED(hr)           ((HRESULT)(hr) < 0)
+#define SUCCEEDED(hr)        ((HRESULT)(hr) >= 0)
+#define INVALID_HANDLE_VALUE ((HANDLE)(LONG_PTR) - 1)
+#define HWND_TOPMOST         ((HWND) - 1)
+#define HKEY_LOCAL_MACHINE   ((HKEY)(ULONG_PTR)0x80000002)
+#define HKEY_CURRENT_USER    ((HKEY)(ULONG_PTR)0x80000001)
+#define HKEY_CLASSES_ROOT    ((HKEY)(ULONG_PTR)0x80000000)
+#define ZeroMemory(p, n)     memset((p), 0, (n))
+#define GetWindowLongPtrW    GetWindowLongW
+#define SetWindowLongPtrW    SetWindowLongW
 
 /* The functions with strings among their arguments or results, as the SDK
  * declares them (handles are all void* here, so only the string and
@@ -152,6 +376,8 @@ LPWSTR GetCommandLineW(void);
 HMODULE GetModuleHandleW(LPCWSTR);
 DWORD GetModuleFileNameW(HMODULE, LPWSTR, DWORD);
 DWORD GetFileAttributesW(LPCWSTR);
+BOOL GetFileAttributesExW(LPCWSTR, int, void*);
+DWORD GetFullPathNameW(LPCWSTR, DWORD, LPWSTR, LPWSTR*);
 BOOL SetFileAttributesW(LPCWSTR, DWORD);
 BOOL SetCurrentDirectoryW(LPCWSTR);
 HANDLE CreateFileW(LPCWSTR, DWORD, DWORD, SECURITY_ATTRIBUTES*, DWORD, DWORD, HANDLE);
@@ -181,6 +407,7 @@ LONG RegCreateKeyExW(HKEY, LPCWSTR, DWORD, LPWSTR, DWORD, DWORD, SECURITY_ATTRIB
 LONG RegSetValueExW(HKEY, LPCWSTR, DWORD, DWORD, const BYTE*, DWORD);
 LONG RegDeleteKeyW(HKEY, LPCWSTR);
 WORD RegisterClassExW(const WNDCLASSEXW*);
+WORD GetUserDefaultUILanguage(void);
 HWND CreateWindowExW(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
 BOOL SetWindowTextW(HWND, LPCWSTR);
 int GetWindowTextW(HWND, LPWSTR, int);
@@ -202,6 +429,7 @@ UINT GetDlgItemTextW(HWND, int, LPWSTR, int);
 INT_PTR DialogBoxIndirectParamW(HINSTANCE, const DLGTEMPLATE*, HWND, DLGPROC, LPARAM);
 HWND CreateDialogIndirectParamW(HINSTANCE, const DLGTEMPLATE*, HWND, DLGPROC, LPARAM);
 HWND FindWindowW(LPCWSTR, LPCWSTR);
+HWND WindowFromDC(HDC);
 LRESULT SendMessageTimeoutW(HWND, UINT, WPARAM, LPARAM, UINT, UINT, DWORD_PTR*);
 BOOL SystemParametersInfoW(UINT, UINT, PVOID, UINT);
 UINT MapVirtualKeyW(UINT, UINT);

@@ -38,6 +38,17 @@
  *   strings    after the code, in order of appearance, each occurrence
  *              its own copy; the code is padded to 16 bytes before them
  *              and the area to 16 bytes after them.
+ *
+ * What only the compiler knows (the decompiler writes neither):
+ *   variable   `global int g @ A;` declares a name for an address and
+ *              emits nothing.  The name is the address as the
+ *              declaration wrote it, unfolded (`@ 100 + 4`: push_i8 100;
+ *              push_i8 4; add), followed by `load s` where a value is
+ *              read; the areas other than `global` put the tag of the
+ *              engine's pointer layout on the first number, a push_i32.
+ *   element    a[i]: the array's address; i; then `push S; mul` for
+ *              elements of S = 2 or 4 bytes; add - and `load s` for the
+ *              value.  &a[i] is the same without the load.
  */
 #ifndef BPC_INTERNAL_H_
 #define BPC_INTERNAL_H_

@@ -22,6 +22,7 @@
 #define BGI_SCN_H_
 
 #include "bgi/common.h"
+#include "bgi/prep.h"
 
 // ---- the container ------------------------------------------------------------------------------
 
@@ -152,6 +153,10 @@ typedef struct ScnCmdTable
  * `scenes16` set for a 1.64 game), 0 with a message on stderr when the
  * archive cannot be read or has no scenario programs. */
 int Scn_ScanCommands(const char* sysprgPath, ScnCmdTable_t* out);
+/* the same for an archive that is open already (it stays open); `sysprgPath`
+ * is what the messages call it */
+struct ArcRead;
+int Scn_ScanCommandsArc(struct ArcRead* a, const char* sysprgPath, ScnCmdTable_t* out);
 void Scn_FreeCommands(ScnCmdTable_t* t);
 const ScnCmd_t* Scn_FindCommand(const ScnCmdTable_t* t, uint32_t token);
 const ScnCmd_t* Scn_FindCommandByName(const ScnCmdTable_t* t, const char* name, size_t len);
@@ -203,12 +208,15 @@ typedef struct ScnCompileResult
 	int warnings;
 } ScnCompileResult_t;
 
-/* Compile source text (`len` bytes) into a container.  Messages go to
- * `log` (NULL: stderr) as "<file>:<line>: error: ...".  `cmds` names the
- * game's commands; a command may also be written by its number
- * (`cmd_0x140`).  `#style inline` source compiles to a 16-bit scene
- * (`file.image`). */
-void Scn_Compile(const char* text, size_t len, const char* fileName, const ScnCmdTable_t* cmds, FILE* log,
+/* Compile source text (`len` bytes, a NUL after them) into a container.
+ * Messages go to `log` (NULL: stderr) as "<file>:<line>: error: ...".
+ * `cmds` names the game's commands; a command may also be written by its
+ * number (`cmd_0x140`).  `#style inline` source compiles to a 16-bit scene
+ * (`file.image`); such a source goes through the preprocessor first
+ * (prep.h: `#include "file"` relative to `fileName` or as `inc` says,
+ * `#define`).  The other styles do not: their `#include` records a header
+ * of the original source in the file.  `inc` may be NULL. */
+void Scn_Compile(const char* text, size_t len, const char* fileName, const ScnCmdTable_t* cmds, const PrepIncludes_t* inc, FILE* log,
 	ScnCompileResult_t* out);
 
 #endif // BGI_SCN_H_

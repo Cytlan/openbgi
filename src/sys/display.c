@@ -12,10 +12,13 @@
  * larger mode on wide screens when "80 63" asks for it).  The OS layer
  * does the actual mode switch and window placement; the compositor
  * (Gfx_Resize) is told the picture size, the mode size and the scaling.
- * Several settings of later builds ("80 6E", "81 63", "81 64") are only
- * stored here, since the OS layer presents in its own way.
+ * Two settings of later builds ("80 6E", "81 63") are only stored here,
+ * since the OS layer presents in its own way; "81 64", the window size
+ * those builds let the player choose independently of the picture size,
+ * sizes the client area, and the OS layer scales the picture into it.
  */
 #include "bgi/display.h"
+#include "bgi/engine.h"
 #include "bgi/gfx.h"
 #include "bgi/input.h"
 #include "bgi/sysobj.h"
@@ -33,13 +36,27 @@ int gDisplayEnabled = 1; // "90 01": nothing is presented while 0
 int gScreenWidths[8] = {320, 640, 800, 1024, 1152, 1280, 1600, 0};
 int gScreenHeights[8] = {240, 480, 600, 768, 864, 960, 1200, 0};
 
-static int gFrameW, gFrameH;    // what the window manager adds around the client area, pixels
-static int gScreenW, gScreenH;  // the screen size (halved for two monitors side by side)
-static int gAspectClass;        // 0 4:3 and others, 1 5:4, 2 16:10, 3 5:3, 4 1024x600, 5 16:9
-static int gPosMode;            // "80 63": letter-box into the next larger full-screen mode
-static int gInSetDisplayMode;   // SetDisplayMode is running (its window changes must not re-enter it)
-static int gStyleKeysOn;        // "80 62": the style keys are active
-static uint32_t gStyleKeys[16]; // the keys that toggle windowed / full screen, 0-terminated
+static int gFrameW, gFrameH;           // what the window manager adds around the client area, pixels
+static int gScreenW, gScreenH;         // the screen size (halved for two monitors side by side)
+static int gAspectClass;               // 0 4:3 and others, 1 5:4, 2 16:10, 3 5:3, 4 1024x600, 5 16:9
+static int gPosMode;                   // "80 63": letter-box into the next larger full-screen mode
+static int gInSetDisplayMode;          // SetDisplayMode is running (its window changes must not re-enter it)
+static int gStyleKeysOn;               // "80 62": the style keys are active
+static uint32_t gStyleKeys[16];        // the keys that toggle windowed / full screen, 0-terminated
+static int gWindowSizeW, gWindowSizeH; // "81 64" (1.529 on): the client size of the window, 0 for the picture size
+
+/* the client size of the windowed window: the "81 64" size of 1.529 on
+ * when the script set one, else the picture size */
+static void Display_ClientSize(int picW, int picH, int* w, int* h)
+{
+	*w = picW;
+	*h = picH;
+	if(gEngine->gen >= GEN_1_529 && gWindowSizeW > 0 && gWindowSizeH > 0)
+	{
+		*w = gWindowSizeW;
+		*h = gWindowSizeH;
+	}
+}
 
 // Install the generation's size table (start-up, once the engine profile is known).
 void Display_InitSizeTable(void)
@@ -179,17 +196,19 @@ void SetDisplayMode(int sizeIdx, int pixelMode, int fullscreen)
 	}
 	else
 	{
-		int x, y, w, h;
+		int x, y, w, h, cw, ch;
+		Display_ClientSize(picW, picH, &cw, &ch);
 		if(gFullscreen)
 		{
 			OS_DisplayRestore();
-			Display_CentredWindowPos(picW, picH, &x, &y);
+			Display_CentredWindowPos(cw, ch, &x, &y);
 		}
 		else
 		{
 			OS_WindowGetRect(&x, &y, &w, &h); // keep the position
 		}
-		OS_WindowSetWindowed(x, y, picW, picH);
+		OS_WindowSetWindowed(x, y, cw, ch);
+		OS_WindowSetPicture(picW, picH);
 	}
 	gSizeIndex = sizeIdx;
 	gPixelMode = pixelMode;
@@ -254,12 +273,14 @@ int Display_ToggleStyle(void)
 // The centred window position of the current size; 0, 0 in full screen ("80 80" of 1.69/472, "B0 02").
 void Display_DefaultWindowPos(int* x, int* y)
 {
+	int cw, ch;
 	if(gFullscreen)
 	{
 		*x = *y = 0;
 		return;
 	}
-	Display_CentredWindowPos(gScreenWidths[gSizeIndex], gScreenHeights[gSizeIndex], x, y);
+	Display_ClientSize(gScreenWidths[gSizeIndex], gScreenHeights[gSizeIndex], &cw, &ch);
+	Display_CentredWindowPos(cw, ch, x, y);
 }
 
 // Re-centre the window after the screen's resolution changed (not in full screen or mid-switch).
@@ -306,15 +327,51 @@ int Display_GetFullscreenFit(void)
 	return gFullscreenFit;
 }
 
-/* "81 64" of 1.529 on: the client size of the window, which those builds
- * stretch the picture to; 0, 0 restores the picture size.  Stored only:
- * the window keeps the picture size here (docs/versions.md). */
-static int gWindowSizeW, gWindowSizeH;
+static int gRenderW, gRenderH; // "81 6C": the picture size the 1.669 renderer scales to (stored only)
 
+/* "81 6C" of 1.669 on: a picture size the renderer of that build scales
+ * its output to; accepted (1) when its aspect is the desktop's (the two
+ * ratios within 0.001 of each other), else 0 and nothing changes.  A
+ * non-positive size means the desktop's.  Stored only: the output here
+ * is the game's own picture size. */
+int Display_SetRenderSize(int w, int h)
+{
+	int sw, sh;
+	float d;
+	OS_ScreenSize(&sw, &sh);
+	if(w <= 0 || h <= 0)
+	{
+		w = sw;
+		h = sh;
+	}
+	d = (float)sw / (float)sh - (float)w / (float)h;
+	if(d < 0)
+		d = -d;
+	if(d > 0.001f)
+		return 0;
+	gRenderW = w;
+	gRenderH = h;
+	return 1;
+}
+
+/* "81 64" of 1.529 on: the client size of the window, which those builds
+ * stretch the picture to; 0, 0 restores the picture size.  A window that
+ * is up is resized at once, where it stands (the scripts centre it
+ * afterwards when they want that), and repainted. */
 void Display_SetWindowSize(int w, int h)
 {
 	gWindowSizeW = w;
 	gWindowSizeH = h;
+	if(gEngine->gen >= GEN_1_529 && gWindowExists && !gFullscreen && !gInSetDisplayMode)
+	{
+		int x, y, ow, oh, cw, ch;
+		int picW = gScreenWidths[gSizeIndex], picH = gScreenHeights[gSizeIndex];
+		Display_ClientSize(picW, picH, &cw, &ch);
+		OS_WindowGetRect(&x, &y, &ow, &oh);
+		OS_WindowSetWindowed(x, y, cw, ch);
+		OS_WindowSetPicture(picW, picH);
+		Present_RequestFull();
+	}
 }
 
 // "81 67" (1.669 on): the stored window size, or the picture size while none is set

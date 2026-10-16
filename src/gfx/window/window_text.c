@@ -100,6 +100,8 @@ int Window_DrawText(Window_t* w, const char* str, int parseTags, int hang, uint3
 	tags[0] = gEmptyPath[0];
 	if(parseTags)
 		Text_ParseTags(tags, str);
+	if(Window_DocActive(w)) // OpenBGI "EF 08": the glyphs are kept, so that the text can scroll
+		return Window_DocDrawText(w, str, parseTags, tags, hang, colour, rubyColour, style);
 
 	font = Window_GetFont(w);
 	proportional = Window_GetProportional(w);
@@ -148,6 +150,7 @@ int Window_SetTextAreaRect(Window_t* w, const Rect_t* r)
 	if(r->b < 0 || (uint32_t)r->b >= th)
 		return 0;
 	w->textArea = *r;
+	Window_DocDrop(w); // (OpenBGI) a kept text document was laid out for the old area
 	Window_ResetCursor(w);
 	return 1;
 }
@@ -167,6 +170,7 @@ int Window_SetTextArea(Window_t* w, int x, int y, int cw, int ch)
 // clear the whole text layer and recomposite
 void Window_ClearText(Window_t* w)
 {
+	Window_DocDrop(w); // (OpenBGI) the kept text document goes with the pixels
 	Bmp_Clear(&w->text, NULL);
 	Window_RecompositeAll(w);
 }
@@ -181,6 +185,7 @@ int Window_Scroll(Window_t* w, int n)
 
 	if(n <= 0)
 		return 0;
+	Window_DocDrop(w); // (OpenBGI) the plain output moves pixels the kept text document knows nothing of
 	Window_UsableArea(w, &area);
 	r = area;
 	if(n < area.b - area.t + 1)

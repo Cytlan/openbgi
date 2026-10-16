@@ -20,7 +20,7 @@ list of 16-bit opcodes - and `bgiscn` handles those too (the section
 
     bgiscn -d [-s SYSPRG.arc] [-o OUT] [--raw] [--no-verify] [-v] (FILE | --arc ARCHIVE NAME)
     bgiscn -t [-s SYSPRG.arc] (FILE | --arc ARCHIVE NAME)
-    bgiscn -c [-s SYSPRG.arc] SOURCE -o OUT
+    bgiscn -c [-s SYSPRG.arc] [-I DIR]... SOURCE -o OUT
     bgiscn -r [-s SYSPRG.arc] [-v] (FILE... | --arc ARCHIVE [NAME...])
     bgiscn -l ARCHIVE
     bgiscn --pack ARCHIVE -o OUT.arc NAME=FILE...
@@ -47,6 +47,11 @@ containers, the code generation and the round trip on small sources.
 
 ## Translating a game
 
+`bgidump` and `bgipack` (`docs/dump.md`) do the steps below for every
+scenario file of a game at once, along with its programs, pictures and
+sounds, and are the easier way to a whole translation; `bgiscn` is the
+tool for a single file.
+
     bgiscn -l data01000.arc                         # the entries
     bgiscn -d --arc data01000.arc _01 -o _01.bsc    # decompile a scene
     (edit _01.bsc)
@@ -67,7 +72,11 @@ whose first argument is the text and second the speaker's name; the
 other message commands of a game (`set_name_alias`, the selection
 commands, the chapter titles) carry text the same way.  The source is
 UTF-8 and the strings become Shift-JIS (CP932) in the file: a character
-CP932 lacks turns into `?`, and the compiler warns about it.  The text
+CP932 lacks turns into `?`, and the compiler warns about it.  (For a
+game that runs with UTF-8 text - `docs/obgi.md` says how any generation
+does on OpenBGI - `bgiscn -c -u`, or a line `#encoding utf-8` at the top
+of the scene, keeps the strings as they are written, and a language
+outside the code page can be used.)  The text
 engine of the game then decides how the message is shown (the message
 window's width, the font, the ruby markup `<Rまお>真乎</R>` in the text
 and the rest of the markup are the game's, not the compiler's).
@@ -392,6 +401,32 @@ hex; a dword outside the 16-bit range is written in hex
 move).  Strings are UTF-8 for the file's Shift-JIS as everywhere else.
 The decompiler verifies its output by compiling it back; a file it
 cannot reproduce gets a note on its first line (none of the game's).
+
+A scene may include files and use constants, exactly as the program
+sources do (`docs/bpc.md`, "Including files" and "Constants"; the two
+share the preprocessor):
+
+    // strings.inc
+    #define NAME_SHIZUMA    "静真"
+    #define T_00_001_0_0005 "「……待ち合わせまで、まだちょっとあるな」"  // NAME_SHIZUMA
+
+    // 00_001_0.bsc
+    #style inline
+    #include "strings.inc"
+    name(NAME_SHIZUMA);
+    msg(0, 1, T_00_001_0_0005);
+
+`#include "name"` puts the file in the place of the line - looked for
+beside the scene, then in the directories of `bgiscn -I` - and `#define
+NAME text` makes the name stand for the rest of its line (`#undef NAME`
+ends that).  A constant may stand for anything a statement holds, a
+number as well as a string, and compiles to what its text would: a
+message's text still gets its own entry in the text table at every
+use.  `#style inline` stays the first line.  The decompiler writes
+neither; a translation kept this way is one file of constants and
+scenes that only name them.  This is for the 16-bit scenes only: in the
+other styles `#include` records the name of a header of the original
+source (above) and no preprocessing takes place.
 
 Translating works as above with `nrarc02.arc` in place of
 `data01000.arc`:

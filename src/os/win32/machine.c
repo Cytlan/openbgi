@@ -99,6 +99,11 @@ uint32_t OS_CpuSignature(void)
 }
 
 // GetVersionEx: the platform id (VER_PLATFORM_WIN32_NT = 2) and the major / minor version; 0 when the call fails
+int OS_UiLanguage(void)
+{
+	return (int)GetUserDefaultUILanguage();
+}
+
 int OS_Version(int* platform, int* major, int* minor)
 {
 	OSVERSIONINFOW vi;

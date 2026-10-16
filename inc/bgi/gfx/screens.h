@@ -50,6 +50,13 @@ int PatternB_Set(int pattern, int32_t lifeBase, int32_t lifeVar, int32_t xSpread
 uint32_t PatternA_BindBitmap(int pattern, int bmp); // "C0 24"
 // 1.494 on, "C0 18": an animation of `count` frames for a pattern of a type; 0 / 0x80000001 type / 2 pattern / 5 frames not alike / 6 too many
 uint32_t Pattern_SetAnimation(int type, int pattern, int count, const Bmp_t* frames, int32_t rate1, int32_t rate2);
+/* 1.640 on, "C0 1A" / "C0 1B": the alternate image of a type 1 pattern -
+ * a second animation cross-faded into the picture by `level` (0 .. 0x100)
+ * - and that level alone.  0 / 0x80000001 type not 1 / 2 pattern (1B: no
+ * alternate image) / 5 frames not alike / 6 too many / 7 (1B) pattern */
+uint32_t Pattern_SetAltAnimation(int type, int pattern, int count, const Bmp_t* frames, int32_t rate1, int32_t rate2,
+	int level);
+uint32_t Pattern_SetAltLevel(int type, int pattern, int level);
 uint32_t PatternB_BindBitmap(int pattern, int bmp); // "C0 2C"
 // "C0 09": redraw the screen every `intervalMs` without the script (0 stops); 0 = no such screen
 int Ptcl_SetAuto(uint32_t handle, uint32_t intervalMs);

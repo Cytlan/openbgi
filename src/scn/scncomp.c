@@ -146,6 +146,13 @@ static void ReadToken(Lex_t* l, Token_t* t)
 			l->p++;
 		t->kind = T_DIRECTIVE;
 		snprintf(t->text, sizeof t->text, "%.*s", (int)(l->p - s), s);
+		if(strcmp(t->text, "encoding") == 0)
+		{ // "#encoding utf-8": takes effect here, before the next literal is read
+			int ok;
+			l->p = Asm_EncodingDirective(l->p, l->end, &ok);
+			if(!ok)
+				Errorf(l, l->line, "#encoding utf-8 or #encoding sjis");
+		}
 		return;
 	}
 	if(*l->p == '"')
@@ -1156,6 +1163,8 @@ static void ParseDirective(Parser_t* p)
 	int line = l->tok.line;
 	strcpy(name, l->tok.text);
 	Next(l);
+	if(strcmp(name, "encoding") == 0)
+		return; // the lexer has switched the encoding of the literals
 	if(strcmp(name, "style") == 0)
 	{
 		if(IsIdent(l, "library"))
@@ -2314,7 +2323,7 @@ static void FreeUnit(Unit_t* u)
 	memset(u, 0, sizeof *u);
 }
 
-void Scn_Compile(const char* text, size_t len, const char* fileName, const ScnCmdTable_t* cmds, FILE* log,
+void Scn_Compile(const char* text, size_t len, const char* fileName, const ScnCmdTable_t* cmds, const PrepIncludes_t* inc, FILE* log,
 	ScnCompileResult_t* out)
 {
 	Parser_t p;
@@ -2323,9 +2332,10 @@ void Scn_Compile(const char* text, size_t len, const char* fileName, const ScnCm
 	Code_t* codes = NULL;
 	int i, j;
 	memset(out, 0, sizeof *out);
+	Asm_ResetStringEncoding(); // the default, until an #encoding line says otherwise
 	if(Scn16_IsSource(text, len))
 	{ // a 16-bit scene of the 1.64 games
-		out->errors = Scn16_Compile(text, len, fileName, log, &out->file.image, &out->file.imageSize);
+		out->errors = Scn16_Compile(text, len, fileName, inc, log, &out->file.image, &out->file.imageSize);
 		return;
 	}
 	memset(&p, 0, sizeof p);
@@ -2372,7 +2382,8 @@ void Scn_Compile(const char* text, size_t len, const char* fileName, const ScnCm
 		}
 		// layout: main first, then by name (the raw variant too; it exports nothing, so its names are free)
 		order = (Func_t**)malloc(((size_t)unit.funcCount + 1) * sizeof *order);
-		memcpy(order, unit.funcs, (size_t)unit.funcCount * sizeof *order);
+		if(unit.funcCount)
+			memcpy(order, unit.funcs, (size_t)unit.funcCount * sizeof *order);
 		qsort(order, (size_t)unit.funcCount, sizeof *order, CompareFuncNames);
 		out->file.exports = (ScnExport_t*)calloc((size_t)unit.funcCount + 1, sizeof *out->file.exports);
 		for(i = 0; i < unit.funcCount; i++)
@@ -2459,7 +2470,8 @@ void Scn_Compile(const char* text, size_t len, const char* fileName, const ScnCm
 		i += 1 + k;
 	}
 	out->file.strings = (uint8_t*)calloc(g.stringsLen + 1, 1);
-	memcpy(out->file.strings, g.strings, g.stringsLen);
+	if(g.stringsLen) // a file without strings has no table to copy from
+		memcpy(out->file.strings, g.strings, g.stringsLen);
 	out->file.stringsLen = g.stringsLen;
 	out->file.importCount = unit.importCount;
 	memcpy(out->file.imports, unit.imports, sizeof unit.imports);

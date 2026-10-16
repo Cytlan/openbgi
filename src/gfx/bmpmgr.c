@@ -9,6 +9,7 @@
 #include "bgi/gfx/bmpmgr.h"
 #include <math.h>
 #include "bgi/strutil.h"
+#include "bgi/gfx/text.h" // the text direction of the OpenBGI extensions
 
 BmpMgr_t* gBmpMgr;
 
@@ -594,10 +595,15 @@ int BmpMgr_DrawTextEx(BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const
 	return 1;
 }
 
-// BmpMgr_DrawTextEx without wrapping; *measure receives the widest line
+/* BmpMgr_DrawTextEx without wrapping; *measure receives the widest line.
+ * (OpenBGI: while the text direction of "EF 01" is not 0 the string goes
+ * through the bidirectional layout, so that a caption in Arabic or Hebrew
+ * is joined and ordered like the message text.) */
 int BmpMgr_DrawText(BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const char* str, int handle,
 	uint32_t colour, int effect, int level, int proportional)
 {
+	if(gTextDirection != 0 && m == gTextBmpMgr)
+		return Text_DrawBidiLine(dst, measure, x, y, str, handle, colour, effect, level, proportional);
 	return BmpMgr_DrawTextEx(m, dst, measure, x, y, str, handle, colour, effect, level, proportional, 0, 0);
 }
 

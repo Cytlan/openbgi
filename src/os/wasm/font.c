@@ -19,9 +19,8 @@
  * The interface is the font section of os.h.  Font files cannot be added
  * and no face list exists, so OS_FontAddFile / OS_FontAddMemory /
  * OS_FontEnumFaces report failure and OS_FontFaceExists says yes to every
- * name; OS_FontCharAdvance is not part of this build (no debugger).  The
- * WasmJs_* functions are the page side (EM_JS); tools/wasm/fakebrowser.c
- * stands in for them on a host.
+ * name.  The WasmJs_* functions are the page side (EM_JS);
+ * tools/wasm/fakebrowser.c stands in for them on a host.
  */
 #include "bgi/os.h"
 #include "bgi/os_common.h"
@@ -128,6 +127,21 @@ EM_JS(void, WasmJs_FontRender, (int id, int cp, unsigned char* buf, int pitch, i
 });
 // clang-format on
 
+/* The advance of code point `cp` in the font, in pixels: measureText's
+ * width with the font's horizontal scale applied, rounded to the nearest
+ * pixel.  0 for an unknown font. */
+// clang-format off
+EM_JS(int, WasmJs_FontAdvance, (int id, int cp), {
+	var rec = Module.bgiFonts && Module.bgiFonts[id];
+	if(!rec)
+		return 0;
+	var ctx = Module.bgiFontCanvas.getContext('2d', { willReadFrequently: true });
+	ctx.setTransform(1, 0, 0, 1, 0, 0);
+	ctx.font = rec.font;
+	return Math.round(ctx.measureText(String.fromCodePoint(cp)).width * rec.sx);
+});
+// clang-format on
+
 int OS_FontAddFile(const char* path)
 {
 	BGI_UNUSED(path);
@@ -201,6 +215,14 @@ void OS_FontRender(OsFont_t* f, const char* sjis, int len, uint8_t* buf, int pit
 	if(!f)
 		return;
 	WasmJs_FontRender(f->id, (int)CodePoint(sjis, len), buf, pitch, w, h, 0);
+}
+
+// the advance of the character in pixels (os.h); 0 without a font
+int OS_FontCharAdvance(OsFont_t* f, const char* sjis, int len)
+{
+	if(!f)
+		return 0;
+	return WasmJs_FontAdvance(f->id, (int)CodePoint(sjis, len));
 }
 
 // clear the 1-bit bitmap (pitch * h bytes), then draw (NULL font: a blank cell)

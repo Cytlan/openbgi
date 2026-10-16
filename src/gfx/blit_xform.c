@@ -47,15 +47,22 @@ static inline int Mul7(int a, int w)
 // masks
 // ========================================================================
 
-/* dst (ARGB32) = src colour with the gray bitmap as alpha; an
- * ARGB32 source multiplies its own alpha by the gray value (an RGB32 one
- * takes it as is).  dst and src may be the same view.  7 when the mask is
- * not GRAY8, 0 otherwise (also when nothing was done: dst not ARGB32 or
- * src not 32-bit). */
+// the mask value at (x, y) of a GRAY8 map, or the alpha of an ARGB32 one (1.599 on: a sprite mask may be either)
+static inline uint32_t MaskAt(const Bmp_t* m, const uint8_t* row, int x)
+{
+	return m->mode == PM_GRAY8 ? row[x] : ((const uint32_t*)row)[x] >> 24;
+}
+
+/* dst (ARGB32) = src colour with the mask bitmap (GRAY8, or the alpha of
+ * an ARGB32 one) as alpha; an ARGB32 source multiplies its own alpha by
+ * the mask value (an RGB32 one takes it as is).  dst and src may be the
+ * same view; the mask must cover src.  7 when the mask is neither kind,
+ * 0 otherwise (also when nothing was done: dst not ARGB32 or src not
+ * 32-bit). */
 int Blit_ApplyMask(Bmp_t* dst, const Bmp_t* src, const Bmp_t* gray)
 {
 	int y, x;
-	if(gray->mode != PM_GRAY8)
+	if(gray->mode != PM_GRAY8 && gray->mode != PM_ARGB32)
 		return 7;
 	if(dst->mode != PM_ARGB32)
 		return 0;
@@ -67,7 +74,7 @@ int Blit_ApplyMask(Bmp_t* dst, const Bmp_t* src, const Bmp_t* gray)
 			const uint8_t* g = ROW(gray, y);
 			uint32_t* d = (uint32_t*)ROW(dst, y);
 			for(x = 0; x < src->w; x++)
-				d[x] = (s[x] & 0xffffffu) | (uint32_t)g[x] << 24;
+				d[x] = (s[x] & 0xffffffu) | MaskAt(gray, g, x) << 24;
 		}
 	}
 	else if(src->mode == PM_ARGB32)
@@ -78,7 +85,7 @@ int Blit_ApplyMask(Bmp_t* dst, const Bmp_t* src, const Bmp_t* gray)
 			const uint8_t* g = ROW(gray, y);
 			uint32_t* d = (uint32_t*)ROW(dst, y);
 			for(x = 0; x < src->w; x++)
-				d[x] = (s[x] & 0xffffffu) | ((((s[x] >> 24) * g[x]) << 16) & 0xff000000u);
+				d[x] = (s[x] & 0xffffffu) | ((((s[x] >> 24) * MaskAt(gray, g, x)) << 16) & 0xff000000u);
 		}
 	}
 	return 0;

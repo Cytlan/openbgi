@@ -108,6 +108,30 @@ int OS_Version(int* platform, int* major, int* minor)
 	return 1;
 }
 
+/* the LANGID of the locale in LC_ALL / LC_MESSAGES / LANG: the primary
+ * language from the two-letter code (the ones the games ask about, else
+ * English), the sublanguage 1 (the default) */
+int OS_UiLanguage(void)
+{
+	static const struct
+	{
+		const char* code;
+		int primary;
+	} kLangs[] = {{"ja", 0x11}, {"en", 0x09}, {"zh", 0x04}, {"ko", 0x12}, {"de", 0x07}, {"fr", 0x0c}, {"es", 0x0a},
+		{"it", 0x10}, {"ru", 0x19}, {"pt", 0x16}};
+	const char* env = getenv("LC_ALL");
+	size_t i;
+	if(!env || !*env)
+		env = getenv("LC_MESSAGES");
+	if(!env || !*env)
+		env = getenv("LANG");
+	if(env)
+		for(i = 0; i < sizeof kLangs / sizeof kLangs[0]; i++)
+			if(strncmp(env, kLangs[i].code, 2) == 0 && (env[2] == 0 || env[2] == '_' || env[2] == '.' || env[2] == '@'))
+				return 0x400 | kLangs[i].primary;
+	return 0x409;
+}
+
 // the same as XP Service Pack 3, build 2600
 void OS_VersionEx(uint32_t out[4], char* csd, size_t n)
 {

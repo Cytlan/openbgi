@@ -447,6 +447,42 @@ int Blit_ThroughGray(Bmp_t* dst, int x, int y, const Bmp_t* src, const Bmp_t* gr
 	return 0;
 }
 
+/* The form of 1.529 on (the blitter's ninth argument): the map is aligned
+ * with dst, not with src - gray (0, 0) is dst (0, 0) - and may be of any
+ * size; what is drawn is the overlap of dst, src placed at (x, y) and the
+ * map.  Results as Blit_ThroughGray without the size code 8. */
+int Blit_ThroughGrayScreen(Bmp_t* dst, int x, int y, const Bmp_t* src, const Bmp_t* gray, int param, int level)
+{
+	Bmp_t d = *dst, s = *src, g = *gray;
+	Rect_t r, gr;
+	if(g.mode != PM_GRAY8)
+		return 7;
+	if((unsigned)level > 0x100u)
+		return 3;
+	Rect_FromBmp(&r, &s);
+	Rect_Offset(&r, x, y); // the source's place in dst
+	Rect_FromBmp(&gr, &d);
+	if(!Rect_Clip(&r, &gr))
+		return 4;
+	Rect_FromBmp(&gr, &g);
+	if(!Rect_Clip(&r, &gr))
+		return 4;
+	Bmp_Crop(&d, &r);
+	Bmp_Crop(&g, &r);
+	Rect_Offset(&r, -x, -y);
+	Bmp_Crop(&s, &r);
+	if(d.mode != s.mode)
+		return 1;
+	if(d.mode == PM_RGB32)
+	{
+		if((unsigned)param < 8)
+			ThroughGray_Small(&d, &s, &g, param, level);
+		else
+			ThroughGray_Wave(&d, &s, &g, param & 7, level);
+	}
+	return 0;
+}
+
 // ---- 0xFF channel extraction -------------------------------------------------------------------
 
 /* Effect 0xFF on 32-bit pictures: level 0 .. 2 keeps one colour channel

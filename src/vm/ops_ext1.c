@@ -288,13 +288,15 @@ static int Opcode_Ext1_PtclAnimMode(Thread_t* t) // C0 1F (1.494 on): mode →
  * gives a rate of 0).  Count 0 drops the animation; a missing bitmap of the
  * range, a bad type or pattern, a range of unequal bitmaps and a rejected
  * count are script errors. */
-static int Opcode_Ext1_PtclAnimation(Thread_t* t) // C0 18 (1.494 on): type, pattern, count, firstBmp, a, b, frames →
+/* the shared part of "C0 18" and "C0 1A": the frames firstBmp .. firstBmp
+ * + count - 1 into a new list (NULL for a count of 0; a missing bitmap is
+ * a script error) and the two rates from a, b, frames and the control
+ * mode (see Opcode_Ext1_PtclAnimation) */
+static Bmp_t* PtclAnimFrames(Thread_t* t, int firstBmp, int count, int32_t a, int32_t b, int32_t frames,
+	uint32_t* rate1, uint32_t* rate2)
 {
-	int32_t frames = (int32_t)Thread_Pop(t), b = (int32_t)Thread_Pop(t), a = (int32_t)Thread_Pop(t);
-	int firstBmp = (int)Thread_Pop(t), count = (int)Thread_Pop(t);
-	int pattern = (int)Thread_Pop(t), type = (int)Thread_Pop(t);
 	Bmp_t* list = NULL;
-	uint32_t rate1 = 0, rate2 = 0, f16 = (uint32_t)frames << 16, r;
+	uint32_t f16 = (uint32_t)frames << 16;
 	int i, ok = 1;
 	if(count > 0 && firstBmp != -1)
 	{
@@ -312,23 +314,27 @@ static int Opcode_Ext1_PtclAnimation(Thread_t* t) // C0 18 (1.494 on): type, pat
 	switch(gPtclAnimMode)
 	{
 		case 0:
-			rate1 = a ? f16 / (uint32_t)a : 0;
-			rate2 = b ? f16 / (uint32_t)b : 0;
+			*rate1 = a ? f16 / (uint32_t)a : 0;
+			*rate2 = b ? f16 / (uint32_t)b : 0;
 			if(!a || !b)
-				rate2 = 0;
+				*rate2 = 0;
 			break;
 		case 1:
-			rate1 = a ? f16 / (uint32_t)a : 0;
-			rate2 = (a && b) ? f16 / (uint32_t)(a + b) - rate1 : 0;
+			*rate1 = a ? f16 / (uint32_t)a : 0;
+			*rate2 = (a && b) ? f16 / (uint32_t)(a + b) - *rate1 : 0;
 			break;
 		case 2:
-			rate1 = a ? f16 / (uint32_t)a : 0;
-			rate2 = a ? (uint32_t)(((uint64_t)rate1 * (uint32_t)b) / (uint32_t)a) : 0;
+			*rate1 = a ? f16 / (uint32_t)a : 0;
+			*rate2 = a ? (uint32_t)(((uint64_t)*rate1 * (uint32_t)b) / (uint32_t)a) : 0;
 			break;
-		default: rate1 = rate2 = (uint32_t)count; break;
+		default: *rate1 = *rate2 = (uint32_t)count; break;
 	}
-	r = Pattern_SetAnimation(type, pattern, count, list, (int32_t)rate1, (int32_t)rate2);
-	BGI_Free(list);
+	return list;
+}
+
+// the script errors of the animation setters (0 passes)
+static void PtclAnimResult(Thread_t* t, uint32_t r, int type, int pattern, int firstBmp, int count)
+{
 	switch(r)
 	{
 		case 0x80000001u: EXT_ERROR(t, MSG_BAD_PTCL_TYPE, type); break;
@@ -336,6 +342,56 @@ static int Opcode_Ext1_PtclAnimation(Thread_t* t) // C0 18 (1.494 on): type, pat
 		case 0x80000004u: EXT_ERROR(t, MSG_BMP_NOT_EXIST, firstBmp); break;
 		case 0x80000005u: EXT_ERROR(t, MSG_BMP_RANGE_NOT_CONFORM, firstBmp, firstBmp + count - 1); break;
 		case 0x80000006u: EXT_ERROR(t, MSG_BAD_BMP_COUNT, count); break;
+		default: break;
+	}
+}
+
+static int Opcode_Ext1_PtclAnimation(Thread_t* t) // C0 18 (1.494 on): type, pattern, count, firstBmp, a, b, frames →
+{
+	int32_t frames = (int32_t)Thread_Pop(t), b = (int32_t)Thread_Pop(t), a = (int32_t)Thread_Pop(t);
+	int firstBmp = (int)Thread_Pop(t), count = (int)Thread_Pop(t);
+	int pattern = (int)Thread_Pop(t), type = (int)Thread_Pop(t);
+	uint32_t rate1 = 0, rate2 = 0, r;
+	Bmp_t* list = PtclAnimFrames(t, firstBmp, count, a, b, frames, &rate1, &rate2);
+	r = Pattern_SetAnimation(type, pattern, count, list, (int32_t)rate1, (int32_t)rate2);
+	BGI_Free(list);
+	PtclAnimResult(t, r, type, pattern, firstBmp, count);
+	return 0;
+}
+
+/* 1.640 on: "C0 18" for the alternate image of a type 1 pattern - a second
+ * animation cross-faded into the pattern's picture by `level` (0 .. 0x100:
+ * 0 the picture alone, 0x100 the alternate frame alone; prtclctrl._bp
+ * fades a new animation in through it); only type 1 has one */
+static int Opcode_Ext1_PtclAltAnimation(Thread_t* t) // C0 1A (1.640 on): type, pattern, count, firstBmp, a, b, frames, level →
+{
+	uint32_t level = Thread_Pop(t);
+	int32_t frames = (int32_t)Thread_Pop(t), b = (int32_t)Thread_Pop(t), a = (int32_t)Thread_Pop(t);
+	int firstBmp = (int)Thread_Pop(t), count = (int)Thread_Pop(t);
+	int pattern = (int)Thread_Pop(t), type = (int)Thread_Pop(t);
+	uint32_t rate1 = 0, rate2 = 0, r;
+	Bmp_t* list;
+	if(level > 0x100)
+		EXT_ERROR(t, MSG_BAD_MIX_RATIO, level);
+	list = PtclAnimFrames(t, firstBmp, count, a, b, frames, &rate1, &rate2);
+	r = Pattern_SetAltAnimation(type, pattern, count, list, (int32_t)rate1, (int32_t)rate2, (int)level);
+	BGI_Free(list);
+	PtclAnimResult(t, r, type, pattern, firstBmp, count);
+	return 0;
+}
+
+// 1.640 on: the mix level of the alternate image of a type 1 pattern ("C0 1A")
+static int Opcode_Ext1_PtclAltLevel(Thread_t* t) // C0 1B (1.640 on): type, pattern, level →
+{
+	uint32_t level = Thread_Pop(t);
+	int pattern = (int)Thread_Pop(t), type = (int)Thread_Pop(t);
+	if(level > 0x100)
+		EXT_ERROR(t, MSG_BAD_MIX_RATIO, level);
+	switch(Pattern_SetAltLevel(type, pattern, (int)level))
+	{
+		case 0x80000001u: EXT_ERROR(t, MSG_BAD_PTCL_TYPE, type); break;
+		case 0x80000002u: EXT_ERROR(t, MSG_PTCL_NO_ALT_IMAGE, type, pattern); break;
+		case 0x80000007u: EXT_ERROR(t, MSG_BAD_OBJ_PATTERN, pattern); break;
 		default: break;
 	}
 	return 0;
@@ -615,18 +671,23 @@ static int Opcode_Ext1_EffectFps(Thread_t* t) // C0 4F: enable, fps →
 // wind tables
 // -------------------------------------------------------------------------
 
-/* load a "bwef" particle wind table from the file `name` of archive `arc`
- * into `out` (8 bytes per entry; `base` is added to every entry's offset)
- * and its entry count into *count.  Pushes 0, or 0x80000001 for a missing
- * or empty file, 0x80000002 for a bad magic, 0x80000003 for a size that
- * does not match the count; no script error. */
-static int Opcode_Ext1_LoadBwef(Thread_t* t) // C0 F0: arc, name, out, &count, base → result
+/* load a "bwef" table from the file `name` of archive `arc` into `out` (8
+ * bytes per entry; `base` is added to every entry's first number) and its
+ * entry count into *count.  Pushes 0, or 0x80000001 for a missing or empty
+ * file, 0x80000002 for a bad magic, 0x80000003 for a size that does not
+ * match the count; no script error.
+ *
+ * The argument order is the one the programs push: Nursery Rhyme's
+ * anmmngrm calls it as (out, &count, "nrarc05.arc", <voice name>, <first
+ * mouth bitmap>) for the lip data of a voice - one entry per step, the
+ * mouth frame to show (plus `base`) and the time of a step. */
+static int Opcode_Ext1_LoadBwef(Thread_t* t) // C0 F0: out, &count, arc, name, base → result
 {
 	uint32_t base = Thread_Pop(t);
-	int32_t* count = (int32_t*)PopPtr(t);
-	BwefEntry_t* out = (BwefEntry_t*)PopPtr(t);
 	const char* name = (const char*)PopPtr(t);
 	const char* arc = (const char*)PopPtr(t);
+	int32_t* count = (int32_t*)PopPtr(t);
+	BwefEntry_t* out = (BwefEntry_t*)PopPtr(t);
 	Thread_Push(t, (uint32_t)LoadBwef(arc, name, out, count, base));
 	return 0;
 }
@@ -649,6 +710,8 @@ void Vm_OptableC0Init(void)
 		{0x10, Opcode_Ext1_PtclSetWind, GEN_FIRST, GEN_LAST},
 		{0x20, Opcode_Ext1_PtclGroupA, GEN_FIRST, GEN_LAST},
 		{0x18, Opcode_Ext1_PtclAnimation, GEN_1_494, GEN_LAST},
+		{0x1A, Opcode_Ext1_PtclAltAnimation, GEN_1_640, GEN_LAST},
+		{0x1B, Opcode_Ext1_PtclAltLevel, GEN_1_640, GEN_LAST},
 		{0x1F, Opcode_Ext1_PtclAnimMode, GEN_1_494, GEN_LAST},
 		{0x24, Opcode_Ext1_PtclBitmapA, GEN_FIRST, GEN_LAST},
 		{0x25, Opcode_Ext1_PtclParamA, GEN_FIRST, GEN_LAST},

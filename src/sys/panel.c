@@ -50,11 +50,12 @@ static int ButtonPanel_SetFocus(ButtonPanel_t* p, int btn, int force);
 static int ButtonPanel_GetBitmap(ButtonPanel_t* p, int32_t* out, int g, int i, int focus, int sel);
 static int ButtonPanel_SetSelection(ButtonPanel_t* p, int g, int i);
 static int ButtonPanel_CanDecide(ButtonPanel_t* p, int g, int i);
+static void ButtonPanel_ClickOutside(ButtonPanel_t* p);
 
 static const PanelVtbl_t ButtonPanel_Vtbl = {
 	{ButtonPanel_Destroy, ButtonPanel_Poll, ButtonPanel_OnMessage}, ButtonPanel_Animate, ButtonPanel_FinishOnDecide,
 	ButtonPanel_SetFocus, ButtonPanel_GetBitmap, ButtonPanel_SetSelection, ButtonPanel_CanDecide,
-	ButtonPanel_DecideAt, ButtonPanel_Decide, ButtonPanel_Stop};
+	ButtonPanel_DecideAt, ButtonPanel_Decide, ButtonPanel_Stop, ButtonPanel_ClickOutside};
 
 // ========================================================================
 // construction
@@ -144,6 +145,8 @@ void ButtonPanel_PushEvent(ButtonPanel_t* p, uint32_t msg, uint32_t a, uint32_t 
 	e->b = b;
 	e->next = NULL;
 	tail->next = e;
+	if(getenv("BGI_PANEL_DEBUG"))
+		fprintf(stderr, "panel %p event %08x %08x %08x\n", (void*)p, msg, a, b);
 }
 
 // discard the oldest event; 0 when the queue was empty
@@ -974,6 +977,11 @@ static int ButtonPanel_CanDecide(ButtonPanel_t* p, int g, int i)
 	return 1;
 }
 
+// the `clickOutside` hook: a button panel ignores a click beside its buttons (the sprite panel reports it)
+static void ButtonPanel_ClickOutside(ButtonPanel_t* p)
+{
+}
+
 // the `finishOnDecide` hook: a decision ends a button panel
 static int ButtonPanel_FinishOnDecide(ButtonPanel_t* p)
 {
@@ -1194,7 +1202,10 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 	{
 		case ACT_CLICK:
 			if(p->focus == -1)
+			{
+				PANEL_VT(p)->clickOutside(p);
 				return result;
+			}
 			{
 				const PanelInfo_t* f = &p->buttons[p->focus];
 				if(!PANEL_VT(p)->canDecide(p, f->group, f->index))

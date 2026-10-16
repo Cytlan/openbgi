@@ -11,7 +11,8 @@
  *   bgiscn -d [-s SYSPRG.arc] [-o OUT] FILE   decompile a scenario file
  *   bgiscn -d [-s SYSPRG.arc] --arc ARCHIVE NAME [-o OUT]
  *   bgiscn -t FILE | --arc ARCHIVE NAME       the token listing
- *   bgiscn -c [-s SYSPRG.arc] SOURCE -o OUT   compile source to a scenario file
+ *   bgiscn -c [-s SYSPRG.arc] [-I DIR]... SOURCE -o OUT
+ *                                             compile source to a scenario file
  *   bgiscn -r [-s SYSPRG.arc] (FILE... | --arc ARCHIVE [NAME...])
  *                                             round trip: decompile, compile, compare
  *   bgiscn -l ARCHIVE                         list an archive
@@ -24,16 +25,18 @@
 #include "bgi/arcread.h"
 #include "bgi/os.h"
 #include "bgi/scn.h"
+#include "bgi/asm.h"
 
 static void Usage(void)
 {
 	fputs("usage: bgiscn --scan SYSPRG.arc\n"
 		  "       bgiscn -d [-s SYSPRG.arc] [-o OUT] [--raw] [--no-verify] (FILE | --arc ARCHIVE NAME)\n"
 		  "       bgiscn -t [-s SYSPRG.arc] (FILE | --arc ARCHIVE NAME)\n"
-		  "       bgiscn -c [-s SYSPRG.arc] SOURCE -o OUT\n"
+		  "       bgiscn -c [-s SYSPRG.arc] [-I DIR]... SOURCE -o OUT\n"
 		  "       bgiscn -r [-s SYSPRG.arc] [-v] (FILE... | --arc ARCHIVE [NAME...])\n"
 		  "       bgiscn -l ARCHIVE\n"
-		  "       bgiscn --pack ARCHIVE -o OUT.arc NAME=FILE...\n",
+		  "       bgiscn --pack ARCHIVE -o OUT.arc NAME=FILE...\n"
+		  "  -u, --utf8   the scenario's strings are UTF-8 (a game that runs with UTF-8 text), not Shift-JIS\n",
 		stderr);
 	exit(2);
 }
@@ -231,7 +234,7 @@ static int RoundTrip(const uint8_t* data, uint32_t size, const char* name, const
 		textLen = 0;
 	text[textLen] = 0;
 	fclose(mem);
-	Scn_Compile(text, textLen, name, cmds->count ? cmds : NULL, stderr, &res);
+	Scn_Compile(text, textLen, name, cmds->count ? cmds : NULL, NULL, stderr, &res);
 	if(res.errors == 0)
 	{
 		back = Scn_Save(&res.file, &backSize);
@@ -263,6 +266,8 @@ int main(int argc, char** argv)
 	const char* outPath = NULL;
 	const char* arc = NULL;
 	const char* files[4096];
+	const char* incDirs[32]; // the -I directories
+	int incCount = 0;
 	int fileCount = 0, i, raw = 0, noVerify = 0, verbose = 0;
 	ScnCmdTable_t cmds;
 	for(i = 1; i < argc; i++)
@@ -276,6 +281,14 @@ int main(int argc, char** argv)
 			outPath = argv[++i];
 		else if(strcmp(a, "--arc") == 0 && i + 1 < argc)
 			arc = argv[++i];
+		else if(strncmp(a, "-I", 2) == 0 && (a[2] || i + 1 < argc))
+		{ // -I DIR or -IDIR: where -c looks for the files of #include lines
+			const char* dir = a[2] ? a + 2 : argv[++i];
+			if(incCount < (int)(sizeof incDirs / sizeof incDirs[0]))
+				incDirs[incCount++] = dir;
+		}
+		else if(strcmp(a, "-u") == 0 || strcmp(a, "--utf8") == 0)
+			Asm_SetDefaultStringEncoding(1); // the scenario's strings are UTF-8
 		else if(strcmp(a, "--raw") == 0)
 			raw = 1;
 		else if(strcmp(a, "--no-verify") == 0)
@@ -393,6 +406,7 @@ int main(int argc, char** argv)
 		uint8_t* text;
 		uint32_t len;
 		ScnCompileResult_t res;
+		PrepIncludes_t inc;
 		uint8_t* out;
 		uint32_t outSize;
 		int ok;
@@ -402,7 +416,10 @@ int main(int argc, char** argv)
 		if(!text)
 			return 1;
 		LoadCommands(sysprg, NULL, &cmds);
-		Scn_Compile((const char*)text, len, files[0], cmds.count ? &cmds : NULL, stderr, &res);
+		memset(&inc, 0, sizeof inc);
+		inc.dirs = incDirs;
+		inc.dirCount = incCount;
+		Scn_Compile((const char*)text, len, files[0], cmds.count ? &cmds : NULL, &inc, stderr, &res);
 		free(text);
 		if(res.errors)
 		{

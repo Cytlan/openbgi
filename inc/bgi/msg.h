@@ -206,6 +206,11 @@ extern int gMsgEnglish; // src/core/error.c: --lang / BGI_LANG, English by defau
 #define MSG_UNDEF_EXTE0_EN "Undefined extended instruction $E0%02X encountered"
 #define MSG_UNDEF_EXTE0 MSG_SELECT(MSG_UNDEF_EXTE0_JA, MSG_UNDEF_EXTE0_EN)
 
+// 未定義の OpenBGI 拡張命令 $EF%02X を検出しました
+#define MSG_UNDEF_OBGI_JA "\226\242\222\350\213`\202\314 OpenBGI \212g\222\243\226\275\227\337 $EF%02X \202\360\214\237\217o\202\265\202\334\202\265\202\275"
+#define MSG_UNDEF_OBGI_EN "Undefined OpenBGI extension instruction $EF%02X encountered"
+#define MSG_UNDEF_OBGI MSG_SELECT(MSG_UNDEF_OBGI_JA, MSG_UNDEF_OBGI_EN)
+
 // 生成されたスレッドのコード領域のサイズが不足しているので、プログラム [ %s : %s ] を読み込むことができません
 #define MSG_THREAD_CODE_FULL_JA "\220\266\220\254\202\263\202\352\202\275\203X\203\214\203b\203h\202\314\203R\201[\203h\227\314\210\346\202\314\203T\203C\203Y\202\252\225s\221\253\202\265\202\304\202\242\202\351\202\314\202\305\201A\203v\203\215\203O\203\211\203\200 [ %s : %s ] \202\360\223\307\202\335\215\236\202\336\202\261\202\306\202\252\202\305\202\253\202\334\202\271\202\361"
 #define MSG_THREAD_CODE_FULL_EN "The code area of the created thread is too small, so the program [ %s : %s ] cannot be loaded"
@@ -1353,6 +1358,61 @@ extern int gMsgEnglish; // src/core/error.c: --lang / BGI_LANG, English by defau
 #define MSG_SE_REGISTER_FATAL_EN "A fatal error occurred while registering the specified file [ %s : %s ]"
 #define MSG_SE_REGISTER_FATAL MSG_SELECT(MSG_SE_REGISTER_FATAL_JA, MSG_SE_REGISTER_FATAL_EN)
 
+// 指定されたデータはBW形式ではないようです
+#define MSG_SE_MEM_NOT_BW_JA "\216w\222\350\202\263\202\352\202\275\203f\201[\203^\202\315BW\214`\216\256\202\305\202\315\202\310\202\242\202\346\202\244\202\305\202\267"
+#define MSG_SE_MEM_NOT_BW_EN "The specified data does not seem to be in the BW format"
+#define MSG_SE_MEM_NOT_BW MSG_SELECT(MSG_SE_MEM_NOT_BW_JA, MSG_SE_MEM_NOT_BW_EN)
+
+// 指定されたBW形式データはモノラルではないので効果音として使用できません
+#define MSG_SE_MEM_NOT_MONO_JA "\216w\222\350\202\263\202\352\202\275BW\214`\216\256\203f\201[\203^\202\315\203\202\203m\203\211\203\213\202\305\202\315\202\310\202\242\202\314\202\305\214\370\211\312\211\271\202\306\202\265\202\304\216g\227p\202\305\202\253\202\334\202\271\202\361"
+#define MSG_SE_MEM_NOT_MONO_EN "The specified BW data is not mono and cannot be used as a sound effect"
+#define MSG_SE_MEM_NOT_MONO MSG_SELECT(MSG_SE_MEM_NOT_MONO_JA, MSG_SE_MEM_NOT_MONO_EN)
+
+// 指定されたBW形式のデータの登録中に致命的なエラーが発生ました
+#define MSG_SE_MEM_REGISTER_FATAL_JA "\216w\222\350\202\263\202\352\202\275BW\214`\216\256\202\314\203f\201[\203^\202\314\223o\230^\222\206\202\311\222v\226\275\223I\202\310\203G\203\211\201[\202\252\224\255\220\266\202\334\202\265\202\275"
+#define MSG_SE_MEM_REGISTER_FATAL_EN "A fatal error occurred while registering the specified BW data"
+#define MSG_SE_MEM_REGISTER_FATAL MSG_SELECT(MSG_SE_MEM_REGISTER_FATAL_JA, MSG_SE_MEM_REGISTER_FATAL_EN)
+
+// 登録先に指定されたトーンカーブの識別番号 [ %d ] は無効です
+#define MSG_TONE_BAD_ID_JA "\223o\230^\220\346\202\311\216w\222\350\202\263\202\352\202\275\203g\201[\203\223\203J\201[\203u\202\314\216\257\225\312\224\324\215\206 [ %d ] \202\315\226\263\214\370\202\305\202\267"
+#define MSG_TONE_BAD_ID_EN "The tone curve number [ %d ] specified as the registration target is invalid"
+#define MSG_TONE_BAD_ID MSG_SELECT(MSG_TONE_BAD_ID_JA, MSG_TONE_BAD_ID_EN)
+
+// 識別番号 [ %d ] に登録しようとしたトーンカーブの経由座標の中に無効なものが含まれています
+#define MSG_TONE_BAD_POINTS_JA "\216\257\225\312\224\324\215\206 [ %d ] \202\311\223o\230^\202\265\202\346\202\244\202\306\202\265\202\275\203g\201[\203\223\203J\201[\203u\202\314\214o\227R\215\300\225W\202\314\222\206\202\311\226\263\214\370\202\310\202\340\202\314\202\252\212\334\202\334\202\352\202\304\202\242\202\334\202\267"
+#define MSG_TONE_BAD_POINTS_EN "The via points of the tone curve to be registered under number [ %d ] contain an invalid one"
+#define MSG_TONE_BAD_POINTS MSG_SELECT(MSG_TONE_BAD_POINTS_JA, MSG_TONE_BAD_POINTS_EN)
+
+// 出力先に指定されたビットマップ [ %d ] は無効です
+#define MSG_TONE_DST_INVALID_JA "\217o\227\315\220\346\202\311\216w\222\350\202\263\202\352\202\275\203r\203b\203g\203}\203b\203v [ %d ] \202\315\226\263\214\370\202\305\202\267"
+#define MSG_TONE_DST_INVALID_EN "The bitmap [ %d ] specified as the destination is invalid"
+#define MSG_TONE_DST_INVALID MSG_SELECT(MSG_TONE_DST_INVALID_JA, MSG_TONE_DST_INVALID_EN)
+
+// 無効なトーンカーブの識別番号 [ %d ] が指定されました
+#define MSG_TONE_NO_CURVE_JA "\226\263\214\370\202\310\203g\201[\203\223\203J\201[\203u\202\314\216\257\225\312\224\324\215\206 [ %d ] \202\252\216w\222\350\202\263\202\352\202\334\202\265\202\275"
+#define MSG_TONE_NO_CURVE_EN "An invalid tone curve number [ %d ] was specified"
+#define MSG_TONE_NO_CURVE MSG_SELECT(MSG_TONE_NO_CURVE_JA, MSG_TONE_NO_CURVE_EN)
+
+// 指定されたビットマップ [ %d ] のピクセルモードはサポートされていません
+#define MSG_TONE_MODE_UNSUPPORTED_JA "\216w\222\350\202\263\202\352\202\275\203r\203b\203g\203}\203b\203v [ %d ] \202\314\203s\203N\203Z\203\213\203\202\201[\203h\202\315\203T\203|\201[\203g\202\263\202\352\202\304\202\242\202\334\202\271\202\361"
+#define MSG_TONE_MODE_UNSUPPORTED_EN "The pixel mode of the specified bitmap [ %d ] is not supported"
+#define MSG_TONE_MODE_UNSUPPORTED MSG_SELECT(MSG_TONE_MODE_UNSUPPORTED_JA, MSG_TONE_MODE_UNSUPPORTED_EN)
+
+// 指定されたエフェクトモード [ %d ] はサポートされていません
+#define MSG_TONE_EFFECT_UNSUPPORTED_JA "\216w\222\350\202\263\202\352\202\275\203G\203t\203F\203N\203g\203\202\201[\203h [ %d ] \202\315\203T\203|\201[\203g\202\263\202\352\202\304\202\242\202\334\202\271\202\361"
+#define MSG_TONE_EFFECT_UNSUPPORTED_EN "The specified effect mode [ %d ] is not supported"
+#define MSG_TONE_EFFECT_UNSUPPORTED MSG_SELECT(MSG_TONE_EFFECT_UNSUPPORTED_JA, MSG_TONE_EFFECT_UNSUPPORTED_EN)
+
+// 無効なカラーフィルムの混合レベル [ %d ] が指定されました
+#define MSG_TONE_BAD_FILM_LEVEL_JA "\226\263\214\370\202\310\203J\203\211\201[\203t\203B\203\213\203\200\202\314\215\254\215\207\203\214\203x\203\213 [ %d ] \202\252\216w\222\350\202\263\202\352\202\334\202\265\202\275"
+#define MSG_TONE_BAD_FILM_LEVEL_EN "An invalid colour film mix level [ %d ] was specified"
+#define MSG_TONE_BAD_FILM_LEVEL MSG_SELECT(MSG_TONE_BAD_FILM_LEVEL_JA, MSG_TONE_BAD_FILM_LEVEL_EN)
+
+// 無効なモノクロイメージの混合レベル [ %d ] が指定されました
+#define MSG_TONE_BAD_MONO_LEVEL_JA "\226\263\214\370\202\310\203\202\203m\203N\203\215\203C\203\201\201[\203W\202\314\215\254\215\207\203\214\203x\203\213 [ %d ] \202\252\216w\222\350\202\263\202\352\202\334\202\265\202\275"
+#define MSG_TONE_BAD_MONO_LEVEL_EN "An invalid monochrome image mix level [ %d ] was specified"
+#define MSG_TONE_BAD_MONO_LEVEL MSG_SELECT(MSG_TONE_BAD_MONO_LEVEL_JA, MSG_TONE_BAD_MONO_LEVEL_EN)
+
 // 指定された出力先ビットマップ [ %d ] はベクトルマップではない、\n\n若しくは無効なピクセル数のベクトルマップです
 #define MSG_VEC_DST_NOT_VECTOR_JA "\216w\222\350\202\263\202\352\202\275\217o\227\315\220\346\203r\203b\203g\203}\203b\203v [ %d ] \202\315\203x\203N\203g\203\213\203}\203b\203v\202\305\202\315\202\310\202\242\201A\012\012\216\341\202\265\202\255\202\315\226\263\214\370\202\310\203s\203N\203Z\203\213\220\224\202\314\203x\203N\203g\203\213\203}\203b\203v\202\305\202\267"
 #define MSG_VEC_DST_NOT_VECTOR_EN "The specified output bitmap [ %d ] is not a vector map,\012\012or is a vector map with an invalid pixel count"
@@ -1938,6 +1998,11 @@ extern int gMsgEnglish; // src/core/error.c: --lang / BGI_LANG, English by defau
 #define MSG_BAD_TEXT_FUNC_PARAM_EN "An invalid function parameter [ %d ] was specified"
 #define MSG_BAD_TEXT_FUNC_PARAM MSG_SELECT(MSG_BAD_TEXT_FUNC_PARAM_JA, MSG_BAD_TEXT_FUNC_PARAM_EN)
 
+// 無効なパラメータ番号 [ %d ] が指定されました
+#define MSG_BAD_TEXT_PARAM_NO_JA "\226\263\214\370\202\310\203p\203\211\203\201\201[\203^\224\324\215\206 [ %d ] \202\252\216w\222\350\202\263\202\352\202\334\202\265\202\275"
+#define MSG_BAD_TEXT_PARAM_NO_EN "An invalid parameter number [ %d ] was specified"
+#define MSG_BAD_TEXT_PARAM_NO MSG_SELECT(MSG_BAD_TEXT_PARAM_NO_JA, MSG_BAD_TEXT_PARAM_NO_EN)
+
 // 無効な制御モード [ %d ] が指定されました
 #define MSG_BAD_CONTROL_MODE_JA "\226\263\214\370\202\310\220\247\214\344\203\202\201[\203h [ %d ] \202\252\216w\222\350\202\263\202\352\202\334\202\265\202\275"
 #define MSG_BAD_CONTROL_MODE_EN "An invalid control mode [ %d ] was specified"
@@ -1967,6 +2032,11 @@ extern int gMsgEnglish; // src/core/error.c: --lang / BGI_LANG, English by defau
 #define MSG_BAD_OBJ_PATTERN_JA "\226\263\214\370\202\310\203I\203u\203W\203F\203N\203g\203p\203^\201[\203\223 [ %d ] \202\252\216w\222\350\202\263\202\352\202\334\202\265\202\275"
 #define MSG_BAD_OBJ_PATTERN_EN "An invalid object pattern [ %d ] was specified"
 #define MSG_BAD_OBJ_PATTERN MSG_SELECT(MSG_BAD_OBJ_PATTERN_JA, MSG_BAD_OBJ_PATTERN_EN)
+
+// パーティクルタイプ [ %d ] のオブジェクトパターン [ %d ] には別イメージが設定されていません
+#define MSG_PTCL_NO_ALT_IMAGE_JA "\203p\201[\203e\203B\203N\203\213\203^\203C\203v [ %d ] \202\314\203I\203u\203W\203F\203N\203g\203p\203^\201[\203\223 [ %d ] \202\311\202\315\225\312\203C\203\201\201[\203W\202\252\220\335\222\350\202\263\202\352\202\304\202\242\202\334\202\271\202\361"
+#define MSG_PTCL_NO_ALT_IMAGE_EN "Object pattern [ %d ] of particle type [ %d ] has no alternate image set"
+#define MSG_PTCL_NO_ALT_IMAGE MSG_SELECT(MSG_PTCL_NO_ALT_IMAGE_JA, MSG_PTCL_NO_ALT_IMAGE_EN)
 
 // 指定されたビットマップ [ %d ～%d ] の中に適合しないものが含まれています
 #define MSG_BMP_RANGE_NOT_CONFORM_JA "\216w\222\350\202\263\202\352\202\275\203r\203b\203g\203}\203b\203v [ %d \201`%d ] \202\314\222\206\202\311\223K\215\207\202\265\202\310\202\242\202\340\202\314\202\252\212\334\202\334\202\352\202\304\202\242\202\334\202\267"

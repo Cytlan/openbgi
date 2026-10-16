@@ -681,10 +681,10 @@ const char* Engine_DetectGame(const uint8_t* ipl, size_t size)
 
 static int8_t gOverride[OPFAM_COUNT][256]; // 0 none, 1 disabled, 2 enabled
 
-// the family of a spec's "main" / "7F" / "80" .. "E0" prefix (n characters); -1 when unknown
+// the family of a spec's "main" / "7F" / "80" .. "EF" prefix (n characters); -1 when unknown
 static int FamilyOf(const char* s, size_t n)
 {
-	static const char* const names[OPFAM_COUNT] = {"main", "7F", "80", "81", "90", "91", "92", "A0", "B0", "C0", "D0", "E0"};
+	static const char* const names[OPFAM_COUNT] = {"main", "7F", "80", "81", "90", "91", "92", "A0", "B0", "C0", "D0", "E0", "EF"};
 	int i;
 	for(i = 0; i < OPFAM_COUNT; i++)
 		if(strlen(names[i]) == n && strncmp(names[i], s, n) == 0)

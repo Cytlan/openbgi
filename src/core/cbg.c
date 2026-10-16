@@ -17,6 +17,7 @@
  *
  * The decoded result is a RawImageHeader followed by tightly packed pixel
  * rows, which is what the bitmap manager expects from a loaded image file.
+ * A version 2 file (the DCT codec of 1.573 on) is handed to cbg2.c.
  * The decoder trusts the header like the original does: there are no bounds
  * checks against a malformed file beyond the checksum of the weight table.
  */
@@ -28,7 +29,7 @@ int BGI_IsCbg(const void* data)
 }
 
 // buf[i] -= next hash value, for len bytes, with the generator seeded by key
-static void CbgDecrypt(uint8_t* buf, uint32_t len, uint32_t key)
+void CbgDecrypt(uint8_t* buf, uint32_t len, uint32_t key)
 {
 	uint32_t i;
 	for(i = 0; i < len; i++)
@@ -36,7 +37,7 @@ static void CbgDecrypt(uint8_t* buf, uint32_t len, uint32_t key)
 }
 
 // 1 when the byte sum and the byte xor of buf match the header's values
-static int CbgCheck(const uint8_t* buf, uint32_t len, uint8_t sum, uint8_t xr)
+int CbgCheck(const uint8_t* buf, uint32_t len, uint8_t sum, uint8_t xr)
 {
 	uint8_t s = 0, x = 0;
 	uint32_t i;
@@ -75,29 +76,20 @@ static void CbgReadWeights(uint32_t* weights, const uint8_t* buf)
 }
 
 // a node of the Huffman tree, 24 bytes
-typedef struct CbgNode
-{
-	uint32_t valid;    // still available for pairing
-	uint32_t weight;   // sum of the leaf weights below
-	uint32_t isParent; // 0 for the 256 leaves, 1 otherwise
-	uint32_t parent;   // 0xffffffff until the node has been paired
-	uint32_t left;     // child for bit 0 (leaf: own index)
-	uint32_t right;    // child for bit 1 (leaf: own index)
-} CbgNode_t;
-
-#define CBG_NODES 511 // 256 leaves + 255 parents
 
 /*
  * Classic Huffman construction: repeatedly take the two valid nodes with the
  * smallest weights (the lower index on a tie) and join them under the next
- * free parent.  Nodes 0..255 are the leaves, the parents follow from 256 on.
- * Returns the root index, or -1 when all weights are zero.
+ * free parent.  Nodes 0 .. leaves-1 are the leaves, the parents follow
+ * (2 * leaves - 1 nodes in all).  Returns the root index, or -1 when all
+ * weights are zero.  The version 2 codec (cbg2.c) builds its 16- and
+ * 176-symbol trees with it.
  */
-static int CbgBuildTree(CbgNode_t* nodes, const uint32_t* weights)
+int CbgBuildTree(CbgNode_t* nodes, const uint32_t* weights, uint32_t leaves)
 {
-	uint32_t sum = 0, i, n;
+	uint32_t sum = 0, i, n, total = 2 * leaves - 1;
 
-	for(i = 0; i < 256; i++)
+	for(i = 0; i < leaves; i++)
 	{
 		nodes[i].valid = weights[i] != 0;
 		nodes[i].weight = weights[i];
@@ -109,7 +101,7 @@ static int CbgBuildTree(CbgNode_t* nodes, const uint32_t* weights)
 	}
 	if(sum == 0)
 		return -1;
-	for(i = 256; i < CBG_NODES; i++)
+	for(i = leaves; i < total; i++)
 	{
 		nodes[i].valid = 0;
 		nodes[i].weight = 0;
@@ -117,7 +109,7 @@ static int CbgBuildTree(CbgNode_t* nodes, const uint32_t* weights)
 		nodes[i].parent = nodes[i].left = nodes[i].right = 0xffffffffu;
 	}
 
-	n = 256;
+	n = leaves;
 	for(;;)
 	{
 		uint32_t idx[2], k;
@@ -252,6 +244,8 @@ uint32_t BGI_CbgDecode(const void* src, void* dst)
 
 	if(!BGI_IsCbg(src))
 		return 0x80000003u;
+	if(h->version == 2)
+		return Cbg2_Decode(src, dst);
 
 	table = (uint8_t*)BGI_Alloc(h->encLen);
 	memcpy(table, s + 0x30, h->encLen);
@@ -268,7 +262,7 @@ uint32_t BGI_CbgDecode(const void* src, void* dst)
 
 	CbgReadWeights(weights, table);
 	nodes = (CbgNode_t*)BGI_Alloc(sizeof(CbgNode_t) * CBG_NODES);
-	root = CbgBuildTree(nodes, weights);
+	root = CbgBuildTree(nodes, weights, 256);
 
 	// the bit stream follows the weight table; it decodes to interLen bytes of
 	// RLE data, which expand to the pixel rows

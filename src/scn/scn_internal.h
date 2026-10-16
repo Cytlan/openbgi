@@ -134,8 +134,11 @@ int Scn16_Decompile(const uint8_t* data, uint32_t size, const ScnDecOptions_t* o
 // 1 when the text begins with `#style inline` (after comments and blank lines)
 int Scn16_IsSource(const char* text, size_t len);
 /* Compile `#style inline` source into a scene image (`*outData`, malloc'ed,
- * `*outSize` bytes).  Returns the number of errors, written to `log` as
- * "<file>:<line>: error: ..." (0: success). */
-int Scn16_Compile(const char* text, size_t len, const char* fileName, FILE* log, uint8_t** outData, uint32_t* outSize);
+ * `*outSize` bytes); the text goes through the preprocessor first
+ * (prep.h; `inc` says where its `#include` looks, may be NULL).  Returns
+ * the number of errors, written to `log` as "<file>:<line>: error: ..."
+ * (0: success). */
+int Scn16_Compile(const char* text, size_t len, const char* fileName, const PrepIncludes_t* inc, FILE* log, uint8_t** outData,
+	uint32_t* outSize);
 
 #endif

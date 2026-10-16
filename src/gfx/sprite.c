@@ -502,13 +502,16 @@ int Sprite_SetProjected(Sprite_t* s, int bmp1, int bmp2, int mixRatio, int level
 	return 0;
 }
 
-/* "90 55": mask the sprite by a screen-sized GRAY8 bitmap addressed in
- * screen coordinates (the sprite shows where the mask is set); -1 removes
- * the mask.  0 ok, 0x80000001 no such bitmap, 0x8000000A not GRAY8 or not
- * the size of the screen. */
+/* "90 55": the mask bitmap, addressed in screen coordinates (the sprite
+ * shows where the mask is set), -1 for none.  A screen-sized GRAY8 bitmap
+ * up to 1.494; from 1.529 on a GRAY8 bitmap of any size, screen aligned
+ * (the sprite shows only where the two overlap), and from 1.599 on an
+ * ARGB32 one as well, whose alpha is the mask.  0 ok, 0x80000001 no such
+ * bitmap, 0x8000000A not a usable mask. */
 int Sprite_SetMask(Sprite_t* s, int bmp)
 {
 	Bmp_t info, back;
+	int ok;
 	if(s->maskObj && bmp != -1) // 1.529 on: a bitmap mask replaces the linked sprite
 		Sprite_LinkMask(s, NULL);
 	if(bmp == -1)
@@ -520,7 +523,13 @@ int Sprite_SetMask(Sprite_t* s, int bmp)
 	if(!SpGetInfo(&info, bmp))
 		return (int)0x80000001;
 	Gfx_CopyBackBmp(gDispGfx, &back);
-	if(info.mode != PM_GRAY8 || info.w != back.w || info.h != back.h)
+	if(gEngine->gen >= GEN_1_599)
+		ok = info.mode == PM_GRAY8 || info.mode == PM_ARGB32;
+	else if(gEngine->gen >= GEN_1_529)
+		ok = info.mode == PM_GRAY8;
+	else
+		ok = info.mode == PM_GRAY8 && info.w == back.w && info.h == back.h;
+	if(!ok)
 		return (int)0x8000000a;
 	s->maskOn = 1;
 	s->maskBmp = bmp;
@@ -1198,7 +1207,10 @@ static int SpMask(Sprite_t* s, Bmp_t* mask, const Rect_t* local, int* owned)
 /* The shared tail of the masked paths: the part of the mask under the
  * dirty piece becomes the alpha of the temporary `tmp` (which holds the
  * piece already rendered), `tmp` is composited onto `dst` with the effect
- * and level, and both temporaries are freed. */
+ * and level, and both temporaries are freed.  From 1.529 on the "90 55"
+ * mask may be smaller than the screen: only the overlap of the piece and
+ * the mask is drawn (the original clips the piece to the mask and skips
+ * the blit when nothing is left). */
 static void FinishMasked(Sprite_t* s, Bmp_t* dst, const Rect_t* local, Bmp_t* tmp, Bmp_t* mask, int owned, int effect,
 	int level)
 {
@@ -1212,7 +1224,26 @@ static void FinishMasked(Sprite_t* s, Bmp_t* dst, const Rect_t* local, Bmp_t* tm
 		Rect_t r = *local;
 		int32_t pos[2];
 		s->obj.vt->getDrawPos(&s->obj, pos);
-		Rect_Offset(&r, pos[0], pos[1]);
+		Rect_Offset(&r, pos[0], pos[1]); // the piece on the screen
+		if(gEngine->gen >= GEN_1_529)
+		{
+			Rect_t mr;
+			Bmp_t tv = *tmp, dv = *dst;
+			Rect_FromBmp(&mr, mask);
+			if(!Rect_Clip(&r, &mr))
+			{
+				Bmp_Free(tmp);
+				return;
+			}
+			Bmp_Crop(mask, &r);
+			Rect_Offset(&r, -pos[0] - local->l, -pos[1] - local->t); // the overlap inside the piece
+			Bmp_Crop(&tv, &r);
+			Bmp_Crop(&dv, &r);
+			Blit_ApplyMask(&tv, &tv, mask);
+			Bmp_BlitEffect(&dv, &tv, effect, level);
+			Bmp_Free(tmp);
+			return;
+		}
 		Bmp_Crop(mask, &r);
 		Blit_ApplyMask(tmp, tmp, mask);
 	}

@@ -302,6 +302,11 @@ uint32_t OS_CpuSignature(void)
 }
 
 // reports Windows XP (NT 5.1): the engine takes the NT paths for platform 2
+int OS_UiLanguage(void)
+{
+	return 0x411; // Japanese: the games' own language
+}
+
 int OS_Version(int* platform, int* major, int* minor)
 {
 	*platform = 2; // VER_PLATFORM_WIN32_NT: the engine takes the NT paths

@@ -58,6 +58,32 @@ static int LayoutAndBlit(int vertical, Bmp_t* text, int* outRectCount, Rect_t* r
 	return ok;
 }
 
+/* OpenBGI ("EF 08"): the horizontal immediate layout up to the blit - the
+ * dictionary from `tags`, the layout, the readings, the alignment - with
+ * the nodes left in `rich` for the caller (the text document of a
+ * scrolling window, src/gfx/window/window_doc.c).  1 ok, 0 for an unknown
+ * font (rich stays empty). */
+int Text_LayoutNodes(RichState_t* rich, int32_t* outLines, int32_t cur[2], const Rect_t* area, const char* str,
+	int parseTags, const char* tags, int font, int proportional, int hang, int swing, int spacing, uint32_t colour,
+	uint32_t rubyColour, const int32_t style[5])
+{
+	FontInfo_t fi;
+	RubyDict_t dict;
+	int adv;
+
+	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+		return 0;
+	memset(&dict, 0, sizeof dict);
+	RubyDict_ParseList(&dict, tags);
+	adv = Font_Percent(fi.size, spacing) + fi.size;
+	Text_LayoutCoreH(rich, outLines, str, parseTags, &dict, cur, area, adv, font, proportional, hang, colour, style);
+	if(parseTags)
+		Text_RubyPlaceH(rich, font, rubyColour, style, &dict);
+	Text_AlignH(rich, cur, area, font, hang, style, swing);
+	RubyDict_Clear(&dict);
+	return 1;
+}
+
 // the horizontal immediate layout (see LayoutAndBlit)
 int Text_LayoutH(Bmp_t* text, int* outRectCount, Rect_t* rects, int* outLines, int32_t cur[2],
 	const Rect_t* area, const char* str, int parseTags, const char* tags, int font,
@@ -93,8 +119,12 @@ int Text_DrawToBitmap(Bmp_t* dst, int* outLines, int x, int y, const char* str, 
 	Rect_FromBmp(&area, dst);
 	cur[0] = x;
 	cur[1] = y;
+	gTextLastPos[0] = x; // the original keeps the pen in the globals "92 9B" reads
+	gTextLastPos[1] = y;
 	r = Text_LayoutH(dst, &rectCount, rects, outLines, cur, &area, str, parseTags, tags, font, proportional,
 		hang, swing, spacing, colour, rubyColour, style, effect, level);
+	gTextLastPos[0] = cur[0];
+	gTextLastPos[1] = cur[1];
 	BGI_Free(rects);
 	return r;
 }

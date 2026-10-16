@@ -8,8 +8,9 @@
  *            bitmap.h.  Every "90 1x" / "91 1x" / "92 1x" bitmap
  *            instruction handler is a thin argument-popping shell around
  *            one of these.  Implemented in src/gfx/bmpops.c (slots and
- *            blits), bmpload.c (image files), bmptext.c (fonts and text)
- *            and vecmaps.c (vector maps and bwef files).
+ *            blits), bmpload.c (image files), bmptext.c (fonts and text),
+ *            vecmaps.c (vector maps and bwef files) and tonecurve.c (the
+ *            tone curves of 1.616 on).
  *
  * Result conventions: 0 success; small integers are per-routine error codes
  * (1 = no destination bitmap, 2 = no source bitmap in most of them, higher
@@ -60,6 +61,19 @@ int BmpOp_Blit(int dst, int x, int y, int src, int effect, int level);
  * not GRAY8, 6 sizes differ, 7 no overlap, 8 bad level */
 int BmpOp_BlitMask(int dst, int x, int y, int src, int gray, int param, int level);
 uint32_t BmpOp_AlphaToScreenGray(int dst, int src, int src2, int x, int y, int ratio); // 1.494 on, "92 1A": the alpha of src as a gray bitmap
+/* 1.616 on, the tone curves (src/gfx/tonecurve.c).  "90 CC": register
+ * curve `id` from six words (the via point x, y of the R, G and B
+ * curves), or remove it with a NULL `points`: 0 ok, 0x16 a point out of
+ * range (nothing registered), 0x8000000f no curve to remove.  "90 CD":
+ * dst becomes src through curve `curveId`, its monochrome mix (colour and
+ * level 0 .. 256) and its colour film (effect 8 / 0x26, colour, level):
+ * 0 ok, 0x80000009 dst cannot be made, 0x8000000a no src, 0x8000000f no
+ * such curve, 0x80000011 src not 32-bit, 0x80000013 bad effect,
+ * 0x80000014 bad film level, 0x80000015 bad monochrome level. */
+uint32_t ToneCurve_Register(int32_t id, const int32_t* points);
+void ToneCurve_FreeAll(void);
+uint32_t BmpOp_ToneCurve(int dst, int src, int32_t curveId, uint32_t monoColour, int monoLevel, uint32_t filmColour,
+	int effect, int filmLevel);
 /* "90 1A": Blit_Displace of src through the vector slots (vec2 -1: none)
  * into dst; 0 ok, 1 / 2 / 4 / 6 no destination / source / vec1 / vec2,
  * 3 modes differ, 5 / 7 vec1 / vec2 is not a vector map, 8 bad level */

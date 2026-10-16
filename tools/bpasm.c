@@ -12,7 +12,7 @@
  *   bpasm -r [-e ENGINE] --arc ARCHIVE [NAME...]         assemble, compare
  *   bpasm -D [-e ENGINE] [--no-verify] FILE._bp        decompile to source (docs/bpc.md)
  *   bpasm -D [-e ENGINE] --arc ARCHIVE NAME            ... an archive entry
- *   bpasm -C [-e ENGINE] SOURCE -o OUT._bp             compile source
+ *   bpasm -C [-e ENGINE] [-I DIR]... SOURCE -o OUT._bp compile source
  *   bpasm -R [-e ENGINE] (FILE._bp... | --arc ARCHIVE [NAME...])
  *                                                      round trip through the decompiler
  *   bpasm -l ARCHIVE                                   list the entries
@@ -23,7 +23,9 @@
  * offsets, -v also reports the programs that round-trip cleanly (otherwise
  * only failures and listings with problems are mentioned) and the size of
  * an assembled file.  The listing goes to standard output unless -o names
- * a file.  docs/asm.md describes the listing.
+ * a file.  -I adds a directory in which -C looks for the files of
+ * `#include` lines (after the directory of the including file; the option
+ * may be repeated).  docs/asm.md describes the listing.
  *
  * A stand-alone program on asm.h (the assembler and disassembler),
  * arcread.h (the archive reader of the tools) and the OS layer (for the
@@ -43,9 +45,10 @@ static void Usage(void)
 		"       bpasm -a [-e ENGINE] FILE.s -o OUT._bp\n"
 		"       bpasm -r [-e ENGINE] (FILE._bp... | --arc ARCHIVE [NAME...])\n"
 		"       bpasm -D [-e ENGINE] [--no-verify] [-v] [-o OUT] (FILE._bp | --arc ARCHIVE NAME)\n"
-		"       bpasm -C [-e ENGINE] SOURCE -o OUT._bp\n"
+		"       bpasm -C [-e ENGINE] [-I DIR]... SOURCE -o OUT._bp\n"
 		"       bpasm -R [-e ENGINE] [-v] (FILE._bp... | --arc ARCHIVE [NAME...])\n"
-		"       bpasm -l ARCHIVE\n");
+		"       bpasm -l ARCHIVE\n"
+		"  -u, --utf8   the program's strings are UTF-8 (a game that runs with UTF-8 text), not Shift-JIS\n");
 	exit(2);
 }
 
@@ -197,7 +200,7 @@ static int RoundTripSource(const uint8_t* file, uint32_t size, const char* name,
 		BGI_Free(text);
 		return 1;
 	}
-	Bpc_Compile(text, (size_t)n, name, gen, stderr, &res);
+	Bpc_Compile(text, (size_t)n, name, gen, NULL, stderr, &res);
 	if(!res.file)
 	{
 		printf("%-24s FAILED: the source does not compile (%d errors)\n", name, res.errors);
@@ -233,6 +236,8 @@ int main(int argc, char** argv)
 	const char* outPath = NULL;
 	const char* files[256]; // the positional arguments (more are ignored)
 	int fileCount = 0;
+	const char* incDirs[32]; // the -I directories
+	int incCount = 0;
 	EngineGen_t gen;
 
 	for(i = 1; i < argc; i++)
@@ -248,6 +253,14 @@ int main(int argc, char** argv)
 			outPath = argv[++i];
 		else if(strcmp(a, "--arc") == 0 && i + 1 < argc)
 			arc = argv[++i];
+		else if(strncmp(a, "-I", 2) == 0 && (a[2] || i + 1 < argc))
+		{ // -I DIR or -IDIR
+			const char* dir = a[2] ? a + 2 : argv[++i];
+			if(incCount < (int)BGI_COUNTOF(incDirs))
+				incDirs[incCount++] = dir;
+		}
+		else if(strcmp(a, "-u") == 0 || strcmp(a, "--utf8") == 0)
+			Asm_SetDefaultStringEncoding(1); // the program's strings are UTF-8
 		else if(strcmp(a, "-b") == 0)
 			showBytes = 1;
 		else if(strcmp(a, "-O") == 0)
@@ -390,13 +403,18 @@ int main(int argc, char** argv)
 		uint8_t* text;
 		uint32_t size;
 		BpcResult_t res;
+		PrepIncludes_t inc;
 		if(fileCount != 1 || !outPath)
 			Usage();
 		text = ReadFile(files[0], &size);
 		if(!text)
 			return 1;
-		Bpc_Compile((const char*)text, size, files[0], gen, stderr, &res);
+		memset(&inc, 0, sizeof inc);
+		inc.dirs = incDirs;
+		inc.dirCount = incCount;
+		Bpc_Compile((const char*)text, size, files[0], gen, &inc, stderr, &res);
 		BGI_Free(text);
+		BGI_Free(res.labels);
 		if(!res.file)
 		{
 			fprintf(stderr, "%s: %d error%s\n", files[0], res.errors, res.errors == 1 ? "" : "s");

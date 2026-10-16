@@ -219,6 +219,8 @@ int32_t Text_GetIndent(void)
 // ---- the text functions of 1.573 on ("91 9A") --------------------------------------------------
 
 int32_t gTextFunc[TEXT_FUNC_MAX] = {1, 0, 0x10000, 0, 0, 0, 0, 0, 1, 0, 0, 0}; // the defaults as a 1.659 build has them
+int32_t gTextLastPos[2];                                                       // "92 9B" 0x100: the pen after the last layout into a bitmap
+uint32_t gTextLastColour;                                                      // "92 9B" 0x101: the colour in effect at its end
 static int32_t gTextScaleRecip;                                                // "91 99": 16.16 reciprocal of the divisor
 
 /* "91 9A": store the parameter of text function `func` (0, or 0x80000000 +

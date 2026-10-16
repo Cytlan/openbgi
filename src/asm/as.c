@@ -1098,6 +1098,7 @@ void Asm_Assemble(const char* text, size_t len, EngineGen_t gen, FILE* log, AsmR
 				: fam == 0xc0                                  ? OPFAM_C0
 				: fam == 0xd0                                  ? OPFAM_D0
 				: fam == 0xe0                                  ? OPFAM_E0
+				: fam == 0xef                                  ? OPFAM_EF
 															   : OPFAM_COUNT;
 			if(f != OPFAM_COUNT && !OpSet_Has(f, st->op, a.gen))
 				Warn(&a, st->line, "%s%s0x%02x is not defined in engine %s", fam ? Asm_FamilyName(fam) : "", fam ? "." : "op ", st->op, kGenNames[a.gen]);
@@ -1132,7 +1133,8 @@ void Asm_Assemble(const char* text, size_t len, EngineGen_t gen, FILE* log, AsmR
 		file[5] = (uint8_t)(size >> 8);
 		file[6] = (uint8_t)(size >> 16);
 		file[7] = (uint8_t)(size >> 24);
-		memcpy(file + 16, a.out, size);
+		if(size) // an empty listing has no buffer
+			memcpy(file + 16, a.out, size);
 		out->file = file;
 		out->size = 16 + size;
 	}

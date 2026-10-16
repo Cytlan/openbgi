@@ -49,6 +49,7 @@ MSG_UNDEF_SYS7F	未定義のシステム制御命令 $7F%02X を検出しまし�
 MSG_UNDEF_SYS81	未定義のシステム制御命令 $81%02X を検出しました	Undefined system control instruction $81%02X encountered
 MSG_UNDEF_EVAL	未定義の評価命令 $D0%02X を検出しました	Undefined evaluation instruction $D0%02X encountered
 MSG_UNDEF_EXTE0	未定義の拡張命令 $E0%02X を検出しました	Undefined extended instruction $E0%02X encountered
+MSG_UNDEF_OBGI	未定義の OpenBGI 拡張命令 $EF%02X を検出しました	Undefined OpenBGI extension instruction $EF%02X encountered
 MSG_THREAD_CODE_FULL	生成されたスレッドのコード領域のサイズが不足しているので、プログラム [ %s : %s ] を読み込むことができません	The code area of the created thread is too small, so the program [ %s : %s ] cannot be loaded
 MSG_PROGRAM_NOT_FOUND	指定されたプログラム [ %s : %s ] は存在しません	The specified program [ %s : %s ] does not exist
 MSG_BAD_USEROP_SLOT	無効なユーザー定義命令・プログラム番号 [ %d ] が指定されました	An invalid user-defined instruction program number [ %d ] was specified
@@ -285,6 +286,17 @@ MSG_BMP_BAD_BITCOUNT2	指定されたBMPファイル [ %s : %s ] はサポート
 MSG_SE_NOT_BW	指定されたファイル [ %s : %s ] はBWファイルではないようです	The specified file [ %s : %s ] does not seem to be a BW file
 MSG_SE_NOT_MONO	指定されたBWファイル [ %s : %s ] はモノラルではないので効果音として使用できません	The specified BW file [ %s : %s ] is not mono and cannot be used as a sound effect
 MSG_SE_REGISTER_FATAL	指定されたファイル [ %s : %s ] の登録中に致命的なエラーが発生した	A fatal error occurred while registering the specified file [ %s : %s ]
+MSG_SE_MEM_NOT_BW	指定されたデータはBW形式ではないようです	The specified data does not seem to be in the BW format
+MSG_SE_MEM_NOT_MONO	指定されたBW形式データはモノラルではないので効果音として使用できません	The specified BW data is not mono and cannot be used as a sound effect
+MSG_SE_MEM_REGISTER_FATAL	指定されたBW形式のデータの登録中に致命的なエラーが発生ました	A fatal error occurred while registering the specified BW data
+MSG_TONE_BAD_ID	登録先に指定されたトーンカーブの識別番号 [ %d ] は無効です	The tone curve number [ %d ] specified as the registration target is invalid
+MSG_TONE_BAD_POINTS	識別番号 [ %d ] に登録しようとしたトーンカーブの経由座標の中に無効なものが含まれています	The via points of the tone curve to be registered under number [ %d ] contain an invalid one
+MSG_TONE_DST_INVALID	出力先に指定されたビットマップ [ %d ] は無効です	The bitmap [ %d ] specified as the destination is invalid
+MSG_TONE_NO_CURVE	無効なトーンカーブの識別番号 [ %d ] が指定されました	An invalid tone curve number [ %d ] was specified
+MSG_TONE_MODE_UNSUPPORTED	指定されたビットマップ [ %d ] のピクセルモードはサポートされていません	The pixel mode of the specified bitmap [ %d ] is not supported
+MSG_TONE_EFFECT_UNSUPPORTED	指定されたエフェクトモード [ %d ] はサポートされていません	The specified effect mode [ %d ] is not supported
+MSG_TONE_BAD_FILM_LEVEL	無効なカラーフィルムの混合レベル [ %d ] が指定されました	An invalid colour film mix level [ %d ] was specified
+MSG_TONE_BAD_MONO_LEVEL	無効なモノクロイメージの混合レベル [ %d ] が指定されました	An invalid monochrome image mix level [ %d ] was specified
 # ---- "91 xx" handlers
 MSG_VEC_DST_NOT_VECTOR	指定された出力先ビットマップ [ %d ] はベクトルマップではない、\n\n若しくは無効なピクセル数のベクトルマップです	The specified output bitmap [ %d ] is not a vector map,\n\nor is a vector map with an invalid pixel count
 MSG_BAD_STRETCH_RANGE	無効な伸縮範囲 [ %d , %d ] が指定されました	An invalid stretch range [ %d , %d ] was specified
@@ -410,12 +422,14 @@ MSG_BAD_FACE_SCALE	無効な倍率 [ 0x%05X , 0x%05X ] が指定されました	
 MSG_BAD_FACE_COORDS	無効な座標 [ 0x%05X , 0x%05X ] が指定されました	Invalid coordinates [ 0x%05X , 0x%05X ] were specified
 MSG_BAD_TEXT_FUNC	無効なファンクション番号 [ %d ] が指定されました	An invalid function number [ %d ] was specified
 MSG_BAD_TEXT_FUNC_PARAM	無効なファンクションパラメータ [ %d ] が指定されました	An invalid function parameter [ %d ] was specified
+MSG_BAD_TEXT_PARAM_NO	無効なパラメータ番号 [ %d ] が指定されました	An invalid parameter number [ %d ] was specified
 MSG_BAD_CONTROL_MODE	無効な制御モード [ %d ] が指定されました	An invalid control mode [ %d ] was specified
 MSG_BAD_CHAR_CODE	無効な文字コード [ %d ] が指定されました	An invalid character code [ %d ] was specified
 MSG_BAD_IMAGE_SIZE	無効なイメージサイズ [ %d , %d ] が指定されました	An invalid image size [ %d , %d ] was specified
 MSG_BAD_DRAW_ORDER	無効な描画順序 [ %d ] が指定されました	An invalid drawing order [ %d ] was specified
 MSG_BAD_PTCL_TYPE	無効なパーティクルタイプ [ %d ] が指定されました	An invalid particle type [ %d ] was specified
 MSG_BAD_OBJ_PATTERN	無効なオブジェクトパターン [ %d ] が指定されました	An invalid object pattern [ %d ] was specified
+MSG_PTCL_NO_ALT_IMAGE	パーティクルタイプ [ %d ] のオブジェクトパターン [ %d ] には別イメージが設定されていません	Object pattern [ %d ] of particle type [ %d ] has no alternate image set
 MSG_BMP_RANGE_NOT_CONFORM	指定されたビットマップ [ %d ～%d ] の中に適合しないものが含まれています	Among the specified bitmaps [ %d to %d ] there is one that does not conform
 MSG_BAD_GETPARAM_ARG	取得対象パラメータ [ 0x%.8X ] に渡された引数 [ %d ( 0x%.8X ) ] に誤りがあります	For the queried parameter [ 0x%.8X ] the argument passed [ %d ( 0x%.8X ) ] is wrong
 # The scenario tool (tools/bgiscn.c, src/scn/): text the game scripts contain, never translated

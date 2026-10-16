@@ -7,7 +7,7 @@
 #   make win             MinGW cross build          -> bin/bgi.exe
 #   make wasm            Emscripten build           -> bin/wasm/openbgi.html (+ .js, .wasm; docs/wasm.md)
 #   make CC=clang        any other C99 compiler
-#   make tools           the command-line tools -> bin/bpasm (the assembler / disassembler)
+#   make tools           the command-line tools -> bin/bpasm, bin/bgiscn, bin/bgidump, bin/bgipack
 #   make test            build and run the unit tests (tests/)
 #   make check           syntax-check every source with -pedantic
 #   make check-win       syntax-check src/os/win32 against stub SDK headers (no MinGW needed)
@@ -127,6 +127,9 @@ CORE_SRC := $(wildcard src/core/*.c)
 ASM_SRC  := $(wildcard src/asm/*.c)
 SCN_SRC  := $(wildcard src/scn/*.c)
 BPC_SRC  := $(wildcard src/bpc/*.c)
+# the dump / pack tools' module (docs/dump.md) is not part of the WebAssembly
+# build: it works on directories of the host
+DUMP_SRC := $(if $(filter wasm wasmsim,$(PLATFORM)),,$(wildcard src/dump/*.c))
 VM_SRC   := $(wildcard src/vm/*.c)
 WAIT_SRC := $(wildcard src/wait/*.c)
 SYS_SRC  := $(wildcard src/sys/*.c) $(wildcard src/sys/install/*.c) $(wildcard src/sysobj/*.c)
@@ -138,7 +141,7 @@ SND_SRC  := $(wildcard src/snd/*.c) $(wildcard src/snd/bw/*.c) $(wildcard src/sn
 DBG_SRC  := $(if $(filter wasm wasmsim,$(PLATFORM)),,$(wildcard src/dbg/*.c) $(wildcard src/dbg/views/*.c))
 COMMON_OS_SRC := src/os/os_common.c
 
-SRC := $(CORE_SRC) $(ASM_SRC) $(SCN_SRC) $(BPC_SRC) $(VM_SRC) $(WAIT_SRC) $(SYS_SRC) $(GFX_SRC) $(SND_SRC) $(DBG_SRC) \
+SRC := $(CORE_SRC) $(ASM_SRC) $(SCN_SRC) $(BPC_SRC) $(DUMP_SRC) $(VM_SRC) $(WAIT_SRC) $(SYS_SRC) $(GFX_SRC) $(SND_SRC) $(DBG_SRC) \
        $(COMMON_OS_SRC) $(OS_SRC)
 OBJ := $(patsubst src/%.c,obj/$(PLATFORM)/%.o,$(SRC)) $(patsubst tools/%.c,obj/$(PLATFORM)/tools/%.o,$(TOOL_SRC))
 DEP := $(OBJ:.o=.d)
@@ -151,7 +154,7 @@ TARGET ?= bin/bgi$(EXE)
 all: $(TARGET)
 
 # ---- the command-line tools (tools/*.c linked with the engine library) ----
-TOOLS := bin/bpasm$(EXE) bin/bgiscn$(EXE)
+TOOLS := bin/bpasm$(EXE) bin/bgiscn$(EXE) bin/bgidump$(EXE) bin/bgipack$(EXE)
 
 tools: $(TOOLS)
 
@@ -159,6 +162,12 @@ bin/bpasm$(EXE): tools/bpasm.c $(LIB_OBJ) | bin
 	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJ) $(LDLIBS)
 
 bin/bgiscn$(EXE): tools/bgiscn.c $(LIB_OBJ) | bin
+	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJ) $(LDLIBS)
+
+bin/bgidump$(EXE): tools/bgidump.c $(LIB_OBJ) | bin
+	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJ) $(LDLIBS)
+
+bin/bgipack$(EXE): tools/bgipack.c $(LIB_OBJ) | bin
 	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJ) $(LDLIBS)
 
 win:

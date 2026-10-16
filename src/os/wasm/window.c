@@ -463,6 +463,13 @@ void OS_WindowSetWindowed(int x, int y, int clientW, int clientH)
 	ApplyCanvas();
 }
 
+// the canvas shows the picture at its own size: no mapping to keep
+void OS_WindowSetPicture(int w, int h)
+{
+	BGI_UNUSED(w);
+	BGI_UNUSED(h);
+}
+
 // ---- presenting ----------------------------------------------------------------------------
 
 static uint8_t* gConv;  // the RGBA rows handed to the canvas, grown to the largest blit so far

@@ -8,7 +8,9 @@
  * screen does not switch the display mode: the window covers the screen
  * (_NET_WM_STATE_FULLSCREEN) and the mode the engine asked for is scaled
  * to fit, centred, with every coordinate the engine sees or hands out
- * translated between the "mode" space and the real screen.  The pop-up
+ * translated between the "mode" space and the real screen.  A windowed
+ * client area of another size than the picture (OS_WindowSetPicture, the
+ * "81 64" window size of 1.529 on) is handled by the same mapping.  The pop-up
  * child windows are in child.c, the text entry in edit.c, the event pump
  * in events.c, the debugger's window in dbgwin.c, and the message boxes
  * and dialogs in msgbox.c and dialogs.c on the toolkit of uikit.c.
@@ -28,9 +30,10 @@ int gX11Active, gX11Minimized, gX11HiddenByUs;      // focus and iconic state (e
 static int gClientW = 800, gClientH = 600;          // the engine's client size (the mode size in full screen)
 int gX11FrameL, gX11FrameT, gX11FrameR, gX11FrameB; // _NET_FRAME_EXTENTS once the window manager tells
 static int gFullscreen;                             // the window covers the screen
-static int gFsModeW, gFsModeH;                      // the display mode the engine thinks it runs in
-static double gFsScale = 1.0;                       // mode -> screen
-static int gFsOffX, gFsOffY;                        // where the scaled mode sits on the screen
+static int gFsModeW, gFsModeH;                      // the display mode (full screen) or picture (windowed) the engine draws
+static int gMapOn;                                  // the mode is scaled into the window: full screen, or a client area of another size
+static double gFsScale = 1.0;                       // mode -> window pixels
+static int gFsOffX, gFsOffY;                        // where the scaled mode sits in the window
 static int gScreenW, gScreenH;                      // the screen in pixels (OS_ScreenSize)
 int gX11CloseRequested, gX11QuitPosted;             // OS_WindowClose / OS_PostQuit, delivered by the next pump
 uint8_t gX11Keys[256];                              // GetAsyncKeyState emulation, indexed by virtual key
@@ -41,41 +44,51 @@ int gX11ModalDepth; // a dialog of uikit.c is up: the engine's windows ignore in
 
 // ---- full-screen mapping -----------------------------------------------------------------------
 
-/* the scale and offset that fit the display mode onto the screen: the
- * smaller of the two ratios so that the whole mode fits with its aspect
- * kept, centred, the rest letterboxed (X11_FillLetterbox) */
+// the window's pixel size: the screen in full screen, the client area otherwise
+static void TargetSize(int* w, int* h)
+{
+	*w = gFullscreen ? gScreenW : gClientW;
+	*h = gFullscreen ? gScreenH : gClientH;
+}
+
+/* the scale and offset that fit the mode onto the window: the smaller of
+ * the two ratios so that the whole mode fits with its aspect kept,
+ * centred, the rest letterboxed (X11_FillLetterbox).  No mapping while a
+ * windowed client area is of the mode's size. */
 static void FsRecompute(void)
 {
 	double sx, sy;
-	if(!gFullscreen || gFsModeW <= 0 || gFsModeH <= 0)
-	{
-		gFsScale = 1.0;
-		gFsOffX = gFsOffY = 0;
+	int tw, th;
+	TargetSize(&tw, &th);
+	gMapOn = 0;
+	gFsScale = 1.0;
+	gFsOffX = gFsOffY = 0;
+	if(gFsModeW <= 0 || gFsModeH <= 0 || (!gFullscreen && tw == gFsModeW && th == gFsModeH))
 		return;
-	}
-	sx = (double)gScreenW / gFsModeW;
-	sy = (double)gScreenH / gFsModeH;
+	gMapOn = 1;
+	sx = (double)tw / gFsModeW;
+	sy = (double)th / gFsModeH;
 	gFsScale = sx < sy ? sx : sy;
-	gFsOffX = (int)((gScreenW - gFsModeW * gFsScale) / 2);
-	gFsOffY = (int)((gScreenH - gFsModeH * gFsScale) / 2);
+	gFsOffX = (int)((tw - gFsModeW * gFsScale) / 2);
+	gFsOffY = (int)((th - gFsModeH * gFsScale) / 2);
 }
 
 // mode (engine) coordinates <-> window pixels
 int X11_ToWinX(int x)
 {
-	return gFullscreen ? (int)(x * gFsScale + 0.5) + gFsOffX : x;
+	return gMapOn ? (int)(x * gFsScale + 0.5) + gFsOffX : x;
 }
 int X11_ToWinY(int y)
 {
-	return gFullscreen ? (int)(y * gFsScale + 0.5) + gFsOffY : y;
+	return gMapOn ? (int)(y * gFsScale + 0.5) + gFsOffY : y;
 }
 int X11_FromWinX(int x)
 {
-	return gFullscreen ? (int)((x - gFsOffX) / gFsScale) : x;
+	return gMapOn ? (int)((x - gFsOffX) / gFsScale) : x;
 }
 int X11_FromWinY(int y)
 {
-	return gFullscreen ? (int)((y - gFsOffY) / gFsScale) : y;
+	return gMapOn ? (int)((y - gFsOffY) / gFsScale) : y;
 }
 
 /* the workhorse behind OS_BlitToWindow / OS_StretchToWindow: the source
@@ -321,26 +334,27 @@ void OS_WindowFillBlack(void)
 	XFlush(gX11Dpy);
 }
 
-// the black bars beside a scaled full-screen picture
+// the black bars beside a scaled picture (full screen, or a window of another size than the picture)
 void X11_FillLetterbox(void)
 {
 	GC gc;
-	int pw, ph;
-	if(!gFullscreen)
+	int pw, ph, tw, th;
+	if(!gMapOn || !gX11Win)
 		return;
+	TargetSize(&tw, &th);
 	pw = (int)(gFsModeW * gFsScale);
 	ph = (int)(gFsModeH * gFsScale);
 	gc = XCreateGC(gX11Dpy, gX11Win, 0, NULL);
 	XSetForeground(gX11Dpy, gc, BlackPixel(gX11Dpy, gX11Screen));
 	if(gFsOffX > 0)
 	{
-		XFillRectangle(gX11Dpy, gX11Win, gc, 0, 0, (unsigned)gFsOffX, (unsigned)gScreenH);
-		XFillRectangle(gX11Dpy, gX11Win, gc, gFsOffX + pw, 0, (unsigned)(gScreenW - gFsOffX - pw), (unsigned)gScreenH);
+		XFillRectangle(gX11Dpy, gX11Win, gc, 0, 0, (unsigned)gFsOffX, (unsigned)th);
+		XFillRectangle(gX11Dpy, gX11Win, gc, gFsOffX + pw, 0, (unsigned)(tw - gFsOffX - pw), (unsigned)th);
 	}
 	if(gFsOffY > 0)
 	{
-		XFillRectangle(gX11Dpy, gX11Win, gc, 0, 0, (unsigned)gScreenW, (unsigned)gFsOffY);
-		XFillRectangle(gX11Dpy, gX11Win, gc, 0, gFsOffY + ph, (unsigned)gScreenW, (unsigned)(gScreenH - gFsOffY - ph));
+		XFillRectangle(gX11Dpy, gX11Win, gc, 0, 0, (unsigned)tw, (unsigned)gFsOffY);
+		XFillRectangle(gX11Dpy, gX11Win, gc, 0, gFsOffY + ph, (unsigned)tw, (unsigned)(th - gFsOffY - ph));
 	}
 	XFreeGC(gX11Dpy, gc);
 }
@@ -798,10 +812,23 @@ void OS_WindowSetWindowed(int x, int y, int clientW, int clientH)
 	}
 	gClientW = clientW;
 	gClientH = clientH;
+	FsRecompute();
 	SetSizeHints(clientW, clientH);
 	XMoveResizeWindow(gX11Dpy, gX11Win, x, y, (unsigned)clientW, (unsigned)clientH);
 	gOriginKnown = 0;
 	XFlush(gX11Dpy);
+}
+
+// the picture the engine draws: scaled into a windowed client area of another size (see FsRecompute)
+void OS_WindowSetPicture(int w, int h)
+{
+	if(gFullscreen || w <= 0 || h <= 0)
+		return;
+	gFsModeW = w;
+	gFsModeH = h;
+	FsRecompute();
+	if(gX11Win)
+		X11_FillLetterbox();
 }
 
 // ---- cursor ------------------------------------------------------------------------------------
@@ -849,6 +876,13 @@ void OS_CursorGetPos(int* x, int* y)
 		*x = X11_FromWinX(rx - cx);
 		*y = X11_FromWinY(ry - cy);
 	}
+	else if(gMapOn)
+	{ // screen coordinates whose client part is in picture pixels (OS_ScreenToClient subtracts the origin)
+		int cx, cy;
+		ClientOrigin(&cx, &cy);
+		*x = cx + X11_FromWinX(rx - cx);
+		*y = cy + X11_FromWinY(ry - cy);
+	}
 	else
 	{
 		*x = rx;
@@ -867,6 +901,13 @@ void OS_CursorSetPos(int x, int y)
 		ClientOrigin(&cx, &cy);
 		x = X11_ToWinX(x) + cx;
 		y = X11_ToWinY(y) + cy;
+	}
+	else if(gMapOn)
+	{
+		int cx, cy;
+		ClientOrigin(&cx, &cy);
+		x = X11_ToWinX(x - cx) + cx;
+		y = X11_ToWinY(y - cy) + cy;
 	}
 	XWarpPointer(gX11Dpy, None, gX11Root, 0, 0, 0, 0, x, y);
 	XFlush(gX11Dpy);

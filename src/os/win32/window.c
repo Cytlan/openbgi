@@ -47,6 +47,88 @@ int gWin32CursorShape;
 // the display mode: 1 while ChangeDisplaySettings is in effect
 static int gModeChanged;
 
+/* The windowed client area and the picture the engine draws into it.  Up
+ * to 1.494 they are the same size; from 1.529 on "81 64" sizes the window
+ * on its own (OS_WindowSetPicture tells the picture size) and the picture
+ * is stretched into the client area, centred with its aspect kept, the
+ * mouse mapped back - the original stretches in its Direct3D present. */
+static int gClientW, gClientH; // the client area asked for (OS_WindowSetWindowed)
+static int gPicW, gPicH;       // the picture (OS_WindowSetPicture)
+static int gFullscreenStyle;   // OS_WindowSetFullscreen is in effect: no mapping (the mode is switched)
+static int gMapOn;             // the picture is scaled into the client area
+static double gScale = 1.0;    // picture -> client pixels
+static int gOffX, gOffY;       // where the scaled picture sits in the client area
+
+static void MapRecompute(void)
+{
+	double sx, sy;
+	gMapOn = 0;
+	gScale = 1.0;
+	gOffX = gOffY = 0;
+	if(gFullscreenStyle || gPicW <= 0 || gPicH <= 0 || gClientW <= 0 || gClientH <= 0 || (gClientW == gPicW && gClientH == gPicH))
+		return;
+	gMapOn = 1;
+	sx = (double)gClientW / gPicW;
+	sy = (double)gClientH / gPicH;
+	gScale = sx < sy ? sx : sy;
+	gOffX = (int)((gClientW - gPicW * gScale) / 2);
+	gOffY = (int)((gClientH - gPicH * gScale) / 2);
+}
+
+int Win32_ToWinX(int x)
+{
+	return gMapOn ? (int)(x * gScale + 0.5) + gOffX : x;
+}
+int Win32_ToWinY(int y)
+{
+	return gMapOn ? (int)(y * gScale + 0.5) + gOffY : y;
+}
+int Win32_FromWinX(int x)
+{
+	return gMapOn ? (int)((x - gOffX) / gScale) : x;
+}
+int Win32_FromWinY(int y)
+{
+	return gMapOn ? (int)((y - gOffY) / gScale) : y;
+}
+
+void Win32_FillLetterbox(HDC hdc)
+{
+	RECT r;
+	int pw, ph, own = 0;
+	if(!gMapOn || !gWin32MainWnd)
+		return;
+	if(!hdc)
+	{
+		hdc = GetDC(gWin32MainWnd);
+		own = 1;
+	}
+	pw = (int)(gPicW * gScale);
+	ph = (int)(gPicH * gScale);
+	if(gOffX > 0)
+	{
+		SetRect(&r, 0, 0, gOffX, gClientH);
+		FillRect(hdc, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
+		SetRect(&r, gOffX + pw, 0, gClientW, gClientH);
+		FillRect(hdc, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
+	}
+	if(gOffY > 0)
+	{
+		SetRect(&r, 0, 0, gClientW, gOffY);
+		FillRect(hdc, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
+		SetRect(&r, 0, gOffY + ph, gClientW, gClientH);
+		FillRect(hdc, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
+	}
+	if(own)
+		ReleaseDC(gWin32MainWnd, hdc);
+}
+
+// the DC draws on the main window (the mapping applies there only)
+static int IsMainDc(HDC hdc)
+{
+	return gMapOn && gWin32MainWnd && WindowFromDC(hdc) == gWin32MainWnd;
+}
+
 // ---- window creation ---------------------------------------------------------------------------
 
 void OS_SetEventHandlers(const OsEventHandlers_t* h)
@@ -269,6 +351,8 @@ void OS_WindowSetFullscreen(int modeW, int modeH)
 {
 	if(!gWin32MainWnd)
 		return;
+	gFullscreenStyle = 1;
+	MapRecompute();
 	SetWindowLongW(gWin32MainWnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
 	SetWindowPos(gWin32MainWnd, NULL, 0, 0, modeW, modeH, SWP_FRAMECHANGED);
 }
@@ -278,9 +362,24 @@ void OS_WindowSetWindowed(int x, int y, int clientW, int clientH)
 {
 	if(!gWin32MainWnd)
 		return;
+	gFullscreenStyle = 0;
+	gClientW = clientW;
+	gClientH = clientH;
+	MapRecompute();
 	// WS_VISIBLE | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
 	SetWindowLongW(gWin32MainWnd, GWL_STYLE, 0x90ca0000);
 	SetWindowPos(gWin32MainWnd, NULL, x, y, clientW + gWin32FrameW, clientH + gWin32FrameH, SWP_FRAMECHANGED);
+}
+
+// the picture the engine draws: scaled into a windowed client area of another size (MapRecompute)
+void OS_WindowSetPicture(int w, int h)
+{
+	if(w <= 0 || h <= 0)
+		return;
+	gPicW = w;
+	gPicH = h;
+	MapRecompute();
+	Win32_FillLetterbox(NULL);
 }
 
 // ---- presentation ------------------------------------------------------------------------------
@@ -337,6 +436,25 @@ void OS_BlitToWindow(OsDc_t* dc, int dstX, int dstY, int w, int h, const OsSurfa
 	 * keeps ySrc at 0, which is unambiguous for a top-down DIB */
 	bits = (const uint8_t*)src->pixels + (size_t)srcY * (size_t)src->pitch;
 	Win32_SurfaceHeader(&bi, src, h);
+	if(own || IsMainDc(hdc))
+	{ // a scaled window: the destination goes through the mapping
+		int x0 = Win32_ToWinX(dstX), y0 = Win32_ToWinY(dstY);
+		int x1 = Win32_ToWinX(dstX + w), y1 = Win32_ToWinY(dstY + h);
+		if(x1 - x0 != w || y1 - y0 != h)
+		{
+			int oldMode = SetStretchBltMode(hdc, HALFTONE);
+			POINT oldOrg = {0, 0};
+			SetBrushOrgEx(hdc, 0, 0, &oldOrg);
+			StretchDIBits(hdc, x0, y0, x1 - x0, y1 - y0, srcX, 0, w, h, bits, (const BITMAPINFO*)&bi, DIB_RGB_COLORS, SRCCOPY);
+			SetStretchBltMode(hdc, oldMode);
+			SetBrushOrgEx(hdc, oldOrg.x, oldOrg.y, NULL);
+			if(own)
+				ReleaseDC(gWin32MainWnd, hdc);
+			return;
+		}
+		dstX = x0;
+		dstY = y0;
+	}
 	StretchDIBits(hdc, dstX, dstY, w, h, srcX, 0, w, h, bits, (const BITMAPINFO*)&bi, DIB_RGB_COLORS, SRCCOPY);
 	if(own)
 		ReleaseDC(gWin32MainWnd, hdc);
@@ -354,6 +472,7 @@ void OS_StretchToWindow(OsDc_t* dc, int dstX, int dstY, int dstW, int dstH, cons
 	HRGN rgn = NULL;
 	POINT oldOrg = {0, 0};
 	int oldMode = 0, own = 0;
+	int mapped[4];
 	if(!src->pixels || dstW <= 0 || dstH <= 0)
 		return;
 	if(!hdc)
@@ -364,6 +483,23 @@ void OS_StretchToWindow(OsDc_t* dc, int dstX, int dstY, int dstW, int dstH, cons
 		own = 1;
 	}
 	Win32_SurfaceHeader(&bi, src, src->height);
+	if(own || IsMainDc(hdc))
+	{ // a scaled window: the destination and the clip go through the mapping
+		int x0 = Win32_ToWinX(dstX), y0 = Win32_ToWinY(dstY);
+		int x1 = Win32_ToWinX(dstX + dstW), y1 = Win32_ToWinY(dstY + dstH);
+		dstX = x0;
+		dstY = y0;
+		dstW = x1 - x0;
+		dstH = y1 - y0;
+		if(clip)
+		{
+			mapped[0] = Win32_ToWinX(clip[0]);
+			mapped[1] = Win32_ToWinY(clip[1]);
+			mapped[2] = Win32_ToWinX(clip[2]);
+			mapped[3] = Win32_ToWinY(clip[3]);
+			clip = mapped;
+		}
+	}
 	if(clip)
 	{
 		rgn = CreateRectRgn(clip[0], clip[1], clip[2], clip[3]);
@@ -423,22 +559,22 @@ void OS_CursorSetPos(int x, int y)
 	SetCursorPos(x, y);
 }
 
-void OS_ScreenToClient(int* x, int* y) // unchanged without a window
+void OS_ScreenToClient(int* x, int* y) // unchanged without a window; client coordinates are picture pixels (the mapping)
 {
 	POINT p;
 	p.x = *x;
 	p.y = *y;
 	if(gWin32MainWnd)
 		ScreenToClient(gWin32MainWnd, &p);
-	*x = p.x;
-	*y = p.y;
+	*x = Win32_FromWinX(p.x);
+	*y = Win32_FromWinY(p.y);
 }
 
 void OS_ClientToScreen(int* x, int* y) // unchanged without a window
 {
 	POINT p;
-	p.x = *x;
-	p.y = *y;
+	p.x = Win32_ToWinX(*x);
+	p.y = Win32_ToWinY(*y);
 	if(gWin32MainWnd)
 		ClientToScreen(gWin32MainWnd, &p);
 	*x = p.x;

@@ -7,12 +7,41 @@
  *
  * The lower bitmap (or a solid colour) is copied at (x2, y2); the upper
  * one is drawn over it at (x1, y1), either alpha-blended by the object's
- * level or revealed through a screen-sized grayscale map (the wipe).
- * Neither bitmap has to be screen sized.  The position of the upper
- * bitmap is the object's position, so "90 33" on handle 0 and the move
- * tween scroll it.
+ * level or revealed through a grayscale map (the wipe).  Neither bitmap
+ * has to be screen sized.  The position of the upper bitmap is the
+ * object's position, so "90 33" on handle 0 and the move tween scroll it.
+ *
+ * The wipe map is screen sized and aligned with the upper bitmap up to
+ * 1.494; from 1.529 on it may be of any size and is aligned with the
+ * screen (the renderer crops it like the destination band and hands it
+ * to the blitter's screen-aligned form), so a mask smaller than the
+ * screen reveals the upper picture inside its own area only.
  */
 #include "background_internal.h"
+#include "bgi/version.h"
+
+// the wipe map is screen aligned and of any size (1.529 on)
+static int Bg4_ScreenGray(void)
+{
+	return gEngine->gen >= GEN_1_529;
+}
+
+// the wipe of the upper bitmap `a` at (ax, ay) of `dst` through the map `g`, in the form of the build
+static void Bg4_Wipe(const Bg4_t* b, Bmp_t* dst, int ax, int ay, const Bmp_t* a, const Bmp_t* g, const Rect_t* local, int level)
+{
+	if(Bg4_ScreenGray())
+	{
+		Bmp_t band = *g;
+		Rect_t r;
+		Rect_FromBmp(&r, g);
+		if(!Rect_Clip(&r, local)) // the band lies outside the map: nothing is revealed there
+			return;
+		Bmp_Crop(&band, &r); // the band's (0, 0) is local's corner, which the map covers
+		Blit_ThroughGrayScreen(dst, ax, ay, a, &band, b->grayParam, level);
+	}
+	else
+		Blit_ThroughGray(dst, ax, ay, a, g, b->grayParam, level);
+}
 
 static void Bg4_Destroy(DispObj_t* o, int flags)
 {
@@ -80,10 +109,11 @@ int Bg4_Set(Bg4_t* b, int x1, int y1, int bmp1, int x2, int y2, int bmp2)
 	return 0;
 }
 
-/* a screen-sized grayscale map (mode 3) that drives the wipe between the
- * two bitmaps, with `param` as the threshold parameter of Blit_ThroughGray;
- * gray -1 selects a plain alpha blend.  0 ok, 0x80000003 map missing,
- * 0x80000004 not grayscale, 0x80000005 not screen sized. */
+/* a grayscale map (mode 3) that drives the wipe between the two bitmaps,
+ * with `param` as the threshold parameter of Blit_ThroughGray; gray -1
+ * selects a plain alpha blend.  0 ok, 0x80000003 map missing, 0x80000004
+ * not grayscale, 0x80000005 not screen sized (up to 1.494 only: later
+ * builds take a map of any size). */
 int Bg4_SetWipe(Bg4_t* b, int gray, int param)
 {
 	Bmp_t info, back;
@@ -97,7 +127,7 @@ int Bg4_SetWipe(Bg4_t* b, int gray, int param)
 	if(info.mode != 3)
 		return (int)0x80000004;
 	Gfx_GetBackBmp(&back);
-	if(info.w != back.w || info.h != back.h)
+	if(!Bg4_ScreenGray() && (info.w != back.w || info.h != back.h))
 		return (int)0x80000005;
 	b->gray = gray;
 	b->grayParam = param;
@@ -129,7 +159,7 @@ static int Bg4_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
 			if(!BgCurrent(&g, b->gray, b->grayGen))
 				return 0;
 			Bmp_Blit(dst, -(b->x2 + local->l), -(b->y2 + local->t), &s, 0x80, 0);
-			Blit_ThroughGray(dst, ax, ay, &a, &g, b->grayParam, level);
+			Bg4_Wipe(b, dst, ax, ay, &a, &g, local, level);
 		}
 		else
 		{
@@ -170,7 +200,7 @@ static int Bg4_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
 				return 0;
 			if(needFill)
 				Bmp_Fill(dst, NULL, fill);
-			Blit_ThroughGray(dst, ax, ay, &a, &g, b->grayParam, level);
+			Bg4_Wipe(b, dst, ax, ay, &a, &g, local, level);
 		}
 		else
 		{

@@ -98,6 +98,7 @@ void Window_Dtor(Window_t* w)
 	int i;
 
 	w->obj.vt = &Window_Vtbl;
+	Window_DocDrop(w);
 	DeletePixBuf(w->compBuf);
 	DeletePixBuf(w->frameBuf);
 	DeletePixBuf(w->textBuf);
