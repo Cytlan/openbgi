@@ -52,9 +52,23 @@ The games we have been working on, with the engine build each one needs
 | Arcana Alchemia | `ArcanaAlchemia` | 1.667 | Testing in progress |
 | Haruka Ao no Hanayome ni | `HarukaAonoHanayomeni` | 1.669 | Testing in progress |
 
+### Definitions
+
+* Verified - Extensive test against all aspects of the game; Visuals, paths, choices, saving, loading, system settings, and a complete 1:1 verification against executed bytecode. Visuals are indistinguishable from the original release.
+* Very playable - No noticeable glitches were encountered during gameplay. Skipping, saving, reloading, sound, cutscenes and choices all work as expected through extended gameplay. Not comprehensively tested, but confidently playable from start to finish.
+* Mostly playable - Same as very playable, but more limited gameplay testing.
+* Playable - Some visual glitches noticed, or incomplete gameplay testing.
+* Somewhat playable - Incomplete gameplay testing. Obvious glitches noticed. May crash.
+* Boots - Title screen reached, but will crash in-game. Gameplay testing impossible.
+* Testing in progress - Runs basic boot routine, but nothing more is known at this time.
+
+### Testing scope
+
 Only Lump of Sugar games have been tested so far.  We are interested in
 testing other BGI-based games: if you have one, tell us how it goes in
 our [Discord](https://discord.gg/3zFTJWUNt7).
+
+Testing happens on a case-by-case basis, and to exercise newly implemented opcodes and subsystems. The is currently no extensive testkit again individual games, except booting up a game and actually playing it.
 
 ## Building
 
