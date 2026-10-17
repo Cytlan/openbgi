@@ -300,6 +300,7 @@ static void Engine_ParseOptions(char* cmd)
 	{
 		char* start;
 		char* end;
+		char c;
 		while(*p == ' ' || *p == '\t')
 			p++;
 		start = p;
@@ -308,6 +309,7 @@ static void Engine_ParseOptions(char* cmd)
 		end = p;
 		if(end - start < 2 || start[0] != '-' || start[1] != '-')
 			continue;
+		c = *end;
 		*end = 0;
 		if(strncmp(start, "--engine=", 9) == 0)
 			snprintf(gOptEngine, sizeof gOptEngine, "%s", start + 9);
@@ -348,8 +350,8 @@ static void Engine_ParseOptions(char* cmd)
 			fprintf(stderr, "bgi: unknown option %s\n", start);
 		// blank the option out of the command line the original parser sees
 		memset(start, ' ', (size_t)(end - start));
-		*end = ' ';
-		p = end + 1;
+		*end = c ? ' ' : 0;
+		p = c ? end + 1 : end;
 	}
 }
 
