@@ -29,61 +29,46 @@ The games we have been working on, with the engine build each one needs
 
 | Game | Product name | Engine version | Status |
 |---|---|---|---|
-| Nursery Rhyme (trial) | `NurseryRhymeTrial` | 1.58 | In progress |
-| Nursery Rhyme | `NurseryRhyme` | 1.64 | In progress |
-| Itsuka, Todoku, Ano Sora ni. | `ItsukaTodokuAnoSorani` | 1.66 | In progress |
-| Tayutama -Kiss on my Deity- (trial; the reference build) | `Tayutama` | 1.69 build 444 | In progress |
-<<<<<<< HEAD
-| Tayutama -Kiss on my Deity- | `Tayutama` | 1.69 build 451 | In progress |
-| Tayutama -It's happy days- | `TayutamaHD` | 1.69 build 472 | In progress |
-| Prism Rhythm | `PrismRhythm` | 1.494 | In progress |
-| Diamic Days | `DiamicDays` | 1.529 | In progress |
-| Gakuou -THE ROYAL SEVEN STARS- | `Gackoh` | 1.535 | In progress |
-| Gakuou -It's Heartful Days!!- | `Gackoh_HD` | 1.547 | In progress |
-| Hanairo Heptagram | `HanairoHeptagram` | 1.553 | In progress |
-| Magical Charming! | `MagicalCharming!` | 1.573 | In progress |
-| Sekai to Sekai no Mannaka de | `SekaiToSekaiNoMannakaDe` | 1.588 | In progress |
-| Unmei Senjou no Phi | `UnmeisenjouNoPhi` | 1.599 | In progress |
-| Kodomo no Asobi | `KodomoNoAsobi` | 1.616 | In progress |
-| Tayutama 2 -After Stories- | `Tayutama2AS` | 1.640 | In progress |
-| Wakabairo no Quartet | `WakabaironoQuartet` | 1.653 | In progress |
-| Nekotsuku, Sakura. | `NekoTsukuSakura` | 1.654 | In progress |
-| Madohi Shiroki no Kamikakushi | `MadoiShirokinoKamikakushi` | 1.659 | In progress |
-| Yumahorome | `Yumahorome` | 1.662 | In progress |
-| Arcana Alchemia | `ArcanaAlchemia` | 1.667 | In progress |
-| Haruka Ao no Hanayome ni | `HarukaAonoHanayomeni` | 1.669 | In progress |
-=======
+| Nursery Rhyme (trial) | `NurseryRhymeTrial` | 1.58 | Very playable |
+| Nursery Rhyme | `NurseryRhyme` | 1.64 | Very playable |
+| Itsuka, Todoku, Ano Sora ni. | `ItsukaTodokuAnoSorani` | 1.66 | Mostly playable |
+| Tayutama -Kiss on my Deity- (trial; the reference build) | `Tayutama` | 1.69 build 444 | Very playable |
 | Tayutama -Kiss on my Deity- | `Tayutama` | 1.69 build 451 | Very playable |
 | Tayutama -It's happy days- | `TayutamaHD` | 1.69 build 472 | Very playable |
 | Prism Rhythm | `PrismRhythm` | 1.494 | Very playable |
 | Diamic Days | `DiamicDays` | 1.529 | Very playable |
 | Gakuou -THE ROYAL SEVEN STARS- | `Gackoh` | 1.535 | Very playable |
-| Gakuou -It's Heartful Days!!- | `Gackoh_HD` | 1.547 | Boots, but crashes in prologue |
+| Gakuou -It's Heartful Days!!- | `Gackoh_HD` | 1.547 | Very playable |
 | Hanairo Heptagram | `HanairoHeptagram` | 1.553 | Very playable |
-| Magical Charming! | `MagicalCharming!` | 1.573 | Boots, severe visual glitches |
-| Sekai to Sekai no Mannaka de | `SekaiToSekaiNoMannakaDe` | 1.588 | Boots, severe visual glitches |
-| Unmei Senjou no Phi | `UnmeisenjouNoPhi` | 1.599 | Boots, but crashes in prologue |
-| Kodomo no Asobi | `KodomoNoAsobi` | 1.616 | Boots, but crashes in prologue |
-| Tayutama 2 -After Stories- | `Tayutama2AS` | 1.640 | Somewhat playable, glitchy |
-| Wakabairo no Quartet | `WakabaironoQuartet` | 1.653 | Somewhat playable, glitchy |
+| Magical Charming! | `MagicalCharming!` | 1.573 | Very playable |
+| Sekai to Sekai no Mannaka de | `SekaiToSekaiNoMannakaDe` | 1.588 | Very playable |
+| Unmei Senjou no Phi | `UnmeisenjouNoPhi` | 1.599 | Very playable |
+| Kodomo no Asobi | `KodomoNoAsobi` | 1.616 | Playable |
+| Tayutama 2 -After Stories- | `Tayutama2AS` | 1.640 | Playable |
+| Wakabairo no Quartet | `WakabaironoQuartet` | 1.653 | Playable |
 | Nekotsuku, Sakura. | `NekoTsukuSakura` | 1.654 | Somewhat playable, glitchy |
-| Madohi Shiroki no Kamikakushi | `MadoiShirokinoKamikakushi` | 1.659 | Boots, but crashes in prologue |
-| Yumahorome | `Yumahorome` | 1.662 | Boots, but crashes in prologue |
+| Madohi Shiroki no Kamikakushi | `MadoiShirokinoKamikakushi` | 1.659 | Boots, but crashes in prolouge |
+| Yumahorome | `Yumahorome` | 1.662 | Boots, but crashes in prolouge |
 | Arcana Alchemia | `ArcanaAlchemia` | 1.667 | Testing in progress |
 | Haruka Ao no Hanayome ni | `HarukaAonoHanayomeni` | 1.669 | Testing in progress |
->>>>>>> 901469b763469045627d8dfc51aff4f2950a2028
+
+### Definitions
+
+* Verified - Extensive test against all aspects of the game; Visuals, paths, choices, saving, loading, system settings, and a complete 1:1 verification against executed bytecode. Visuals are indistinguishable from the original release.
+* Very playable - No noticeable glitches were encountered during gameplay. Skipping, saving, reloading, sound, cutscenes and choices all work as expected through extended gameplay. Not comprehensively tested, but confidently playable from start to finish.
+* Mostly playable - Same as very playable, but more limited gameplay testing.
+* Playable - Some visual glitches noticed, or incomplete gameplay testing.
+* Somewhat playable - Incomplete gameplay testing. Obvious glitches noticed. May crash.
+* Boots - Title screen reached, but will crash in-game. Gameplay testing impossible.
+* Testing in progress - Runs basic boot routine, but nothing more is known at this time.
+
+### Testing scope
 
 Only Lump of Sugar games have been tested so far.  We are interested in
 testing other BGI-based games: if you have one, tell us how it goes in
 our [Discord](https://discord.gg/3zFTJWUNt7).
 
-# Roadmap
-
-* Full compatibility with every Lump of Sugar game
-* Explore other Ethornell/BGI based games
-* RTL text layout support for Arabic/Hebrew/other language support for translated scenarios (Requires custom text layout code changes plus OpenBGI-specific opcodes.)
-* API layer for headless playback with external launchers (RetroArch and similar launchers.)
-* More compile targets (macOS, Haiku, console homebrew)
+Testing happens on a case-by-case basis, and to exercise newly implemented opcodes and subsystems. The is currently no extensive testkit again individual games, except booting up a game and actually playing it.
 
 ## Building
 
