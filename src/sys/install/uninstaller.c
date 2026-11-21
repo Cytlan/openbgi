@@ -4,13 +4,13 @@
  *
  * uninstaller.c - what a fresh installation leaves for its removal: the
  *                 initial uninst.lst and the uninstaller program
- *                 (install_internal.h; both are steps of Install_RunDialog)
+ *                 (install_internal.h; both are steps of Install_Step)
  */
 #include "install_internal.h"
 #include "bgi/file.h"
 #include "bgi/error.h"
 #include "bgi/msg.h"
-#include "bgi/os.h"
+#include "bgi/host.h"
 
 /* Write "<install dir>\uninst.lst" (the format is described in
  * uninstlist.c).  A new list starts with the uninstaller, the list itself,
@@ -21,7 +21,7 @@
  * NULL-terminated) as '$' lines, each unless the list mentions it already.
  * The list is added to `made`.  1 when written; a failure shows an error
  * box and returns 0. */
-int Uninst_WriteList(MadeList_t* made, const char* uninstExe, int saveCount, const char* saveFmt, char** subdirs,
+int Uninst_WriteList(OpenBGI_t* o, MadeList_t* made, const char* uninstExe, int saveCount, const char* saveFmt, char** subdirs,
 	const InstallCtx_t* ctx)
 {
 	char path[0x104], name[0x104];
@@ -32,7 +32,7 @@ int Uninst_WriteList(MadeList_t* made, const char* uninstExe, int saveCount, con
 
 	sprintf(path, "%s\\%s", ctx->installDir, UNINST_LIST);
 	File_Ctor(&f);
-	if(File_OpenRead(&f, path))
+	if(File_OpenRead(o, &f, path))
 	{
 		uint32_t size = File_Size(&f);
 		File_Read(&f, buf, size);
@@ -75,7 +75,7 @@ int Uninst_WriteList(MadeList_t* made, const char* uninstExe, int saveCount, con
 			}
 		}
 	}
-	if(File_Create(&f, path))
+	if(File_Create(o, &f, path))
 	{
 		uint32_t len = (uint32_t)strlen(buf) + 1;
 		ok = File_Write(&f, buf, len) == len;
@@ -83,86 +83,75 @@ int Uninst_WriteList(MadeList_t* made, const char* uninstExe, int saveCount, con
 	}
 	BGI_Free(buf);
 	if(!ok)
-		MsgBox(MSG_INST_UNINST_LIST_FAILED, MSG_ERROR_CAPTION, OS_MB_ICONHAND);
+		MsgBox(o, MSG_INST_UNINST_LIST_FAILED, MSG_ERROR_CAPTION, OPENBGI_MB_ICONHAND);
 	MadeList_Add(made, UNINST_LIST, path); // the list is rolled back with the files
 	File_Dtor(&f);
 	return ok;
 }
 
 /* Copy <uninstExe> from the disc (its directory mirrors the engine's, see
- * InstallCtx_t) into the installation directory, asking for the disc with
- * `insertMsg` until it is found or the user gives up, and register it as
+ * InstallCtx_t) into the installation directory and register it as
  * HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\<product>
  * (DisplayName and UninstallString) for "Add / Remove Programs".  1 when
- * done; a copy that fails shows an error box and returns 0. */
-int Uninst_Install(const InstallCtx_t* ctx, const char* product, const char* uninstExe, const char* insertMsg)
+ * done; a copy that fails shows an error box and returns 0; -1 when no
+ * ready drive has the file (Install_Step asks for the disc and tries
+ * again). */
+int Uninst_TryInstall(OpenBGI_t* o, const InstallCtx_t* ctx, const char* product, const char* uninstExe)
 {
 	char dstPath[0x104], srcPath[0x104], drives[0x104 * 26];
 	File_t src, dst;
-	int result = 0, keepLooking = 1;
+	int result = 0, n, i, found = 0;
+	uint32_t size;
+	uint8_t* buf;
 
+	sprintf(dstPath, "%s\\%s", ctx->installDir, uninstExe);
+	n = CandidateDrives(o, drives);
+	// the first ready drive that has the file decides, even when it is a directory there
+	for(i = 0; i < n; i++)
+	{
+		uint32_t attrs;
+		sprintf(srcPath, "%s\\%s\\%s", drives + i * 0x104, ctx->srcRel, uninstExe);
+		if(!DriveReady(o, srcPath))
+			continue;
+		attrs = Fs_FileAttrs(o, srcPath);
+		if(attrs == OPENBGI_INVALID_ATTRS)
+			continue;
+		found = !(attrs & OPENBGI_ATTR_DIRECTORY);
+		break;
+	}
+	if(!found)
+		return -1;
 	File_Ctor(&src);
 	File_Ctor(&dst);
-	sprintf(dstPath, "%s\\%s", ctx->installDir, uninstExe);
-	while(keepLooking)
+	File_OpenRead(o, &src, srcPath); // the file is read whole; the open is not checked
+	size = File_Size(&src);
+	buf = (uint8_t*)BGI_Alloc(size ? size : 1);
+	File_Read(&src, buf, size);
+	File_Close(&src);
+	if(!File_Create(o, &dst, dstPath))
 	{
-		int n = CandidateDrives(drives), i, found = 0;
-		// the first ready drive that has the file decides, even when it is a directory there
-		for(i = 0; i < n; i++)
-		{
-			uint32_t attrs;
-			sprintf(srcPath, "%s\\%s\\%s", drives + i * 0x104, ctx->srcRel, uninstExe);
-			if(!DriveReady(srcPath))
-				continue;
-			attrs = OS_FileAttrs(srcPath);
-			if(attrs == OS_INVALID_ATTRS)
-				continue;
-			found = !(attrs & OS_ATTR_DIRECTORY);
-			break;
-		}
-		if(found)
-		{
-			uint32_t size;
-			uint8_t* buf;
-			File_OpenRead(&src, srcPath); // the file is read whole; the open is not checked
-			size = File_Size(&src);
-			buf = (uint8_t*)BGI_Alloc(size ? size : 1);
-			File_Read(&src, buf, size);
-			File_Close(&src);
-			if(!File_Create(&dst, dstPath))
-			{
-				MsgBox(MSG_INST_UNINST_COPY_FAILED, MSG_ERROR_CAPTION, OS_MB_ICONHAND);
-			}
-			else
-			{
-				uint32_t written = File_Write(&dst, buf, size);
-				File_Close(&dst);
-				if(written != size)
-				{
-					OS_FileDelete(dstPath);
-					MsgBox(MSG_INST_UNINST_COPY_FAILED, MSG_ERROR_CAPTION, OS_MB_ICONHAND);
-				}
-				else
-				{
-					char key[0x240];
-					sprintf(key, "HKLM\\%s\\%s", "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall", product);
-					OS_RegCreateKey(key, product);
-					OS_RegWriteString(key, "DisplayName", product);
-					OS_RegWriteString(key, "UninstallString", dstPath);
-					result = 1;
-				}
-			}
-			BGI_Free(buf);
-			break; // found: done, whether the copy succeeded or not
-		}
-		// not found: ask for the disc; Cancel asks whether to give up the installation
-		if(MsgBox(insertMsg, MSG_NOTICE, OS_MB_OKCANCEL | OS_MB_ICONINFO) != OS_IDOK)
-		{
-			if(MsgBox(MSG_ASK_ABORT, MSG_CONFIRM, OS_MB_YESNO | OS_MB_ICONQUESTION | OS_MB_DEFBUTTON2) == OS_IDYES)
-				keepLooking = 0;
-		}
-		OS_SleepMs(200);
+		MsgBox(o, MSG_INST_UNINST_COPY_FAILED, MSG_ERROR_CAPTION, OPENBGI_MB_ICONHAND);
 	}
+	else
+	{
+		uint32_t written = File_Write(&dst, buf, size);
+		File_Close(&dst);
+		if(written != size)
+		{
+			Fs_FileDelete(o, dstPath);
+			MsgBox(o, MSG_INST_UNINST_COPY_FAILED, MSG_ERROR_CAPTION, OPENBGI_MB_ICONHAND);
+		}
+		else
+		{
+			char key[0x240];
+			sprintf(key, "HKLM\\%s\\%s", "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall", product);
+			Host_RegCreateKey(o, key, product);
+			Host_RegWrite(o, key, "DisplayName", product);
+			Host_RegWrite(o, key, "UninstallString", dstPath);
+			result = 1;
+		}
+	}
+	BGI_Free(buf);
 	File_Dtor(&src);
 	File_Dtor(&dst);
 	return result;

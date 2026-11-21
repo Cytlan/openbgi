@@ -7,7 +7,7 @@
  *
  * The operand formats of the base instructions are those of src/vm/
  * ops_base.c (RdU8 / RdU16 / RdU32 after the opcode); the 1.667+
- * superinstructions follow docs/versions.md.  The family instructions
+ * superinstructions follow docs/dev/versions.md.  The family instructions
  * (0x80 .. 0xFF) take nothing from the code stream but their second byte.
  *
  * The mnemonic lookups (Asm_OpName, Asm_LookupName) work on the generated
@@ -181,12 +181,12 @@ int Asm_LookupName(const char* name, size_t len, EngineGen_t gen, int* fam, int*
 // ---- operand formats ------------------------------------------------------------------------
 
 /* The operand kinds of a base opcode as a string of format letters, one
- * per operand, in code order (KindOfCode maps a letter to its kind; as.c
- * has the same table for encoding, and the round-trip test keeps the two
- * in step).  An opcode without inline operands gives "".  The conditional
- * jump "15" of 1.667+ has a second operand only when the condition has
- * bit 3: the '?' stands for that optional rel16. */
-static const char* Formats(int op, EngineGen_t gen)
+ * per operand, in code order (KindOfCode maps a letter to its kind; the
+ * assembler encodes with the same table).  An opcode without inline
+ * operands gives "".  The conditional jump "15" of 1.667+ has a second
+ * operand only when the condition has bit 3: the '?' stands for that
+ * optional rel16. */
+const char* Asm_OperandFormats(int op, EngineGen_t gen)
 {
 	switch(op)
 	{
@@ -305,7 +305,7 @@ int Asm_Decode(const uint8_t* area, uint32_t size, uint32_t off, EngineGen_t gen
 	}
 	if(out->op >= 0x80 || !Defined(0, out->op, gen))
 		return 0; // an unknown family byte, or a base opcode the generation lacks
-	fmt = Formats(out->op, gen);
+	fmt = Asm_OperandFormats(out->op, gen);
 	for(i = 0; fmt[i]; i++)
 	{
 		enum AsmOperandKind k;
@@ -431,14 +431,14 @@ static const char* RoundTripName(int fam, int op, EngineGen_t gen)
 size_t Asm_Format(const AsmInsn_t* in, EngineGen_t gen, char* buf, size_t n)
 {
 	const char* name = RoundTripName(in->fam, in->op, gen);
-	size_t o = 0;
+	size_t off = 0;
 	int i;
-#define PUT(...)                                                    \
-	do                                                              \
-	{                                                               \
-		int w_ = snprintf(buf + o, o < n ? n - o : 0, __VA_ARGS__); \
-		if(w_ > 0)                                                  \
-			o += (size_t)w_;                                        \
+#define PUT(...)                                                          \
+	do                                                                    \
+	{                                                                     \
+		int w_ = snprintf(buf + off, off < n ? n - off : 0, __VA_ARGS__); \
+		if(w_ > 0)                                                        \
+			off += (size_t)w_;                                            \
 	} while(0)
 	if(in->fam)
 	{
@@ -446,7 +446,7 @@ size_t Asm_Format(const AsmInsn_t* in, EngineGen_t gen, char* buf, size_t n)
 			PUT("%s.%s", Asm_FamilyName(in->fam), name);
 		else
 			PUT("%s.0x%02x", Asm_FamilyName(in->fam), in->op);
-		return o; // a family instruction has no operands
+		return off; // a family instruction has no operands
 	}
 	if(name)
 		PUT("%s", name);
@@ -477,14 +477,14 @@ size_t Asm_Format(const AsmInsn_t* in, EngineGen_t gen, char* buf, size_t n)
 				for(k = 0; k < (int)v; k++)
 					PUT("%s0x%02x", k ? ", " : "", in->bytes[k]);
 				if(v == 0)
-					o--; // no bytes: nothing after the mnemonic (the separator goes)
+					off--; // no bytes: nothing after the mnemonic (the separator goes)
 				break;
 			}
 			default: break;
 		}
 	}
 #undef PUT
-	return o;
+	return off;
 }
 
 int Asm_StackEffect(int fam, int op, EngineGen_t gen, int* pops, int* pushes)

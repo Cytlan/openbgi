@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # This file is part of OpenBGI (https://openbgi.net).
 # SPDX-License-Identifier: GPL-2.0-only
-"""Generate inc/bgi/msg.h from tools/messages.txt.
+"""Generate src/include/bgi/msg.h from tools/messages.txt.
 
 The engine works in Shift-JIS (CP932) throughout - script text, file names
 and the user-visible error messages all are.  The sources are UTF-8, so the
@@ -20,7 +20,7 @@ translation falls back to the original.  Run:  python3 tools/mkmsg.py
 import os, re, sys
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 src = os.path.join(root, 'tools', 'messages.txt')
-dst = os.path.join(root, 'inc', 'bgi', 'msg.h')
+dst = os.path.join(root, 'src', 'include', 'bgi', 'msg.h')
 out = ['// This file is part of OpenBGI (https://openbgi.net).',
        '// SPDX-License-Identifier: GPL-2.0-only',
        '//',

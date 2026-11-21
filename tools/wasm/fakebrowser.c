@@ -4,16 +4,16 @@
  *
  * fakebrowser.c - runs the WebAssembly back end on a host without a browser
  *
- * `make wasm-sim` links the engine with src/os/wasm/, tools/wasm/hostmock.c
+ * `make wasm-sim` links the engine with src/host/wasm/, tools/wasm/hostmock.c
  * (the asset server's half, on a local directory) and this file, which
  * stands in for the JavaScript side: the canvas is a buffer written out as
  * a picture, the clock is the host's, the sound goes to a WAV file when
  * asked, the input comes from a script.  Nothing of Emscripten is involved,
  * so the simulation covers the back end's own logic - paths, the overlay,
  * the cache, the presentation, the pump, the fonts' use - end to end with
- * real game data, which is what can be verified without emcc (docs/wasm.md).
+ * real game data, which is what can be verified without emcc (docs/dev/wasm.md).
  *
- *   cd <game directory> && bin/openbgi-wasmsim [engine arguments]
+ *   cd <game directory> && /path/to/bin/linux/openbgi-wasmsim-<arch> [engine arguments]
  *
  * Environment:
  *   BGI_WASMSIM_SECONDS=N   end after N seconds of running (default: run on)
@@ -21,11 +21,17 @@
  *   BGI_WASMSIM_WAV=FILE    write the mixed sound as a 16-bit stereo WAV
  *   BGI_WASMSIM_OVERLAY=DIR the overlay directory (default /tmp/openbgi-wasmsim-overlay)
  *   BGI_WASMSIM_SCRIPT=".." input: words `wait S` (seconds), `click X Y`,
- *                           `rclick X Y`, `move X Y`, `key VK`, `shot FILE`
- *   BGI_WASMSIM_ANSWER=0|1  what the dialogs answer (default 1: yes / ok)
+ *                           `rclick X Y`, `move X Y`, `key VK`, `char CP` (a
+ *                           code point typed), `touch X Y` (a finger's tap),
+ *                           `pad N` (button N of a pad with the Gamepad
+ *                           API's standard mapping, pressed for a moment:
+ *                           0 the bottom face button, 12 .. 15 the D-pad),
+ *                           `shot FILE`
+ *   BGI_WASMSIM_ANSWER=0|1  what the page's dialogs answer (default 1: yes /
+ *                           ok), with --dialogs=host
  */
-#include "bgi/os.h"
-#include "bgi/os_wasm.h"
+#include "host/os.h"
+#include "host/os_wasm.h"
 #include "tools/wasm/hostmock.h"
 
 #include <time.h>
@@ -152,6 +158,15 @@ void WasmJs_InstallInput(void)
 {
 }
 
+// the page's text field moves over the engine's (the script's `char` stands for what it is given)
+void WasmJs_TextInput(int on, int x, int y, int w, int h)
+{
+	if(on)
+		fprintf(stderr, "wasmsim: text input at %d,%d %dx%d\n", x, y, w, h);
+	else
+		fprintf(stderr, "wasmsim: text input off\n");
+}
+
 void WasmJs_OpenUrl(const char* utf8)
 {
 	fprintf(stderr, "wasmsim: open %s\n", utf8);
@@ -177,6 +192,15 @@ typedef struct FakeFont
 } FakeFont_t;
 static FakeFont_t gFonts[256];
 static int gFontCount;
+
+// no fonts are added on a host: the stand-in glyphs need none
+int WasmJs_FontAdd(const void* data, uint32_t size, const char* names)
+{
+	BGI_UNUSED(data);
+	BGI_UNUSED(size);
+	BGI_UNUSED(names);
+	return 0;
+}
 
 int WasmJs_FontOpen(const char* faceUtf8, int height, int width, int bold, int italic)
 {
@@ -317,6 +341,18 @@ static struct
 	double atMs;
 } gRelease; // a click holds the button for a while, as a hand does and the scripts' polling needs
 
+static struct
+{
+	int pending, x, y;
+	double atMs;
+} gLift; // .. and a tap keeps the finger down as long
+static struct
+{
+	int there;        // the pad has shown up (a browser shows one from its first button on)
+	uint32_t buttons; // those held
+	double releaseAt; // ms
+} gPad;
+
 static void ReleaseDue(void)
 {
 	if(gRelease.pending && NowMs() >= gRelease.atMs)
@@ -324,6 +360,24 @@ static void ReleaseDue(void)
 		gRelease.pending = 0;
 		OsWasm_PushEvent(WASM_EV_BUTTON, gRelease.button, 0, gRelease.x, gRelease.y);
 	}
+	if(gLift.pending && NowMs() >= gLift.atMs)
+	{
+		gLift.pending = 0;
+		OsWasm_PushEvent(WASM_EV_TOUCH, 1, OPENBGI_TOUCH_UP, gLift.x, gLift.y);
+	}
+	if(gPad.buttons && NowMs() >= gPad.releaseAt)
+		gPad.buttons = 0;
+}
+
+// navigator.getGamepads(): the script's pad at index 0
+int WasmJs_PadRead(int index, uint32_t* out)
+{
+	if(index != 0 || !gPad.there)
+		return 0;
+	memset(out, 0, 6 * sizeof out[0]);
+	out[0] = gPad.buttons;
+	out[5] = 1; // the standard mapping
+	return 1;
 }
 
 // run the script up to its next wait; the words are consumed as they execute
@@ -365,6 +419,27 @@ static void RunScript(void)
 			gScriptWaitUntil = NowMs() + 80; // the next word comes after the release
 			fprintf(stderr, "wasmsim: %s %d,%d\n", word, x, y);
 		}
+		else if(strcmp(word, "touch") == 0 && sscanf(gScript, "%d %d%n", &x, &y, &n) == 2)
+		{
+			gScript += n;
+			ReleaseDue();
+			OsWasm_PushEvent(WASM_EV_TOUCH, 1, OPENBGI_TOUCH_DOWN, x, y);
+			gLift.pending = 1;
+			gLift.x = x;
+			gLift.y = y;
+			gLift.atMs = NowMs() + 60;
+			gScriptWaitUntil = NowMs() + 80; // the next word comes after the finger lifted
+			fprintf(stderr, "wasmsim: touch %d,%d\n", x, y);
+		}
+		else if(strcmp(word, "pad") == 0 && sscanf(gScript, "%d%n", &x, &n) == 1 && x >= 0 && x < 17)
+		{
+			gScript += n;
+			gPad.there = 1;
+			gPad.buttons = 1u << x;
+			gPad.releaseAt = NowMs() + 100;
+			gScriptWaitUntil = NowMs() + 150; // the next word comes after the release
+			fprintf(stderr, "wasmsim: pad button %d\n", x);
+		}
 		else if(strcmp(word, "move") == 0 && sscanf(gScript, "%d %d%n", &x, &y, &n) == 2)
 		{
 			gScript += n;
@@ -376,6 +451,12 @@ static void RunScript(void)
 			OsWasm_PushEvent(WASM_EV_KEY_DOWN, x, 0, 0, 0);
 			OsWasm_PushEvent(WASM_EV_KEY_UP, x, 0, 0, 0); // (the key-down event itself is what the engine acts on)
 			fprintf(stderr, "wasmsim: key 0x%02x\n", x);
+		}
+		else if(strcmp(word, "char") == 0 && sscanf(gScript, "%i%n", &x, &n) == 1)
+		{
+			gScript += n;
+			OsWasm_PushEvent(WASM_EV_CHAR, x, 0, 0, 0);
+			fprintf(stderr, "wasmsim: char U+%04X\n", (unsigned)x);
 		}
 		else if(strcmp(word, "shot") == 0 && sscanf(gScript, "%259s%n", a, &n) == 1)
 		{

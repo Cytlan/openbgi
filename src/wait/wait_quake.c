@@ -19,6 +19,7 @@
 #include "bgi/wait.h"
 #include "bgi/waitobj.h"
 #include "bgi/input.h"
+#include "bgi/inputmap.h"
 #include "bgi/display.h"
 #include "bgi/sys.h"
 
@@ -44,38 +45,38 @@ typedef struct WaitQuake // 0x70 bytes
 	uint32_t inputSerial; // input state when the wait started
 } WaitQuake_t;
 
-static void WaitQuake_Destroy(Wait_t* w);
-static int WaitQuake_Poll(Wait_t* w);
+static void WaitQuake_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitQuake_Poll(OpenBGI_t* o, Wait_t* w);
 
 static const WaitVtbl_t WaitQuake_Vtbl = {
 	WaitQuake_Destroy, WaitQuake_Poll, Wait_SetTimer, Wait_IsDirtyBase, Wait_OnMessage};
 
 // presenting is suspended from the constructor on, even when the setup then fails
-static void WaitQuake_Ctor(WaitQuake_t* w, Thread_t* t)
+static void WaitQuake_Ctor(OpenBGI_t* o, WaitQuake_t* w, Thread_t* t)
 {
-	Wait_Ctor(&w->w, t);
+	Wait_Ctor(o, &w->w, t);
 	w->w.vt = &WaitQuake_Vtbl;
-	Present_Allow(0);
+	Present_Allow(o, 0);
 	w->active = 0;
 	w->skip = 0;
 }
 
-static void WaitQuake_Dtor(WaitQuake_t* w)
+static void WaitQuake_Dtor(OpenBGI_t* o, WaitQuake_t* w)
 {
 	w->w.vt = &WaitQuake_Vtbl;
 	if(w->skip)
 	{
-		Input_Poll(0xffffffffu, 0xffffffffu);
-		MouseLayer_Pop(0xffffffffu);
-		KeyLayer_Pop(0xffffffffu);
+		Input_Poll(o, 0xffffffffu, 0xffffffffu);
+		MouseLayer_Pop(o, 0xffffffffu);
+		KeyLayer_Pop(o, 0xffffffffu);
 	}
-	Present_Allow(1);
-	Wait_Dtor(&w->w);
+	Present_Allow(o, 1);
+	Wait_Dtor(o, &w->w);
 }
 
-static void WaitQuake_Destroy(Wait_t* w)
+static void WaitQuake_Destroy(OpenBGI_t* o, Wait_t* w)
 {
-	WaitQuake_Dtor((WaitQuake_t*)w);
+	WaitQuake_Dtor(o, (WaitQuake_t*)w);
 	BGI_Free(w);
 }
 
@@ -83,7 +84,7 @@ static void WaitQuake_Destroy(Wait_t* w)
  * the input layers: 0 / 0x80000001 bad pattern / 0x80000002 frequency < 1 /
  * 0x80000003 repeat < 1 / 0x80000004 fps < 1 or below the frequency.  The
  * input layers of a skippable quake use the top-most key 0xffffffff. */
-static uint32_t WaitQuake_Setup(WaitQuake_t* w, int pattern, int amplitude, int frequency, int repeat, int decay,
+static uint32_t WaitQuake_Setup(OpenBGI_t* o, WaitQuake_t* w, int pattern, int amplitude, int frequency, int repeat, int decay,
 	int fps, int skip)
 {
 	if((uint32_t)pattern >= 4)
@@ -96,8 +97,8 @@ static uint32_t WaitQuake_Setup(WaitQuake_t* w, int pattern, int amplitude, int 
 		return 0x80000004;
 	if(w->skip)
 	{
-		MouseLayer_Pop(0xffffffffu);
-		KeyLayer_Pop(0xffffffffu);
+		MouseLayer_Pop(o, 0xffffffffu);
+		KeyLayer_Pop(o, 0xffffffffu);
 	}
 	w->pattern = pattern;
 	w->decay = decay;
@@ -112,24 +113,24 @@ static uint32_t WaitQuake_Setup(WaitQuake_t* w, int pattern, int amplitude, int 
 	w->framesPerCycle = fps / frequency;
 	if(skip)
 	{
-		MouseLayer_Push(0xffffffffu);
-		KeyLayer_Push(0xffffffffu);
-		Input_Poll(0xffffffffu, 0xffffffffu);
-		w->inputSerial = InputSerial_Get();
+		MouseLayer_Push(o, 0xffffffffu);
+		KeyLayer_Push(o, 0xffffffffu);
+		Input_Poll(o, 0xffffffffu, 0xffffffffu);
+		w->inputSerial = InputSerial_Get(o);
 	}
-	w->w.vt->setTimer(&w->w, 0);
+	w->w.vt->setTimer(o, &w->w, 0);
 	w->active = 1;
 	return 0;
 }
 
 // a random value in 0 .. n, the mean of eight 30-bit draws
-static int32_t Quake_Random(int32_t n)
+static int32_t Quake_Random(OpenBGI_t* o, int32_t n)
 {
 	int32_t sum = 0;
 	int i;
 	for(i = 0; i < 8; i++)
 	{
-		int32_t r = (BGI_Rand() << 15) | BGI_Rand();
+		int32_t r = (BGI_Rand(o) << 15) | BGI_Rand(o);
 		sum += r % (n + 1);
 	}
 	return sum >> 3;
@@ -137,7 +138,7 @@ static int32_t Quake_Random(int32_t n)
 
 /* pattern 3 only: a random offset of up to the amplitude in the
  * quadrant selected by `quadrant` (0 ++, 1 -+, 2 +-, 3 --).  1 when written. */
-static int Quake_RandomDir(WaitQuake_t* w, int32_t out[2], int quadrant)
+static int Quake_RandomDir(OpenBGI_t* o, WaitQuake_t* w, int32_t out[2], int quadrant)
 {
 	int32_t rx, ry;
 	if(w->pattern != 3)
@@ -147,8 +148,8 @@ static int Quake_RandomDir(WaitQuake_t* w, int32_t out[2], int quadrant)
 		out[0] = out[1] = 0;
 		return 1;
 	}
-	rx = Quake_Random(w->amplitude);
-	ry = Quake_Random(w->amplitude);
+	rx = Quake_Random(o, w->amplitude);
+	ry = Quake_Random(o, w->amplitude);
 	switch(quadrant)
 	{
 		case 0:
@@ -177,7 +178,7 @@ static int Quake_RandomDir(WaitQuake_t* w, int32_t out[2], int quadrant)
  * presented) when the timer has already expired again.  The wait ends
  * after `repeat` cycles, on input (skip) or when waits stop blocking; a
  * wait whose setup failed ends only in the latter case. */
-static int WaitQuake_Poll(Wait_t* base)
+static int WaitQuake_Poll(OpenBGI_t* o, Wait_t* base)
 {
 	// which patterns use the wave on x, the random direction, the wave on y
 	static const int kWaveX[4] = {1, 0, 1, 0}, kRandom[4] = {0, 0, 0, 1}, kWaveY[4] = {0, 1, 1, 0};
@@ -185,12 +186,12 @@ static int WaitQuake_Poll(Wait_t* base)
 	int cont;
 	if(!w->active) // (only before a successful setup)
 	{
-		if(Wait_IsBlocking(base))
+		if(Wait_IsBlocking(o, base))
 			return 0;
 		goto end;
 	}
-	cont = w->skip ? w->inputSerial == InputSerial_Get() : 1;
-	if(cont && Wait_TimerExpired(base))
+	cont = w->skip ? w->inputSerial == InputSerial_Get(o) : 1;
+	if(cont && Wait_TimerExpired(o, base))
 	{
 		Wait_TimerAdd(base, (uint32_t)(1000 / w->fps));
 		if(w->frame == 0)
@@ -199,7 +200,7 @@ static int WaitQuake_Poll(Wait_t* base)
 			w->phase = 0;
 			w->dirStart[0] = w->dirEnd[0];
 			w->dirStart[1] = w->dirEnd[1];
-			Quake_RandomDir(w, w->dirEnd, w->cycle & 3);
+			Quake_RandomDir(o, w, w->dirEnd, w->cycle & 3);
 			w->dirDelta[0] = w->dirEnd[0] - w->dirStart[0];
 			w->dirDelta[1] = w->dirEnd[1] - w->dirStart[1];
 		}
@@ -210,7 +211,7 @@ static int WaitQuake_Poll(Wait_t* base)
 			w->phase = 2 * w->amplitude - w->phase;
 		if(w->phase < -w->amplitude)
 			w->phase = -w->phase - 2 * w->amplitude;
-		if(!Wait_TimerExpired(base))
+		if(!Wait_TimerExpired(o, base))
 		{
 			int32_t x = kWaveX[w->pattern] ? w->phase : 0;
 			int32_t y = kWaveY[w->pattern] ? w->phase : 0;
@@ -219,7 +220,7 @@ static int WaitQuake_Poll(Wait_t* base)
 				x += w->dirDelta[0] * w->frame / w->framesPerCycle + w->dirStart[0];
 				y += w->dirDelta[1] * w->frame / w->framesPerCycle + w->dirStart[1];
 			}
-			Window_PresentOffset(x >> 12, y >> 12);
+			Window_PresentOffset(o, x >> 12, y >> 12);
 		}
 		if(++w->frame >= w->framesPerCycle)
 		{
@@ -229,10 +230,10 @@ static int WaitQuake_Poll(Wait_t* base)
 		}
 	}
 	w->active = cont;
-	if(cont && Wait_IsBlocking(base))
+	if(cont && Wait_IsBlocking(o, base))
 		return 0;
 end:
-	Window_Repaint();
+	Window_Repaint(o);
 	return 1;
 }
 
@@ -240,16 +241,37 @@ end:
  * WaitQuake_Setup).  *out is set before the validation, as in the
  * original; the "B0 08" handler raises a script error for a rejected one
  * and installs the object only on 0. */
-int StartQuake(Thread_t* t, int pattern, int amplitude, int frequency, int repeat, int decay, int fps, int skip,
+int StartQuake(OpenBGI_t* o, Thread_t* t, int pattern, int amplitude, int frequency, int repeat, int decay, int fps, int skip,
 	Wait_t** out)
 {
 	WaitQuake_t* w = (WaitQuake_t*)BGI_Alloc(sizeof *w);
-	WaitQuake_Ctor(w, t);
+	WaitQuake_Ctor(o, w, t);
 	*out = &w->w;
-	return (int)WaitQuake_Setup(w, pattern, amplitude, frequency, repeat, decay, fps, skip);
+	return (int)WaitQuake_Setup(o, w, pattern, amplitude, frequency, repeat, decay, fps, skip);
 }
 
 // the name of a wait class of this file, for the debugger (NULL: not one of these)
+/* The targets of the quake (bgi/inputmap.h): one that may be skipped
+ * ends on any input, a click anywhere included, through the top-most
+ * layer; 1 when `w` is a quake. */
+int WaitQuake_Targets(OpenBGI_t* o, Wait_t* w, TargetSink_t* s)
+{
+	const WaitQuake_t* q = (const WaitQuake_t*)w;
+	TargetDesc_t d;
+	if(w->vt != &WaitQuake_Vtbl)
+		return 0;
+	if(!q->skip)
+		return 1;
+	TargetDesc_Init(&d, OPENBGI_TARGET_WAIT, 0xffffffffu);
+	TargetSink_Claim(s, d.layer);
+	d.flags = OPENBGI_TARGET_ANYWHERE;
+	d.whole = 1;
+	d.owner = Thread_GetId(w->thread);
+	d.reach = Target_ReachLayer;
+	TargetSink_Add(s, &d);
+	return 1;
+}
+
 const char* WaitQuake_ClassName(const WaitVtbl_t* vt)
 {
 	if(vt == &WaitQuake_Vtbl)

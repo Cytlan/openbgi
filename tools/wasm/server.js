@@ -3,7 +3,7 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * server.js - the asset server of the WebAssembly build (docs/wasm.md)
+ * server.js - the asset server of the WebAssembly build (docs/dev/wasm.md)
  *
  *   node tools/wasm/server.js <game directory> [--port 8000] [--bind 127.0.0.1]
  *                             [--web bin/wasm] [--verbose]
@@ -12,7 +12,7 @@
  *   * the built page (openbgi.html / .js / .wasm from the --web directory)
  *     over plain HTTP;
  *   * the game's files over a websocket at /fs, through the three read-only
- *     operations the engine's file layer needs (src/os/wasm/fs.c):
+ *     operations the engine's file layer needs (src/host/wasm/fs.c):
  *       STAT path                 -> attributes, size, modification time
  *       READ path offset length   -> that range of the file
  *       LIST path                 -> the entries of a directory
@@ -26,7 +26,7 @@
  * to it, resolved component by component without regard to ASCII case
  * (the game data was written for a case-insensitive file system), and a
  * path that leaves the root - through "..", an absolute path or a symbolic
- * link - is answered with "not found".  games.json is expected inside the
+ * link - is answered with "not found".  openbgi.json is expected inside the
  * game directory like any other file.
  *
  * No dependencies: the websocket framing (RFC 6455) is implemented below so
@@ -559,7 +559,7 @@ function serveStatic(req, res)
 		if(err || !st.isFile())
 		{
 			res.writeHead(404, { 'Content-Type': 'text/plain' });
-			return res.end(url === '/openbgi.html' ? 'openbgi.html is not built yet: run `make wasm` first (docs/wasm.md)\n' : 'not found\n');
+			return res.end(url === '/openbgi.html' ? 'openbgi.html is not built yet: run `make wasm` first (docs/dev/wasm.md)\n' : 'not found\n');
 		}
 		res.writeHead(200, {
 			'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',

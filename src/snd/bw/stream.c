@@ -4,7 +4,7 @@
  *
  * stream.c - a BW stream: opening a file (or an intro / loop pair of
  *            files), decoding frames, and the loop and restart
- *            bookkeeping the player relies on (inc/bgi/snd/bw.h)
+ *            bookkeeping the player relies on (src/include/bgi/snd/bw.h)
  *
  * The original models these as a class tree: a buffered PCM base with one
  * subclass per codec, each in a "whole file" flavour for sound effects
@@ -15,6 +15,7 @@
  * vorbis.c.
  */
 #include "bw_internal.h"
+#include "bgi/sys.h" // Clock_HostMs
 
 // the header of a source into *hdr; 0, or the WM_STREAM_ERR_* code of the first check that fails
 static int ReadHeader(WmSource_t* src, BwHeader_t* hdr)
@@ -46,7 +47,7 @@ static void SetFormat(WmStream_t* s, const BwHeader_t* hdr)
  * buffers, fresh ADPCM states, the Huffman tree and the first window of
  * coded bytes, or the Vorbis decoder; 0, WM_STREAM_ERR_DECODER when the
  * Vorbis decoder cannot be opened */
-static int CodecOpen(WmStream_t* s)
+static int CodecOpen(OpenBGI_t* o, WmStream_t* s)
 {
 	switch(s->hdr.codec)
 	{
@@ -77,7 +78,7 @@ static int CodecOpen(WmStream_t* s)
 			return 0;
 		}
 		case BW_CODEC_VORBIS:
-			return Vorbis_Open(s, 0) ? 0 : WM_STREAM_ERR_DECODER;
+			return Vorbis_Open(o, s, 0) ? 0 : WM_STREAM_ERR_DECODER;
 		default:
 			return WM_STREAM_ERR_CODEC;
 	}
@@ -109,7 +110,7 @@ static WmStream_t* StreamAlloc(void)
  * silence and releases the coded source; its reads then come from the
  * PCM.  On failure *err holds the WM_STREAM_ERR_* code and the source is
  * closed. */
-WmStream_t* WmStream_Open(WmSource_t* src, double gain, int wholeFile, int* err)
+WmStream_t* WmStream_Open(OpenBGI_t* o, WmSource_t* src, double gain, int wholeFile, int* err)
 {
 	BwHeader_t hdr;
 	WmStream_t* s;
@@ -125,7 +126,7 @@ WmStream_t* WmStream_Open(WmSource_t* src, double gain, int wholeFile, int* err)
 	s->gain = gain;
 	s->wholeFile = wholeFile;
 	SetFormat(s, &hdr);
-	e = CodecOpen(s);
+	e = CodecOpen(o, s);
 	if(e)
 	{
 		WmStream_Close(s);
@@ -152,7 +153,7 @@ WmStream_t* WmStream_Open(WmSource_t* src, double gain, int wholeFile, int* err)
  * say codec 3, both Vorbis decoders are opened up front, and the stream
  * starts on the intro with the intro's format.  On failure *err holds
  * the WM_STREAM_ERR_* code and both sources are closed. */
-WmStream_t* WmStream_OpenPair(WmSource_t* intro, WmSource_t* loop, double gain, int* err)
+WmStream_t* WmStream_OpenPair(OpenBGI_t* o, WmSource_t* intro, WmSource_t* loop, double gain, int* err)
 {
 	BwHeader_t h[2];
 	WmStream_t* s;
@@ -178,10 +179,10 @@ WmStream_t* WmStream_OpenPair(WmSource_t* intro, WmSource_t* loop, double gain, 
 	SetFormat(s, &h[0]); // the intro's format
 	// both decoders are opened up front; Vorbis_Open works on `src`, so it is pointed at each part in turn
 	s->src = intro;
-	if(!Vorbis_Open(s, 0))
+	if(!Vorbis_Open(o, s, 0))
 		e = WM_STREAM_ERR_DECODER;
 	s->src = loop;
-	if(!e && !Vorbis_Open(s, 1))
+	if(!e && !Vorbis_Open(o, s, 1))
 		e = WM_STREAM_ERR_DECODER;
 	s->src = intro;
 	s->current = 0;
@@ -295,7 +296,7 @@ static void Pair_Switch(WmStream_t* s, int idx)
  * the header's saved predictor / step states plus the coded position
  * (codec 0: the nibble position, with a pending high nibble when a mono
  * loop starts on an odd frame; codec 2: the loop bit position). */
-void WmStream_Restart(WmStream_t* s)
+void WmStream_Restart(OpenBGI_t* o, WmStream_t* s)
 {
 	if(s->pair)
 	{
@@ -306,14 +307,14 @@ void WmStream_Restart(WmStream_t* s)
 		}
 		else
 		{
-			s->loopGrace = OS_TicksMs() + 4000;
+			s->loopGrace = Clock_HostMs(o) + 4000;
 			s->loopCount++;
 			s->pos = 0;
 			Vorbis_SeekFrame(s, 1, 0);
 		}
 		return;
 	}
-	s->loopGrace = OS_TicksMs() + 4000;
+	s->loopGrace = Clock_HostMs(o) + 4000;
 	s->loopCount++;
 	s->pos = (uint32_t)s->loopStart;
 	switch(s->hdr.codec)
@@ -399,10 +400,10 @@ void WmStream_SetMode(WmStream_t* s, int mode)
 
 /* the loop restarts so far, less one while the last one is under 4
  * seconds old (what "A0 15" reports as the length) */
-int WmStream_LoopCount(const WmStream_t* s)
+int WmStream_LoopCount(OpenBGI_t* o, const WmStream_t* s)
 {
 	int n = (int)s->loopCount;
-	if(OS_TicksMs() < s->loopGrace)
+	if(Clock_HostMs(o) < s->loopGrace)
 		n--;
 	return n;
 }

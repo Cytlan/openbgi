@@ -6,7 +6,7 @@
  *             the lists of created files of the installer
  *
  * The special folders and Path_IsValid are part of the public interface
- * (inc/bgi/install.h); the directory trees (every directory an installation
+ * (src/include/bgi/install.h); the directory trees (every directory an installation
  * creates, for the rollback) and the lists of created files are the
  * bookkeeping of install_internal.h that shortcuts.c, copy.c, uninstaller.c
  * and dialogs.c share.
@@ -14,19 +14,19 @@
 #include "install_internal.h"
 #include "bgi/file.h"
 #include "bgi/strutil.h"
-#include "bgi/os.h"
+#include "bgi/host.h"
 
 /* "80 3A": a shell folder into buf (0x104 bytes): 0 the Windows directory
  * (also "80 FB"), 1 the desktop, 2 the start menu's "Programs", 3 "My
  * Documents".  1, or 0 for an unknown selector or a shell failure. */
-int GetSpecialFolder(char* buf, int which)
+int GetSpecialFolder(OpenBGI_t* o, char* buf, int which)
 {
 	switch(which)
 	{
-		case 0: OS_WindowsDir(buf, 0x104); return 1;
-		case 1: return OS_SpecialFolder(0x10, buf, 0x104); // CSIDL_DESKTOPDIRECTORY
-		case 2: return OS_SpecialFolder(2, buf, 0x104);    // CSIDL_PROGRAMS
-		case 3: return OS_SpecialFolder(5, buf, 0x104);    // CSIDL_PERSONAL
+		case 0: Host_WindowsDir(o, buf, 0x104); return 1;
+		case 1: return Host_SpecialFolder(o, 0x10, buf, 0x104); // CSIDL_DESKTOPDIRECTORY
+		case 2: return Host_SpecialFolder(o, 2, buf, 0x104);    // CSIDL_PROGRAMS
+		case 3: return Host_SpecialFolder(o, 5, buf, 0x104);    // CSIDL_PERSONAL
 		default: return 0;
 	}
 }
@@ -35,17 +35,17 @@ int GetSpecialFolder(char* buf, int which)
  * path ending in "\" and a NUL; the backslash is removed.  1 when it did,
  * 0 for no name, no file or other contents (buf then holds whatever was
  * read). */
-int ReadWinDirFile(char* buf, const char* name)
+int ReadWinDirFile(OpenBGI_t* o, char* buf, const char* name)
 {
 	char dir[0x104], path[0x208];
 	File_t f;
 	int ok = 0;
 	if(!name)
 		return 0;
-	GetSpecialFolder(dir, 0);
+	GetSpecialFolder(o, dir, 0);
 	sprintf(path, "%s\\%s", dir, name);
 	File_Ctor(&f);
-	if(File_OpenRead(&f, path))
+	if(File_OpenRead(o, &f, path))
 	{
 		uint32_t size = File_Size(&f);
 		File_Read(&f, buf, size);
@@ -63,12 +63,12 @@ int ReadWinDirFile(char* buf, const char* name)
 /* Whether `path` is an absolute Windows path the installer accepts:
  * "x:\..." (the drive letter in any case) with no doubled backslash and no
  * second colon.  The path may be up to 0x103 bytes. */
-int Path_IsValid(const char* path)
+int Path_IsValid(OpenBGI_t* o, const char* path)
 {
 	char tmp[0x104];
 	const char* p;
 	strcpy(tmp, path);
-	SjisStrLwr(tmp);
+	SjisStrLwr(o, tmp);
 	if(tmp[0] < 'a' || tmp[0] > 'z' || tmp[1] != ':' || tmp[2] != '\\')
 		return 0;
 	for(p = tmp + 2; *p; p++)
@@ -104,18 +104,18 @@ DirNode_t* DirTree_New(void)
  * can take it away again.  Returns 0 when a prefix exists but is not a
  * directory, when the drive root itself is missing or when a directory
  * cannot be created; the directories made so far stay in the tree. */
-int DirTree_Build(DirNode_t* root, const char* path)
+int DirTree_Build(OpenBGI_t* o, DirNode_t* root, const char* path)
 {
 	char prefix[0x104];
 	DirNode_t* cur = root;
 	int n;
 	for(n = 0; PathPrefix(prefix, path, n); n++)
 	{
-		uint32_t attrs = OS_FileAttrs(prefix);
-		if(attrs != OS_INVALID_ATTRS)
+		uint32_t attrs = Fs_FileAttrs(o, prefix);
+		if(attrs != OPENBGI_INVALID_ATTRS)
 		{
 			DirNode_t* c;
-			if(!(attrs & OS_ATTR_DIRECTORY))
+			if(!(attrs & OPENBGI_ATTR_DIRECTORY))
 				return 0;
 			for(c = cur->child; c; c = c->next)
 			{
@@ -129,7 +129,7 @@ int DirTree_Build(DirNode_t* root, const char* path)
 		else
 		{
 			DirNode_t* node;
-			if(n <= 0 || !OS_DirCreate(prefix)) // prefix 0 is the drive root, which cannot be created
+			if(n <= 0 || !Fs_DirCreate(o, prefix)) // prefix 0 is the drive root, which cannot be created
 				return 0;
 			node = DirTree_New();
 			node->path = BGI_Strdup(prefix);
@@ -151,7 +151,7 @@ int DirTree_Build(DirNode_t* root, const char* path)
 }
 
 // DirTree_Build of "<dir>\<name>" for every name of the NULL-terminated list; 1 when all were made (or names is NULL)
-int DirTree_BuildList(DirNode_t* root, const char* dir, char** names)
+int DirTree_BuildList(OpenBGI_t* o, DirNode_t* root, const char* dir, char** names)
 {
 	char path[0x104];
 	int ok = 1;
@@ -160,7 +160,7 @@ int DirTree_BuildList(DirNode_t* root, const char* dir, char** names)
 	for(; *names && ok; names++)
 	{
 		sprintf(path, "%s\\%s", dir, *names);
-		ok = DirTree_Build(root, path);
+		ok = DirTree_Build(o, root, path);
 	}
 	return ok;
 }
@@ -169,18 +169,18 @@ int DirTree_BuildList(DirNode_t* root, const char* dir, char** names)
  * siblings and everything below them), each one after its children; 1
  * when every removal went.  Once a removal fails nothing further is
  * removed: the parents are not empty then. */
-int DirTree_Remove(DirNode_t* n)
+int DirTree_Remove(OpenBGI_t* o, DirNode_t* n)
 {
 	int ok = 1;
 	if(!n)
 		return 1;
 	if(n->child)
-		ok = DirTree_Remove(n->child) != 0;
+		ok = DirTree_Remove(o, n->child) != 0;
 	if(n->next)
-		ok = ok && DirTree_Remove(n->next);
+		ok = ok && DirTree_Remove(o, n->next);
 	if(!n->path)
 		return ok;
-	return ok && OS_DirRemove(n->path);
+	return ok && Fs_DirRemove(o, n->path);
 }
 
 // free the nodes below and including `n`
@@ -207,11 +207,11 @@ void MadeList_Add(MadeList_t* l, const char* name, const char* path)
 }
 
 // delete every file of the list, newest first (the rollback); failures are ignored
-void MadeList_DeleteFiles(const MadeList_t* l)
+void MadeList_DeleteFiles(OpenBGI_t* o, const MadeList_t* l)
 {
 	const MadeFile_t* m;
 	for(m = l->head; m; m = m->next)
-		OS_FileDelete(m->path);
+		Fs_FileDelete(o, m->path);
 }
 
 // free the entries; the list is empty afterwards

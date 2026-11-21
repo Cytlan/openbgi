@@ -2,7 +2,7 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * markup.c - the inline markup of message text from 1.494 on: "<b>",
+ * markup.c - the inline markup of message text from 1.492 on: "<b>",
  *            "<i>", "<c rrggbb>", "<l>" links, "<ruby>" / "<r>" readings,
  *            "<cr>", "<t n>" and the "</>" literal (layout_internal.h)
  *
@@ -10,21 +10,22 @@
  * Markup_Apply on a hit; the state - the current font and colour, the
  * colour stack, the open link - lives in a Markup_t for the duration of
  * one layout.  The clickable links of the last layout are kept in
- * gTextLinks for "92 9E"; the font and the colour the links are drawn in
- * come from "92 9D" and "92 9F".
+ * o->text.textLinks for "92 9E"; the font and the colour the links are
+ * drawn in come from "92 9D" and "92 9F".
  */
 #include "layout_internal.h"
+#include "bgi/core.h"
 
 /* The tags in the order they are tried: the lower-cased tag text is
  * matched exactly, or by prefix so that arguments may follow ("<r まお>");
  * "/" matches exactly only.  Each tag is accepted from its generation on. */
 const TagDef_t gMarkupTags[TAG_COUNT] = {
-	{"/", GEN_1_494},
-	{"b", GEN_1_494},
-	{"/b", GEN_1_494},
-	{"i", GEN_1_494},
-	{"/i", GEN_1_494},
-	{"ruby", GEN_1_494},
+	{"/", GEN_1_492},
+	{"b", GEN_1_492},
+	{"/b", GEN_1_492},
+	{"i", GEN_1_492},
+	{"/i", GEN_1_492},
+	{"ruby", GEN_1_492},
 	{"r", GEN_1_529},
 	{"/r", GEN_1_529},
 	{"cr", GEN_1_547},
@@ -38,21 +39,19 @@ const TagDef_t gMarkupTags[TAG_COUNT] = {
 /* The clickable "<l>" sections of the last layout: up to TEXT_LINKS_MAX
  * entries holding the text and the position of its first glyph; "92 9E"
  * reads and clears them. */
-TextLink_t gTextLinks[TEXT_LINKS_MAX];
-int32_t gTextLinkCount;
 
-void TextLinks_Clear(void)
+void TextLinks_Clear(OpenBGI_t* o)
 {
-	gTextLinkCount = 0;
+	o->text.textLinkCount = 0;
 }
 
 // register a link; 0 when the table is full (the link is dropped)
-static int TextLinks_Add(const char* text, int x, int y)
+static int TextLinks_Add(OpenBGI_t* o, const char* text, int x, int y)
 {
 	TextLink_t* l;
-	if(gTextLinkCount >= TEXT_LINKS_MAX)
+	if(o->text.textLinkCount >= TEXT_LINKS_MAX)
 		return 0;
-	l = &gTextLinks[gTextLinkCount++];
+	l = &o->text.textLinks[o->text.textLinkCount++];
 	memset(l, 0, sizeof *l);
 	snprintf(l->text, sizeof l->text, "%s", text);
 	l->x = x;
@@ -60,21 +59,18 @@ static int TextLinks_Add(const char* text, int x, int y)
 	return 1;
 }
 
-int TextLinks_Take(TextLink_t* out) // "92 9E": copy them out and clear; the count
+int TextLinks_Take(OpenBGI_t* o, TextLink_t* out) // "92 9E": copy them out and clear; the count
 {
-	int n = gTextLinkCount;
+	int n = o->text.textLinkCount;
 	if(n > 0)
 	{
-		memcpy(out, gTextLinks, (size_t)n * sizeof *out);
-		TextLinks_Clear();
+		memcpy(out, o->text.textLinks, (size_t)n * sizeof *out);
+		TextLinks_Clear(o);
 	}
 	return n;
 }
 
 // the link style of "92 9D" / "92 9F"
-char gLinkFace[0x34];
-int32_t gLinkSize, gLinkWidthPct, gLinkBold, gLinkItalic;
-int32_t gLinkColour = -1;
 
 /* "92 9D": the font "<l>" switches to.  0 ok; with a face given, the
  * size and width are checked first: 0x80000004 (size not 4 .. 200),
@@ -82,7 +78,7 @@ int32_t gLinkColour = -1;
  * font (the size and width are stored unchecked then).  The face itself is
  * only opened by a layout; 0x80000006 (the face cannot be opened) is never
  * returned here. */
-int Text_SetLinkFont(const char* face, int size, int widthPct, int bold, int italic)
+int Text_SetLinkFont(OpenBGI_t* o, const char* face, int size, int widthPct, int bold, int italic)
 {
 	if(face && *face)
 	{
@@ -91,19 +87,19 @@ int Text_SetLinkFont(const char* face, int size, int widthPct, int bold, int ita
 		if(widthPct < 25 || widthPct > 200)
 			return (int)0x80000005;
 	}
-	memset(gLinkFace, 0, sizeof gLinkFace);
+	memset(o->text.linkFace, 0, sizeof o->text.linkFace);
 	if(face)
-		snprintf(gLinkFace, sizeof gLinkFace, "%s", face);
-	gLinkSize = size;
-	gLinkWidthPct = widthPct;
-	gLinkBold = bold;
-	gLinkItalic = italic;
+		snprintf(o->text.linkFace, sizeof o->text.linkFace, "%s", face);
+	o->text.linkSize = size;
+	o->text.linkWidthPct = widthPct;
+	o->text.linkBold = bold;
+	o->text.linkItalic = italic;
 	return 0;
 }
 
-void Text_SetLinkColour(int32_t colour) // "92 9F": -1 = the text's colour
+void Text_SetLinkColour(OpenBGI_t* o, int32_t colour) // "92 9F": -1 = the text's colour
 {
-	gLinkColour = colour;
+	o->text.linkColour = colour;
 }
 
 // ---- the markup state of one layout -----------------------------------------------------
@@ -149,10 +145,10 @@ static void Markup_UseBase(Markup_t* m) // back to the window's font
  * font's extra widths); 0 and nothing changes when it cannot be opened,
  * so the tag is ignored, like the original does.  The capacity of 0x40
  * glyphs is the original's. */
-static int Markup_OpenFont(Markup_t* m, const char* face, int size, int widthPct, int bold, int italic)
+static int Markup_OpenFont(OpenBGI_t* o, Markup_t* m, const char* face, int size, int widthPct, int bold, int italic)
 {
 	FontRaster_t* f = FontRaster_New();
-	if(FontRaster_Init(f, FontNames_Resolve(face), size, widthPct, bold, italic, 0x40) != 0)
+	if(FontRaster_Init(o, f, FontNames_Resolve(o, face), size, widthPct, bold, italic, 0x40) != 0)
 	{
 		FontRaster_Delete(f);
 		return 0;
@@ -176,18 +172,18 @@ void Markup_Free(Markup_t* m)
  * most cap - 1) and lower-case its ASCII (Shift-JIS aware), then find the
  * tag: an exact match, or a prefix match for every tag but "/".  Returns
  * the tag's index or -1. */
-int Markup_Match(char* buf, size_t cap, const char* text, int len)
+int Markup_Match(OpenBGI_t* o, char* buf, size_t cap, const char* text, int len)
 {
 	int i;
 	if(len >= (int)cap)
 		len = (int)cap - 1;
 	memcpy(buf, text, (size_t)len);
 	buf[len] = 0;
-	SjisStrLwr(buf);
+	SjisStrLwr(o, buf);
 	for(i = 0; i < TAG_COUNT; i++)
 	{
 		const char* name = gMarkupTags[i].name;
-		if(gEngine->gen < gMarkupTags[i].from)
+		if(o->engine.profile->gen < gMarkupTags[i].from)
 			continue;
 		if(strcmp(buf, name) == 0)
 			return i;
@@ -205,12 +201,12 @@ static const char* SkipSpaces(const char* p)
 }
 
 // the characters of `p` up to `stop` (a byte) or the end, Shift-JIS aware; the length
-static int CopyUntil(char* out, size_t cap, const char* p, char stop)
+static int CopyUntil(OpenBGI_t* o, char* out, size_t cap, const char* p, char stop)
 {
 	size_t n = 0;
 	while(*p && *p != stop)
 	{
-		int len = TextCharLen(p);
+		int len = TextCharLen(o, p);
 		if(n + (size_t)len >= cap)
 			break;
 		memcpy(out + n, p, (size_t)len);
@@ -243,7 +239,7 @@ static int ParseHexColour(const char* p, uint32_t* out)
  * cannot be applied (a font that does not open, a malformed argument, a
  * closing tag without its opening one) is skipped quietly.  Always 1: the
  * tag was consumed and the layout continues behind it. */
-int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, const char* p, RubyDict_t* dict,
+int Markup_Apply(OpenBGI_t* o, Markup_t* m, int tag, const char* args, const char* after, const char* p, RubyDict_t* dict,
 	int32_t cur[2], const Rect_t* area)
 {
 	char word[0x100], reading[0x100];
@@ -257,7 +253,7 @@ int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, cons
 		case TAG_BOLD:
 			if(m->cur.bold)
 				break;
-			if(Markup_OpenFont(m, m->cur.name, m->cur.size, m->cur.widthPct, 1, m->cur.italic))
+			if(Markup_OpenFont(o, m, m->cur.name, m->cur.size, m->cur.widthPct, 1, m->cur.italic))
 				m->cur.bold = 1;
 			break;
 
@@ -269,14 +265,14 @@ int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, cons
 				m->cur.bold = 0;
 				Markup_UseBase(m);
 			}
-			else if(Markup_OpenFont(m, m->cur.name, m->cur.size, m->cur.widthPct, 0, m->cur.italic))
+			else if(Markup_OpenFont(o, m, m->cur.name, m->cur.size, m->cur.widthPct, 0, m->cur.italic))
 				m->cur.bold = 0;
 			break;
 
 		case TAG_ITALIC:
 			if(m->cur.italic)
 				break;
-			if(Markup_OpenFont(m, m->cur.name, m->cur.size, m->cur.widthPct, m->cur.bold, 1))
+			if(Markup_OpenFont(o, m, m->cur.name, m->cur.size, m->cur.widthPct, m->cur.bold, 1))
 				m->cur.italic = 1;
 			break;
 
@@ -288,7 +284,7 @@ int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, cons
 				m->cur.italic = 0;
 				Markup_UseBase(m);
 			}
-			else if(Markup_OpenFont(m, m->cur.name, m->cur.size, m->cur.widthPct, m->cur.bold, 0))
+			else if(Markup_OpenFont(o, m, m->cur.name, m->cur.size, m->cur.widthPct, m->cur.bold, 0))
 				m->cur.italic = 0;
 			break;
 
@@ -296,12 +292,12 @@ int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, cons
 		{
 			const char* comma;
 			args = SkipSpaces(args);
-			CopyUntil(word, sizeof word, args, ',');
+			CopyUntil(o, word, sizeof word, args, ',');
 			comma = strchr(args, ',');
 			if(!comma)
 				break;
-			CopyUntil(reading, sizeof reading, comma + 1, 0);
-			RubyDict_Insert(dict, word, reading);
+			CopyUntil(o, reading, sizeof reading, comma + 1, 0);
+			RubyDict_Insert(o, dict, word, reading);
 			break;
 		}
 
@@ -309,18 +305,18 @@ int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, cons
 		{
 			const char* lt;
 			args = SkipSpaces(args);
-			CopyUntil(reading, sizeof reading, args, 0);
+			CopyUntil(o, reading, sizeof reading, args, 0);
 			if(!reading[0])
 				break;
 			lt = after;
 			while(*lt && *lt != '<')
-				lt += TextCharLen(lt);
+				lt += TextCharLen(o, lt);
 			if(!*lt)
 				break; // no closing tag: the word stays plain text
-			CopyUntil(word, sizeof word, after, '<');
+			CopyUntil(o, word, sizeof word, after, '<');
 			if(!word[0])
 				break;
-			RubyDict_Insert(dict, word, reading);
+			RubyDict_Insert(o, dict, word, reading);
 			break;
 		}
 
@@ -349,12 +345,12 @@ int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, cons
 			m->linkY = cur[1];
 			m->linkStart = after;
 			Markup_Push(m);
-			if(gLinkColour != -1)
-				m->colour = (uint32_t)gLinkColour;
+			if(o->text.linkColour != -1)
+				m->colour = (uint32_t)o->text.linkColour;
 			if(m->cur.bold || m->cur.italic)
 				break; // the link font replaces the plain one only
-			Markup_OpenFont(m, gLinkFace[0] ? gLinkFace : m->cur.name, gLinkSize > 0 ? gLinkSize : m->cur.size,
-				gLinkWidthPct > 0 ? gLinkWidthPct : m->cur.widthPct, gLinkBold, gLinkItalic);
+			Markup_OpenFont(o, m, o->text.linkFace[0] ? o->text.linkFace : m->cur.name, o->text.linkSize > 0 ? o->text.linkSize : m->cur.size,
+				o->text.linkWidthPct > 0 ? o->text.linkWidthPct : m->cur.widthPct, o->text.linkBold, o->text.linkItalic);
 			break;
 
 		case TAG_LINK_END: // "</l>": register the link's text (its first line) and position
@@ -372,7 +368,7 @@ int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, cons
 				memcpy(text, m->linkStart, (size_t)len);
 				text[len] = 0;
 				m->linkStart = NULL;
-				TextLinks_Add(text, m->linkX, m->linkY);
+				TextLinks_Add(o, text, m->linkX, m->linkY);
 			}
 			Markup_Pop(m);
 			if(m->cur.bold || m->cur.italic)
@@ -387,7 +383,7 @@ int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, cons
 			args = SkipSpaces(args);
 			while(*args >= '0' && *args <= '9')
 				n = n * 10 + (*args++ - '0');
-			m->delay = n * gRubyCharDelay;
+			m->delay = n * o->text.rubyCharDelay;
 			break;
 		}
 
@@ -397,13 +393,13 @@ int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, cons
 	return 1;
 }
 
-/* The no-break run starting at `p` (a Latin word) copied to `out`: 1.494
+/* The no-break run starting at `p` (a Latin word) copied to `out`: 1.492
  * counts the bytes up to a space, 1.529 on the run of printable ASCII
  * (0x21 .. 0x7E).  Returns the byte count, 0 when `p` does not start one. */
-int Markup_WordRun(char* out, const char* p)
+int Markup_WordRun(OpenBGI_t* o, char* out, const char* p)
 {
 	int n = 0;
-	if(gEngine->gen >= GEN_1_529)
+	if(o->engine.profile->gen >= GEN_1_529)
 	{
 		while(p[n] >= 0x21 && p[n] <= 0x7e)
 			n++;

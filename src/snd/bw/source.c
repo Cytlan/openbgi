@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * source.c - where a BW stream reads its bytes from: a file, an entry of
- *            an archive, or a block of memory (inc/bgi/snd/bw.h)
+ *            an archive, or a block of memory (src/include/bgi/snd/bw.h)
  *
  * A source is a window [base, base + size) of a file with its own
  * position; the memory kind holds a copy of the data.  Whole-file streams
@@ -12,17 +12,17 @@
 #include "bw_internal.h"
 
 // a loose file opened for shared reading; NULL when it cannot be opened
-WmSource_t* WmSource_OpenFile(const char* path)
+WmSource_t* WmSource_OpenFile(OpenBGI_t* o, const char* path)
 {
 	WmSource_t* s;
-	OsFile_t* f = OS_FileOpenRead(path);
+	FsFile_t* f = Fs_FileOpenRead(o, path);
 	if(!f)
 		return NULL;
 	s = (WmSource_t*)BGI_Alloc(sizeof *s);
 	memset(s, 0, sizeof *s);
 	s->kind = WM_SRC_FILE;
 	s->file = f;
-	s->size = OS_FileSize(f);
+	s->size = Fs_FileSize(f);
 	return s;
 }
 
@@ -31,28 +31,28 @@ WmSource_t* WmSource_OpenFile(const char* path)
  * 16-byte name, the offset and the size) or, from 1.573 on, a "BURIKO
  * ARC20" (the same header, then 0x80 bytes per entry: a 0x60-byte name,
  * the offset at +0x60 and the size at +0x64), then the data.  Names are
- * compared lower-cased, as the file layer compares them (src/core/arc.c).
+ * compared lower-cased, as the file layer compares them (src/fs/arc.c).
  * The original keeps a list of opened archives; here the index is
  * scanned per open.  NULL when the archive cannot be opened, is neither
  * format, or lacks the entry. */
-WmSource_t* WmSource_OpenArc(const char* arcPath, const char* name)
+WmSource_t* WmSource_OpenArc(OpenBGI_t* o, const char* arcPath, const char* name)
 {
 	WmSource_t* s;
-	OsFile_t* f;
+	FsFile_t* f;
 	uint8_t hdr[16];
 	uint32_t count, i, recSize, nameSize;
 	char want[0x60];
 	int found = 0;
 	uint32_t off = 0, size = 0;
 
-	if(OS_FileAttrs(arcPath) == OS_INVALID_ATTRS)
+	if(Fs_FileAttrs(o, arcPath) == OPENBGI_INVALID_ATTRS)
 		return NULL;
-	f = OS_FileOpenRead(arcPath);
+	f = Fs_FileOpenRead(o, arcPath);
 	if(!f)
 		return NULL;
-	if(OS_FileRead(f, hdr, 16) != 16)
+	if(Fs_FileRead(f, hdr, 16) != 16)
 	{
-		OS_FileClose(f);
+		Fs_FileClose(f);
 		return NULL;
 	}
 	if(memcmp(hdr, "PackFile    ", 12) == 0)
@@ -67,7 +67,7 @@ WmSource_t* WmSource_OpenArc(const char* arcPath, const char* name)
 	}
 	else
 	{
-		OS_FileClose(f);
+		Fs_FileClose(f);
 		return NULL;
 	}
 	memcpy(&count, hdr + 12, 4);
@@ -80,7 +80,7 @@ WmSource_t* WmSource_OpenArc(const char* arcPath, const char* name)
 		uint8_t e[0x80];
 		char nm[0x60];
 		uint32_t k;
-		if(OS_FileRead(f, e, recSize) != recSize)
+		if(Fs_FileRead(f, e, recSize) != recSize)
 			break;
 		memcpy(nm, e, nameSize);
 		nm[nameSize - 1] = 0;
@@ -96,7 +96,7 @@ WmSource_t* WmSource_OpenArc(const char* arcPath, const char* name)
 	}
 	if(!found)
 	{
-		OS_FileClose(f);
+		Fs_FileClose(f);
 		return NULL;
 	}
 	s = (WmSource_t*)BGI_Alloc(sizeof *s);
@@ -105,7 +105,7 @@ WmSource_t* WmSource_OpenArc(const char* arcPath, const char* name)
 	s->file = f;
 	s->base = 16 + count * recSize + off; // entry offsets count from the end of the index
 	s->size = size;
-	OS_FileSeek(f, s->base);
+	Fs_FileSeek(f, s->base);
 	return s;
 }
 
@@ -129,7 +129,7 @@ void WmSource_Close(WmSource_t* s)
 	if(!s)
 		return;
 	if(s->file)
-		OS_FileClose(s->file);
+		Fs_FileClose(s->file);
 	BGI_Free(s->mem);
 	BGI_Free(s);
 }
@@ -153,7 +153,7 @@ uint32_t WmSource_Read(WmSource_t* s, void* dst, uint32_t n)
 		got = n;
 	}
 	else
-		got = OS_FileRead(s->file, dst, n);
+		got = Fs_FileRead(s->file, dst, n);
 	s->pos += got;
 	return got;
 }
@@ -165,7 +165,7 @@ void WmSource_Seek(WmSource_t* s, uint32_t pos)
 		pos = s->size;
 	s->pos = pos;
 	if(s->kind != WM_SRC_MEMORY)
-		OS_FileSeek(s->file, s->base + pos);
+		Fs_FileSeek(s->file, s->base + pos);
 }
 
 uint32_t WmSource_Tell(const WmSource_t* s)

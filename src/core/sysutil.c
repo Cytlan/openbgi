@@ -2,105 +2,40 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * sysutil.c - allocation helpers, the engine lock, the tick source, the
- *             idle sleep and the CRT random generator (inc/bgi/common.h
- *             for the allocation and random functions, inc/bgi/sys.h for
- *             the rest)
+ * sysutil.c - the clocks, the CRT random generator and the scrambler's
+ *             engine-wide state (src/include/bgi/common.h for the random
+ *             functions, src/include/bgi/codec.h for the scrambler's,
+ *             src/include/bgi/sys.h for the rest)
  */
 #include "bgi/sys.h"
-#include "bgi/os.h"
+#include "bgi/codec.h"
 #include "bgi/display.h"
+#include "bgi/core.h"
 
-// ---- allocation ----------------------------------------------------------
+// ---- the clocks -----------------------------------------------------------
 
-// malloc that never returns NULL: the process is aborted when memory runs out (n = 0 gives a 1-byte block)
-void* BGI_Alloc(size_t n)
+/* Every clock the engine reads is the host's (openbgi.h).  The original
+ * queries timeGetDevCaps and, when the minimum period is below 10 ms,
+ * calls timeBeginPeriod(min) and switches GetTicks to timeGetTime; the
+ * timer resolution is the host's business, and its millisecond clock
+ * makes the switch implicit. */
+
+// the host's millisecond clock, wrapping at 2^32; any thread
+uint32_t Clock_HostMs(OpenBGI_t* o)
 {
-	void* p = malloc(n ? n : 1);
-	if(!p)
-	{
-		fprintf(stderr, "bgi: out of memory (%lu bytes)\n", (unsigned long)n);
-		abort();
-	}
-	return p;
+	return o->host.ticksMs(o->host.user);
 }
 
-void* BGI_Calloc(size_t n)
+// the host's nanosecond counter; 0 when it has none
+int Clock_PerfNs(OpenBGI_t* o, int64_t* out)
 {
-	void* p = BGI_Alloc(n);
-	memset(p, 0, n);
-	return p;
+	return o->host.perfNs(o->host.user, out);
 }
 
-void BGI_Free(void* p)
+// the local date and time
+void Clock_LocalTime(OpenBGI_t* o, OpenBGI_DateTime_t* out)
 {
-	free(p);
-}
-
-char* BGI_Strdup(const char* s)
-{
-	size_t n = strlen(s) + 1;
-	char* d = (char*)BGI_Alloc(n);
-	memcpy(d, s, n);
-	return d;
-}
-
-//  --- engine lock ------------------------
-
-/* The critical section held around the hash generator the DSC, SDC and
- * save-file codecs share, which the original's loader thread uses too.
- * Enter / Leave are no-ops before Init and after Delete. */
-static OsLock_t* gEngineLock;
-
-void EngineLock_Init(void)
-{
-	gEngineLock = OS_LockCreate();
-}
-
-// destroy the lock after waiting for whoever holds it
-void EngineLock_Delete(void)
-{
-	OS_LockEnter(gEngineLock);
-	OS_LockLeave(gEngineLock);
-	OS_LockDestroy(gEngineLock);
-	gEngineLock = NULL;
-}
-
-void EngineLock_Enter(void)
-{
-	if(gEngineLock)
-		OS_LockEnter(gEngineLock);
-}
-
-void EngineLock_Leave(void)
-{
-	if(gEngineLock)
-		OS_LockLeave(gEngineLock);
-}
-
-// ---- ticks ----------------------------------------------------------------
-
-/* The original queries timeGetDevCaps and, when the minimum period is
- * below 10 ms, calls timeBeginPeriod(min) and switches GetTicks to
- * timeGetTime.  The OS layer always provides a millisecond clock, so the
- * switch is implicit here. */
-static int gTimerPeriodOn; // between Timer_Begin and Timer_End
-
-// raise the timer resolution (start-up)
-void Timer_Begin(void)
-{
-	OS_TimerBeginPeriod();
-	gTimerPeriodOn = 1;
-}
-
-// restore it (shutdown)
-void Timer_End(void)
-{
-	if(gTimerPeriodOn)
-	{
-		OS_TimerEndPeriod();
-		gTimerPeriodOn = 0;
-	}
+	o->host.localTime(o->host.user, out);
 }
 
 /* The engine's clock: milliseconds, wrapping at 2^32.  Up to 1.529 it is
@@ -111,25 +46,18 @@ void Timer_End(void)
  * than the step limit ("81 04", 500 ms by default) above it, moves the
  * base by the difference, so the clock starts at 0 on its first reading
  * and stands still across a stall such as a long load. */
-static uint32_t gClockBase;          // subtracted from the system clock
-static uint32_t gClockFrozen;        // the value while stopped; 0 while running (a clock stopped at 0 runs on)
-static uint32_t gClockLast;          // the system clock at the previous reading (1.573 on)
-static uint32_t gClockMaxStep = 500; // the longest step that counts as time passing
-static int gClockStopInactive;       // "81 68": stop while the window is inactive
-static int gClockStopped;            // 1.547 on: a stop is in effect (the next one is not counted)
-
-uint32_t GetTicks(void)
+uint32_t GetTicks(OpenBGI_t* o)
 {
-	uint32_t now = OS_TicksMs();
-	if(gEngine->gen < GEN_1_535)
+	uint32_t now = Clock_HostMs(o);
+	if(o->engine.profile->gen < GEN_1_535)
 		return now;
-	if(gEngine->gen >= GEN_1_573)
+	if(o->engine.profile->gen >= GEN_1_573)
 	{
-		if(now < gClockLast || gClockLast + gClockMaxStep < now)
-			gClockBase += now - gClockLast;
-		gClockLast = now;
+		if(now < o->util.clockLast || o->util.clockLast + o->util.clockMaxStep < now)
+			o->util.clockBase += now - o->util.clockLast;
+		o->util.clockLast = now;
 	}
-	return gClockFrozen ? gClockFrozen : now - gClockBase;
+	return o->util.clockFrozen ? o->util.clockFrozen : now - o->util.clockBase;
 }
 
 /* Stop the clock (the window lost the focus, or a message box or a
@@ -138,121 +66,115 @@ uint32_t GetTicks(void)
  * for that.  From 1.547 on a second stop before the resume changes
  * nothing; from 1.588 on nothing happens before the window exists.  1 when
  * the clock was stopped here. */
-int Clock_Stop(int force)
+int Clock_Stop(OpenBGI_t* o, int force)
 {
 	int stopped = 0;
-	if(gEngine->gen < GEN_1_535)
+	if(o->engine.profile->gen < GEN_1_535)
 		return 0;
-	if(gEngine->gen < GEN_1_547)
+	if(o->engine.profile->gen < GEN_1_547)
 	{
-		if(gClockStopInactive && !gClockFrozen)
+		if(o->util.clockStopInactive && !o->util.clockFrozen)
 		{
-			gClockFrozen = GetTicks();
+			o->util.clockFrozen = GetTicks(o);
 			return 1;
 		}
 		return 0;
 	}
-	if((gEngine->gen >= GEN_1_588 && !gWindowAlive) || gClockStopped)
+	if((o->engine.profile->gen >= GEN_1_588 && !o->display.windowAlive) || o->util.clockStopped)
 		return 0;
-	if((gClockStopInactive || force) && !gClockFrozen)
+	if((o->util.clockStopInactive || force) && !o->util.clockFrozen)
 	{
-		gClockFrozen = GetTicks();
+		o->util.clockFrozen = GetTicks(o);
 		stopped = 1;
 	}
-	gClockStopped = 1;
+	o->util.clockStopped = 1;
 	return stopped;
 }
 
 /* Let the clock run on, the stopped time taken out of it (1.535: only
  * while "81 68" is set).  1 when it had been stopped. */
-int Clock_Resume(void)
+int Clock_Resume(OpenBGI_t* o)
 {
-	uint32_t at = gClockFrozen;
-	if(gEngine->gen < GEN_1_535)
+	uint32_t at = o->util.clockFrozen;
+	if(o->engine.profile->gen < GEN_1_535)
 		return 0;
-	if(gEngine->gen < GEN_1_547)
+	if(o->engine.profile->gen < GEN_1_547)
 	{
-		if(!gClockStopInactive || !at)
+		if(!o->util.clockStopInactive || !at)
 			return 0;
 	}
 	else
 	{
-		if((gEngine->gen >= GEN_1_588 && !gWindowAlive) || !gClockStopped)
+		if((o->engine.profile->gen >= GEN_1_588 && !o->display.windowAlive) || !o->util.clockStopped)
 			return 0;
-		gClockStopped = 0;
+		o->util.clockStopped = 0;
 		if(!at)
 			return 0;
 	}
-	gClockFrozen = 0;
-	gClockBase += GetTicks() - at;
+	o->util.clockFrozen = 0;
+	o->util.clockBase += GetTicks(o) - at;
 	return 1;
 }
 
 // 1.547 on: a message box or a dialog is up - the clock stops whatever "81 68" says, and runs on after it
-void Clock_BoxBegin(void)
+void Clock_BoxBegin(OpenBGI_t* o)
 {
-	if(gEngine->gen >= GEN_1_547)
-		Clock_Stop(1);
+	if(o->engine.profile->gen >= GEN_1_547)
+		Clock_Stop(o, 1);
 }
 
-void Clock_BoxEnd(void)
+void Clock_BoxEnd(OpenBGI_t* o)
 {
-	if(gEngine->gen >= GEN_1_547)
-		Clock_Resume();
+	if(o->engine.profile->gen >= GEN_1_547)
+		Clock_Resume(o);
 }
 
 // "81 68" (1.535 on): stop the clock (and from 1.547 on the sound) while the window is inactive; the previous setting
-int Clock_SetStopWhenInactive(int on)
+int Clock_SetStopWhenInactive(OpenBGI_t* o, int on)
 {
-	int prev = gClockStopInactive;
-	gClockStopInactive = on;
+	int prev = o->util.clockStopInactive;
+	o->util.clockStopInactive = on;
 	return prev;
 }
 
-int Clock_StopsWhenInactive(void)
+int Clock_StopsWhenInactive(OpenBGI_t* o)
 {
-	return gClockStopInactive;
+	return o->util.clockStopInactive;
 }
 
 // "81 04" (1.616 on): the step limit, 50 .. 60000 ms; 1 when accepted
-int Clock_SetMaxStep(uint32_t ms)
+int Clock_SetMaxStep(OpenBGI_t* o, uint32_t ms)
 {
 	if(ms - 50 > 60000 - 50)
 		return 0;
-	gClockMaxStep = ms;
+	o->util.clockMaxStep = ms;
 	return 1;
 }
 
-// ---- idle sleep ------------------------------------------------------------
-
-void Idle_Init(void)
-{
-	OS_IdleInit();
-}
-
-void Idle_Shutdown(void)
-{
-	OS_IdleShutdown();
-}
-
-// the ~0.5 ms sleep at the end of a pass that presented nothing (Display_FrameIdle)
-void Sys_Idle(void)
-{
-	OS_IdleSleep();
-}
-
 // ---- the CRT random generator -----------------------------------------------------------
-static uint32_t gRandSeed = 1; // the CRT's holdrand, initially 1
 
 // "80 00": srand
-void BGI_Srand(uint32_t seed)
+void BGI_Srand(OpenBGI_t* o, uint32_t seed)
 {
-	gRandSeed = seed;
+	o->util.randSeed = seed;
 }
 
 // "80 01" / "80 02": rand, the MSVC sequence (seed * 214013 + 2531011, bits 16 .. 30)
-int BGI_Rand(void)
+int BGI_Rand(OpenBGI_t* o)
 {
-	gRandSeed = gRandSeed * 214013u + 2531011u;
-	return (int)((gRandSeed >> 16) & 0x7fffu);
+	o->util.randSeed = o->util.randSeed * 214013u + 2531011u;
+	return (int)((o->util.randSeed >> 16) & 0x7fffu);
+}
+
+// ---- the scrambler's state ---------------------------------------------------
+
+// the generator of src/base/hash.c on the engine's own state: seed it, then take one output a byte
+void BGI_HashSeed(OpenBGI_t* o, uint32_t key)
+{
+	o->util.hashKey = key;
+}
+
+uint32_t BGI_HashNext(OpenBGI_t* o)
+{
+	return BGI_HashUpdate(&o->util.hashKey);
 }

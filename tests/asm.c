@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * tests/asm.c - unit test of the assembler and disassembler (src/asm/,
- *               declared in inc/bgi/asm.h); built as bin/test_asm by
+ *               declared in src/include/bgi/asm.h); built as test_asm by
  *               `make test`
  *
  * The groups of tests, in the order they run:
@@ -17,45 +17,41 @@
  *   round trip - a program with every operand kind, forward and backward
  *                labels, strings and data is disassembled and assembled
  *                again; the bytes have to be identical, with and without
- *                the offset and byte columns in the listing
+ *                the offset and byte columns in the listing; the listing
+ *                in memory is the stream's, a flow into an undefined
+ *                opcode is noted and counted
  *   run        - an assembled program is executed by the VM's base
  *                instruction table and has to leave the expected result
  *   errors     - texts that must be rejected, and a warning that must not
  *                be an error
+ *   text out   - the listing's text in memory: every kind of piece, a
+ *                long formatted one, the text growing as it goes
  *
  * Every check prints its file and line on failure; main exits with 1 when
  * any check failed.
  */
 #include "bgi/asm.h"
+#include "bgi/core.h"
 #include "bgi/vm.h"
 #include "bgi/sys.h"
-#include "bgi/os.h"
+#include "host/os.h"
+#include "bgi/asmout.h"
 
 #include <stdio.h>
 
-static int gFails; // the number of failed checks so far
-// evaluate a condition; print it with its location and count a failure when it is false
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 /* Assemble `text` for generation `gen` and copy the program area (the
  * file without its 16-byte header) into `out`, at most `cap` bytes.
  * Returns the full size of the area, or 0 when the assembler reported an
  * error.  With `quiet` the assembler's messages are discarded, for the
  * tests that expect an error. */
-static uint32_t Assemble(const char* text, EngineGen_t gen, uint8_t* out, uint32_t cap, int quiet)
+static uint32_t Assemble(OpenBGI_t* o, const char* text, EngineGen_t gen, uint8_t* out, uint32_t cap, int quiet)
 {
 	AsmResult_t r;
 	uint32_t n;
 	FILE* log = quiet ? fopen("/dev/null", "w") : stderr;
-	Asm_Assemble(text, strlen(text), gen, log, &r);
+	Asm_Assemble(o, text, strlen(text), gen, log, &r);
 	if(quiet)
 		fclose(log);
 	if(!r.file)
@@ -87,50 +83,50 @@ static int Bytes(const uint8_t* got, uint32_t n, const char* hex)
  * kinds and the expected bytes are the ones the VM decodes.  A failure
  * means the assembler emits an instruction the VM would misread (or that
  * a mnemonic maps to the wrong opcode). */
-static void TestEncodings(void)
+static void TestEncodings(OpenBGI_t* o)
 {
 	uint8_t b[0x100];
 	uint32_t n;
 	printf("encodings\n");
 	// the immediate operands: i8, i16, i32 and a local address
-	n = Assemble("push_i8 -1\npush_i16 300\npush_i32 0x12345678\npush_local_addr 0x250\n", GEN_1_69_444, b, sizeof b, 0);
+	n = Assemble(o, "push_i8 -1\npush_i16 300\npush_i32 0x12345678\npush_local_addr 0x250\n", GEN_1_69_444, b, sizeof b, 0);
 	CHECK(n == 13 && Bytes(b, n, "00 ff 01 2c 01 02 78 56 34 12 04 50 02"));
 	// the memory and control instructions with their size / count bytes
-	n = Assemble("load 2\nstore_keep 1\nstore 0\nstore_multi 2, 3\njcc 5\njmp\ncall\nret\n", GEN_1_69_444, b, sizeof b, 0);
+	n = Assemble(o, "load 2\nstore_keep 1\nstore 0\nstore_multi 2, 3\njcc 5\njmp\ncall\nret\n", GEN_1_69_444, b, sizeof b, 0);
 	CHECK(n == 14 && Bytes(b, n, "08 02 09 01 0a 00 0c 02 03 15 05 14 16 17"));
 	// store_inline: the byte count precedes the inline bytes; without operands it is a
 	// count of 0
-	n = Assemble("store_inline 1, 2, \"ab\"\nstore_inline\n", GEN_1_69_444, b, sizeof b, 0);
+	n = Assemble(o, "store_inline 1, 2, \"ab\"\nstore_inline\n", GEN_1_69_444, b, sizeof b, 0);
 	CHECK(n == 8 && Bytes(b, n, "0b 04 01 02 61 62 0b 00"));
 	// the family prefixes, by name and by number
-	n = Assemble("sys.yield\nsys.0x5e\ngfx0.present\nuser.0x12\nsnd.0x00\n", GEN_1_69_444, b, sizeof b, 0);
+	n = Assemble(o, "sys.yield\nsys.0x5e\ngfx0.present\nuser.0x12\nsnd.0x00\n", GEN_1_69_444, b, sizeof b, 0);
 	CHECK(n == 10 && Bytes(b, n, "80 5f 80 5e 90 00 ff 12 a0 00"));
 	// the arithmetic, comparison and logic instructions have no operands
-	n = Assemble("add\nsub\nmul\ndiv\nmod\nand\nor\nxor\nnot\nshl\nshr\nsar\neq\nne\nle\nge\nlt\ngt\nland\nlor\nlnot\nselect\nmuldiv\nsin\ncos\n", GEN_1_69_444, b, sizeof b, 0);
+	n = Assemble(o, "add\nsub\nmul\ndiv\nmod\nand\nor\nxor\nnot\nshl\nshr\nsar\neq\nne\nle\nge\nlt\ngt\nland\nlor\nlnot\nselect\nmuldiv\nsin\ncos\n", GEN_1_69_444, b, sizeof b, 0);
 	CHECK(n == 25 && Bytes(b, n, "20 21 22 23 24 25 26 27 28 29 2a 2b 30 31 32 33 34 35 38 39 3a 40 42 48 49"));
 	// relative operands count from the opcode's own offset
-	n = Assemble("start:\npush_code_off start\npush_code_addr s\npush_code_off end\ns:\n.str \"x\"\nend:\n", GEN_1_69_444, b, sizeof b, 0);
+	n = Assemble(o, "start:\npush_code_off start\npush_code_addr s\npush_code_off end\ns:\n.str \"x\"\nend:\n", GEN_1_69_444, b, sizeof b, 0);
 	CHECK(n == 11 && Bytes(b, n, "06 00 00 05 06 00 06 05 00 78 00"));
 	// the convenience forms: `push` picks the smallest immediate, `jmp`/`call`/`jcc` with
 	// a label push the target first
-	n = Assemble("push 5\npush 300\npush 70000\npush -129\njmp l\ncall l\njcc 1, l\nl:\n", GEN_1_69_444, b, sizeof b, 0);
+	n = Assemble(o, "push 5\npush 300\npush 70000\npush -129\njmp l\ncall l\njcc 1, l\nl:\n", GEN_1_69_444, b, sizeof b, 0);
 	CHECK(n == 26 && Bytes(b, n, "00 05 01 2c 01 02 70 11 01 00 01 7f ff 06 0d 00 14 06 09 00 16 06 05 00 15 01"));
 	// code(): a tagged pointer in the generation's layout (1.69/444: tag 8 << 25 =
 	// 0x10000000)
-	n = Assemble("push_i32 code(d)\nd:\n.db 1\n", GEN_1_69_444, b, sizeof b, 0);
+	n = Assemble(o, "push_i32 code(d)\nd:\n.db 1\n", GEN_1_69_444, b, sizeof b, 0);
 	CHECK(n == 6 && Bytes(b, n, "02 05 00 00 10 01"));
 	// a generation with another tag layout: the tag byte follows its engine profile
-	n = Assemble("push_i32 code(d)\nd:\n.db 1\n", GEN_1_669, b, sizeof b, 0);
+	n = Assemble(o, "push_i32 code(d)\nd:\n.db 1\n", GEN_1_669, b, sizeof b, 0);
 	CHECK(n == 6 && b[4] == (uint8_t)(Engine_ProfileOfGen(GEN_1_669)->tagCode << (Engine_ProfileOfGen(GEN_1_669)->tagShift - 24)));
 	// the data directives: .db takes numbers, characters and strings; .align pads with 0
 	// or the given byte; .str is NUL-terminated
-	n = Assemble(".db 1, 2, 'A', \"hi\"\n.dw 0x1234, -1\n.dd 0x80000001\n.align 4\n.align 4, 0xff\n.str \"a\", \"b\"\n", GEN_1_69_444, b, sizeof b, 0);
+	n = Assemble(o, ".db 1, 2, 'A', \"hi\"\n.dw 0x1234, -1\n.dd 0x80000001\n.align 4\n.align 4, 0xff\n.str \"a\", \"b\"\n", GEN_1_69_444, b, sizeof b, 0);
 	CHECK(n == 20 && Bytes(b, n, "01 02 41 68 69 34 12 ff ff 01 00 00 80 00 00 00 61 00 62 00"));
 	// Shift-JIS from UTF-8, and escapes
-	n = Assemble(".str \"あ\\x81\\x40\\n\\\"\\\\\"\n", GEN_1_69_444, b, sizeof b, 0);
+	n = Assemble(o, ".str \"あ\\x81\\x40\\n\\\"\\\\\"\n", GEN_1_69_444, b, sizeof b, 0);
 	CHECK(n == 8 && Bytes(b, n, "82 a0 81 40 0a 22 5c 00"));
 	// the 1.667 forms: packed local references, varint immediates and rel16 targets
-	n = Assemble("store_local 0x10, 2\njmp_rel t\npush_local 4, 0\npush_local_add 8, 0, -3\npush_local_shl 4, 1, 1\nload_rel 300\nadd_imm -64\njcmp 3, t\njcc 9, t\nshift_imm -2\nt:\n", GEN_1_667, b, sizeof b, 0);
+	n = Assemble(o, "store_local 0x10, 2\njmp_rel t\npush_local 4, 0\npush_local_add 8, 0, -3\npush_local_shl 4, 1, 1\nload_rel 300\nadd_imm -64\njcmp 3, t\njcc 9, t\nshift_imm -2\nt:\n", GEN_1_667, b, sizeof b, 0);
 	CHECK(n == 31);
 	CHECK(b[0] == 0x0f && b[1] == 0x10 && b[2] == 0x80);                     // local16: offset 0x10, size 2 in bits 14..15
 	CHECK(b[3] == 0x12);                                                     // jmp_rel
@@ -180,9 +176,11 @@ static void TestNames(void)
  * The listing has to name what it found (sub_, loc_, str_, dat_ labels,
  * the string, the code() form, the system mnemonics) and the second
  * assembly has to reproduce the bytes exactly, both from a bare listing
- * and from one with the offset and byte columns.  A failure means the
+ * and from one with the offset and byte columns.  The listing made in
+ * memory (Dis_ProgramText) is the stream's, and a flow that runs into an
+ * undefined opcode is noted and counted by both.  A failure means the
  * disassembler writes something the assembler reads differently. */
-static void TestRoundTrip(void)
+static void TestRoundTrip(OpenBGI_t* o)
 {
 	static const char* src =
 		".engine 1.553\n"
@@ -220,7 +218,7 @@ static void TestRoundTrip(void)
 	DisOptions_t opt;
 	uint8_t* file;
 	printf("round trip\n");
-	na = Assemble(src, GEN_1_553, a, sizeof a, 0);
+	na = Assemble(o, src, GEN_1_553, a, sizeof a, 0);
 	CHECK(na > 0);
 	// a minimal 16-byte program header: the code offset (16) and the little-endian size
 	// of the area
@@ -232,7 +230,7 @@ static void TestRoundTrip(void)
 	memcpy(file + 16, a, na);
 	memset(&opt, 0, sizeof opt);
 	opt.gen = GEN_1_553;
-	CHECK(Dis_Program(file, 16 + na, &opt, tmp) == 0);
+	CHECK(Dis_Program(o, file, 16 + na, &opt, tmp) == 0);
 	n = ftell(tmp);
 	fseek(tmp, 0, SEEK_SET);
 	CHECK(n > 0 && n < (long)sizeof text);
@@ -244,7 +242,7 @@ static void TestRoundTrip(void)
 	CHECK(strstr(text, ".str \"こんにちは\"") != NULL);
 	CHECK(strstr(text, "code(dat_") != NULL);
 	CHECK(strstr(text, "sys.set_title") != NULL && strstr(text, "sys.exit_thread") != NULL);
-	nb = Assemble(text, GEN_1_553, b, sizeof b, 0);
+	nb = Assemble(o, text, GEN_1_553, b, sizeof b, 0);
 	CHECK(nb == na && memcmp(a, b, na) == 0);
 	BGI_Free(file);
 	// a listing with the offset and byte columns assembles too (the assembler skips
@@ -257,15 +255,48 @@ static void TestRoundTrip(void)
 	file[4] = (uint8_t)na;
 	file[5] = (uint8_t)(na >> 8);
 	memcpy(file + 16, a, na);
-	CHECK(Dis_Program(file, 16 + na, &opt, tmp) == 0);
+	CHECK(Dis_Program(o, file, 16 + na, &opt, tmp) == 0);
 	n = ftell(tmp);
 	fseek(tmp, 0, SEEK_SET);
 	text[fread(text, 1, sizeof text - 1, tmp)] = 0;
 	fclose(tmp);
 	CHECK(strstr(text, "|\tpush_fp") != NULL);
-	nb = Assemble(text, GEN_1_553, b, sizeof b, 0);
+	nb = Assemble(o, text, GEN_1_553, b, sizeof b, 0);
 	CHECK(nb == na && memcmp(a, b, na) == 0);
+	{ // the same listing in memory
+		int problems = -1;
+		char* mem = Dis_ProgramText(o, file, 16 + na, &opt, &problems);
+		CHECK(mem != NULL && problems == 0 && strcmp(mem, text) == 0);
+		free(mem);
+	}
 	BGI_Free(file);
+	{ // a flow that runs into an undefined opcode: noted in the listing and counted, to a stream and into memory
+		uint8_t bad[16 + 8];
+		AsmInsn_t in;
+		int op, problems = 0;
+		char* mem;
+		memset(bad, 0, sizeof bad);
+		for(op = 0; op < 0x100; op++)
+		{
+			bad[16] = (uint8_t)op;
+			if(!Asm_Decode(bad + 16, 8, 0, GEN_1_553, &in))
+				break;
+		}
+		CHECK(op < 0x100);
+		bad[0] = 0x10;
+		bad[4] = 8;
+		tmp = tmpfile();
+		memset(&opt, 0, sizeof opt);
+		opt.gen = GEN_1_553;
+		CHECK(Dis_Program(o, bad, sizeof bad, &opt, tmp) == 1);
+		fseek(tmp, 0, SEEK_SET);
+		text[fread(text, 1, sizeof text - 1, tmp)] = 0;
+		fclose(tmp);
+		CHECK(strstr(text, "; problem: undefined opcode") != NULL);
+		mem = Dis_ProgramText(o, bad, sizeof bad, &opt, &problems);
+		CHECK(mem != NULL && problems == 1 && strcmp(mem, text) == 0);
+		free(mem);
+	}
 }
 
 /* Execution: an assembled program is loaded into a fresh thread and
@@ -274,7 +305,7 @@ static void TestRoundTrip(void)
  * into a local, loads it back and returns, so the thread has to end with
  * the single value 42 on its stack.  A failure means the assembler's
  * output and the VM's decoder disagree on a real program. */
-static void TestRun(void)
+static void TestRun(OpenBGI_t* o)
 {
 	// a program the VM runs: 6 * 7 into a local, then onto the stack
 	static const char* src =
@@ -295,13 +326,13 @@ static void TestRun(void)
 		"\tset_fp\n"
 		"\tret\n";
 	uint8_t code[0x100];
-	uint32_t n = Assemble(src, GEN_1_69_444, code, sizeof code, 0);
+	uint32_t n = Assemble(o, src, GEN_1_69_444, code, sizeof code, 0);
 	Thread_t* t;
 	int rc = 0, steps = 0;
 	printf("run\n");
 	CHECK(n > 0);
-	Vm_TablesInit();
-	t = Thread_New(0x100, 0x1000, 0x1000);
+	Vm_TablesInit(o);
+	t = Thread_New(o, 0x100, 0x1000, 0x1000);
 	memcpy(t->code, code, n);
 	t->codeUsed = n;
 	Thread_SetIP(t, 0);
@@ -311,11 +342,11 @@ static void TestRun(void)
 	while(rc == 0 && steps++ < 1000)
 	{
 		uint8_t op = Thread_FetchOp(t);
-		rc = vm_optable_main[op] ? vm_optable_main[op](t) : -1;
+		rc = o->vm.optablemain[op] ? o->vm.optablemain[op](o, t) : -1;
 	}
 	CHECK(rc == 4); // the outermost return ends the thread
 	CHECK(t->sp == 1 && t->stack[0] == 42);
-	Thread_Delete(t);
+	Thread_Delete(o, t);
 }
 
 /* The error paths: each text has to be rejected (Assemble returns 0): an
@@ -326,27 +357,27 @@ static void TestRun(void)
  * does not exist in the chosen generation is only a warning and still
  * assembles.  A failure means bad input is accepted silently, or that the
  * warning became an error. */
-static void TestErrors(void)
+static void TestErrors(OpenBGI_t* o)
 {
 	uint8_t b[0x100];
 	printf("errors\n");
-	CHECK(Assemble("push_code_off nowhere\n", GEN_1_69_444, b, sizeof b, 1) == 0);
-	CHECK(Assemble("push_i8 300\n", GEN_1_69_444, b, sizeof b, 1) == 0);
-	CHECK(Assemble("bogus_mnemonic\n", GEN_1_69_444, b, sizeof b, 1) == 0);
-	CHECK(Assemble("l:\nl:\n", GEN_1_69_444, b, sizeof b, 1) == 0);
-	CHECK(Assemble(".str 5\n", GEN_1_69_444, b, sizeof b, 1) == 0);
-	CHECK(Assemble("sys.yield 1\n", GEN_1_69_444, b, sizeof b, 1) == 0);
-	CHECK(Assemble(".engine 9.99\n", GEN_1_69_444, b, sizeof b, 1) == 0);
+	CHECK(Assemble(o, "push_code_off nowhere\n", GEN_1_69_444, b, sizeof b, 1) == 0);
+	CHECK(Assemble(o, "push_i8 300\n", GEN_1_69_444, b, sizeof b, 1) == 0);
+	CHECK(Assemble(o, "bogus_mnemonic\n", GEN_1_69_444, b, sizeof b, 1) == 0);
+	CHECK(Assemble(o, "l:\nl:\n", GEN_1_69_444, b, sizeof b, 1) == 0);
+	CHECK(Assemble(o, ".str 5\n", GEN_1_69_444, b, sizeof b, 1) == 0);
+	CHECK(Assemble(o, "sys.yield 1\n", GEN_1_69_444, b, sizeof b, 1) == 0);
+	CHECK(Assemble(o, ".engine 9.99\n", GEN_1_69_444, b, sizeof b, 1) == 0);
 	// a far target: 9000 five-byte instructions put the label beyond a 16-bit relative
 	// offset
 	{
 		char* big = (char*)malloc(0x20000);
-		size_t o = (size_t)sprintf(big, "push_code_off far\n");
+		size_t off = (size_t)sprintf(big, "push_code_off far\n");
 		int i;
 		for(i = 0; i < 9000; i++)
-			o += (size_t)sprintf(big + o, "push_i32 0\n");
-		sprintf(big + o, "far:\n");
-		CHECK(Assemble(big, GEN_1_69_444, b, sizeof b, 1) == 0);
+			off += (size_t)sprintf(big + off, "push_i32 0\n");
+		sprintf(big + off, "far:\n");
+		CHECK(Assemble(o, big, GEN_1_69_444, b, sizeof b, 1) == 0);
 		free(big);
 	}
 	// an opcode outside the generation's set assembles with a warning (atan2 did not
@@ -354,22 +385,57 @@ static void TestErrors(void)
 	{
 		AsmResult_t r;
 		FILE* log = fopen("/dev/null", "w");
-		Asm_Assemble("atan2\n", 5, GEN_1_58, log, &r);
+		Asm_Assemble(o, "atan2\n", 5, GEN_1_58, log, &r);
 		fclose(log);
 		CHECK(r.file != NULL && r.warnings == 1 && r.errors == 0);
 		BGI_Free(r.file);
 	}
 }
 
+/* The disassembler's text in memory (AsmOut_t): pieces of every kind,
+ * a formatted one longer than the formatting buffer, and enough of them
+ * to make the text grow several times, have to come out as one string. */
+static void TestTextOut(OpenBGI_t* o)
+{
+	AsmOut_t w;
+	char want[0x3000], wide[0x300];
+	size_t n = 0;
+	int i;
+	printf("text out\n");
+	memset(&w, 0, sizeof w);
+	memset(wide, 'x', sizeof wide - 1);
+	wide[sizeof wide - 1] = 0;
+	for(i = 0; i < 16; i++)
+	{
+		AsmOut_Printf(&w, "%04x|%s;", i, i == 7 ? wide : "");
+		n += (size_t)snprintf(want + n, sizeof want - n, "%04x|%s;", i, i == 7 ? wide : "");
+		AsmOut_Puts(&w, "puts ");
+		AsmOut_Putc(&w, 'c');
+		AsmOut_Write(&w, "\n..", 1);
+		n += (size_t)snprintf(want + n, sizeof want - n, "puts c\n");
+	}
+	for(i = 0; i < 1000; i++)
+	{
+		AsmOut_StringLiteral(o, &w, (const uint8_t*)"a\"b", 3);
+		n += (size_t)snprintf(want + n, sizeof want - n, "\"a\\\"b\"");
+	}
+	CHECK(!w.failed && w.text != NULL && w.len == n && n > 0x1000 && strcmp(w.text, want) == 0);
+	free(w.text);
+}
+
 // run every group; exit status 1 when any check failed
 int main(void)
 {
+	OpenBGI_t* o = OpenBGI_New(OS_Host()); // the engine whose code the test runs
+	if(!o)
+		return 1;
 	OS_Init();
-	TestEncodings();
+	TestEncodings(o);
 	TestNames();
-	TestRoundTrip();
-	TestRun();
-	TestErrors();
+	TestRoundTrip(o);
+	TestRun(o);
+	TestErrors(o);
+	TestTextOut(o);
 	OS_Shutdown();
 	if(gFails)
 	{

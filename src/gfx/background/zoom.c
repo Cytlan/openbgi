@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * zoom.c - background type 10: a bitmap zoomed and rotated about the centre
- *          (inc/bgi/gfx/background.h; selected by "90 49")
+ *          (src/include/bgi/gfx/background.h; selected by "90 49")
  *
  * The bitmap (any size) is drawn with Blit_RotateCentred: its centre on
  * the centre of the destination, scaled by `scale` and rotated by `option`
@@ -15,16 +15,16 @@
  */
 #include "background_internal.h"
 
-static void Bg10_Destroy(DispObj_t* o, int flags)
+static void Bg10_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	Background_Dtor((Background_t*)o);
+	Background_Dtor((Background_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
-void Bg10_Ctor(Bg10_t* b)
+void Bg10_Ctor(OpenBGI_t* o, Bg10_t* b)
 {
-	Background_Ctor(&b->bg, 10);
+	Background_Ctor(o, &b->bg, 10);
 	b->bg.obj.vt = &Bg10_Vtbl.base;
 	b->bmp = -1;
 }
@@ -52,29 +52,29 @@ int Bg10_SetScaleDelta(Bg10_t* b, int delta, int option)
 }
 
 // the setParam slot: 0x80 is Bg10_SetScaleDelta(a, c), 0x101 is Bg10_SetScale(a, c); 0xFFFF0002 when rejected
-static int Bg10_SetParam(DispObj_t* o, int no, int a, int c)
+static int Bg10_SetParam(OpenBGI_t* o, DispObj_t* obj, int no, int a, int c)
 {
-	Bg10_t* b = (Bg10_t*)o;
+	Bg10_t* b = (Bg10_t*)obj;
 	if(no == 0x80)
 		return Bg10_SetScaleDelta(b, a, c) != 0 ? (int)0xffff0002 : 0;
 	if(no == 0x101)
 		return Bg10_SetScale(b, a, c) != 0 ? (int)0xffff0002 : 0;
-	return DispObj_SetParam(o, no, a, c);
+	return DispObj_SetParam(o, obj, no, a, c);
 }
 
 /* with a scale delta the zoom follows a quarter sine of the level (level
  * 0x100 = 90 degrees); the angle grows linearly.  The arithmetic is in
  * doubles in the original order.  0 once the bitmap has been replaced. */
-static int Bg10_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
+static int Bg10_Render(OpenBGI_t* o, Background_t* bg, Bmp_t* dst, const Rect_t* local)
 {
 	Bg10_t* b = (Bg10_t*)bg;
 	Bmp_t src;
 	int level;
 	int32_t zoom, angle;
 	(void)local;
-	if(!BgCurrent(&src, b->bmp, b->gen))
+	if(!BgCurrent(o, &src, b->bmp, b->gen))
 		return 0;
-	level = GET_LEVEL(bg);
+	level = GET_LEVEL(o, bg);
 	zoom = b->scale;
 	if(b->scaleDelta != 0 && level != 0)
 	{

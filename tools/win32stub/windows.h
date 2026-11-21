@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * windows.h - a STUB of the Win32 SDK headers for syntax-checking
- * the files of src/os/win32/ on a machine without MinGW ("make check-win").
+ * the files of src/host/win32/ on a machine without MinGW ("make check-win").
  *
  * It declares the types and structures the back end touches with the real
  * member names, and the functions that take or return strings with their
@@ -27,6 +27,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// main's arguments as the C library keeps them (stdlib.h, with MinGW)
+extern int __argc;
+extern char** __argv;
+
 #define WINAPI
 #define CALLBACK
 #define TRUE  1
@@ -39,6 +43,7 @@ typedef unsigned short WORD;
 typedef unsigned long DWORD;
 typedef unsigned int UINT;
 typedef long LONG;
+typedef short SHORT;
 typedef long long LONGLONG;
 typedef intptr_t LONG_PTR;
 typedef uintptr_t ULONG_PTR;
@@ -81,6 +86,37 @@ typedef struct
 {
 	LONG x, y;
 } POINT;
+typedef HANDLE HMONITOR;
+typedef struct
+{
+	DWORD cbSize;
+	RECT rcMonitor, rcWork;
+	DWORD dwFlags;
+} MONITORINFO;
+typedef struct
+{
+	POINT ptReserved, ptMaxSize, ptMaxPosition, ptMinTrackSize, ptMaxTrackSize;
+} MINMAXINFO;
+typedef int(WINAPI* FARPROC)(void);
+typedef FARPROC PROC;
+typedef HANDLE HGLRC;
+typedef struct
+{
+	WORD nSize, nVersion;
+	DWORD dwFlags;
+	BYTE iPixelType, cColorBits, cRedBits, cRedShift, cGreenBits, cGreenShift, cBlueBits, cBlueShift, cAlphaBits, cAlphaShift;
+	BYTE cAccumBits, cAccumRedBits, cAccumGreenBits, cAccumBlueBits, cAccumAlphaBits, cDepthBits, cStencilBits, cAuxBuffers;
+	BYTE iLayerType, bReserved;
+	DWORD dwLayerMask, dwVisibleMask, dwDamageMask;
+} PIXELFORMATDESCRIPTOR;
+#define PFD_TYPE_RGBA  0 // (the two that go into a BYTE keep their values)
+#define PFD_MAIN_PLANE 0
+typedef struct
+{
+	DWORD dwStyle;
+	POINT ptCurrentPos;
+	RECT rcArea;
+} COMPOSITIONFORM;
 typedef struct
 {
 	LONG cx, cy;
@@ -139,6 +175,12 @@ typedef struct
 	BITMAPINFOHEADER bmiHeader;
 	RGBQUAD bmiColors[1];
 } BITMAPINFO;
+typedef struct
+{
+	BOOL fIcon;
+	DWORD xHotspot, yHotspot;
+	HBITMAP hbmMask, hbmColor;
+} ICONINFO;
 typedef struct
 {
 	WORD wFormatTag, nChannels;
@@ -243,6 +285,32 @@ typedef struct
 } TIMECAPS;
 typedef struct
 {
+	WORD wMid, wPid;
+	WCHAR szPname[32];
+	UINT wXmin, wXmax, wYmin, wYmax, wZmin, wZmax, wNumButtons, wPeriodMin, wPeriodMax;
+	UINT wRmin, wRmax, wUmin, wUmax, wVmin, wVmax, wCaps, wMaxAxes, wNumAxes, wMaxButtons;
+	WCHAR szRegKey[32], szOEMVxD[260];
+} JOYCAPSW;
+typedef struct
+{
+	DWORD dwSize, dwFlags, dwXpos, dwYpos, dwZpos, dwRpos, dwUpos, dwVpos, dwButtons, dwButtonNumber, dwPOV, dwReserved1, dwReserved2;
+} JOYINFOEX;
+typedef struct
+{
+	HANDLE hDevice;
+	DWORD dwType;
+} RAWINPUTDEVICELIST;
+typedef struct
+{
+	DWORD cbSize, dwType;
+	struct
+	{
+		DWORD dwVendorId, dwProductId, dwVersionNumber;
+		WORD usUsagePage, usUsage;
+	} hid;
+} RID_DEVICE_INFO;
+typedef struct
+{
 	DWORD dwLength, dwMemoryLoad;
 	size_t dwTotalPhys, dwAvailPhys, dwTotalPageFile, dwAvailPageFile, dwTotalVirtual, dwAvailVirtual;
 } MEMORYSTATUS;
@@ -260,15 +328,16 @@ typedef struct
 	WCHAR DeviceID[128];
 	WCHAR DeviceKey[128];
 } DISPLAY_DEVICEW;
+#define LF_FACESIZE 32
 typedef struct
 {
 	LONG lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight;
 	BYTE lfItalic, lfUnderline, lfStrikeOut, lfCharSet, lfOutPrecision, lfClipPrecision, lfQuality, lfPitchAndFamily;
-	WCHAR lfFaceName[32];
+	WCHAR lfFaceName[LF_FACESIZE];
 } LOGFONTW;
 typedef struct
 {
-	LONG tmHeight, tmAscent, tmDescent;
+	LONG tmHeight, tmAscent, tmDescent, tmInternalLeading, tmExternalLeading, tmAveCharWidth, tmMaxCharWidth;
 } TEXTMETRICW;
 typedef int(CALLBACK* FONTENUMPROCW)(const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM);
 typedef struct
@@ -372,8 +441,14 @@ extern const GUID CLSID_FilterGraph, IID_IGraphBuilder, IID_IMediaControl, IID_I
 int MultiByteToWideChar(UINT, DWORD, LPCSTR, int, LPWSTR, int);
 int WideCharToMultiByte(UINT, DWORD, LPCWSTR, int, LPSTR, int, LPCSTR, BOOL*);
 int lstrlenW(LPCWSTR);
+int lstrcmpiW(LPCWSTR, LPCWSTR);
+LPWSTR lstrcpyW(LPWSTR, LPCWSTR);
 LPWSTR GetCommandLineW(void);
 HMODULE GetModuleHandleW(LPCWSTR);
+FARPROC GetProcAddress(HMODULE, LPCSTR);
+HMONITOR MonitorFromWindow(HWND, DWORD);
+HMONITOR MonitorFromPoint(POINT, DWORD);
+BOOL GetMonitorInfoW(HMONITOR, MONITORINFO*);
 DWORD GetModuleFileNameW(HMODULE, LPWSTR, DWORD);
 DWORD GetFileAttributesW(LPCWSTR);
 BOOL GetFileAttributesExW(LPCWSTR, int, void*);
@@ -438,6 +513,8 @@ HFONT CreateFontW(int, int, int, int, int, DWORD, DWORD, DWORD, DWORD, DWORD, DW
 BOOL TextOutW(HDC, int, int, LPCWSTR, int);
 BOOL GetTextExtentPoint32W(HDC, LPCWSTR, int, SIZE*);
 int AddFontResourceW(LPCWSTR);
+HANDLE AddFontMemResourceEx(void*, DWORD, void*, DWORD*);
+BOOL GetTextMetricsW(HDC, TEXTMETRICW*);
 int EnumFontFamiliesExW(HDC, LOGFONTW*, FONTENUMPROCW, LPARAM, DWORD);
 UINT DragQueryFileW(HDROP, UINT, LPWSTR, UINT);
 HINSTANCE ShellExecuteW(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, int);
@@ -447,6 +524,11 @@ BOOL GetOpenFileNameW(OPENFILENAMEW*);
 BOOL GetSaveFileNameW(OPENFILENAMEW*);
 BOOL PlaySoundW(LPCWSTR, HMODULE, DWORD);
 DWORD mciSendCommandW(MCIDEVICEID, UINT, DWORD_PTR, DWORD_PTR);
+UINT joyGetDevCapsW(UINT_PTR, JOYCAPSW*, UINT);
+UINT joyGetPosEx(UINT, JOYINFOEX*);
+UINT GetRawInputDeviceList(RAWINPUTDEVICELIST*, UINT*, UINT);
+UINT GetRawInputDeviceInfoW(HANDLE, UINT, LPVOID, UINT*);
+HMODULE LoadLibraryW(LPCWSTR);
 HRESULT IShellLinkW_SetPath(IShellLinkW*, LPCWSTR);
 HRESULT IShellLinkW_SetArguments(IShellLinkW*, LPCWSTR);
 HRESULT IPersistFile_Save(IPersistFile*, LPCWSTR, BOOL);

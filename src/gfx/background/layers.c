@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * layers.c - background type 12: up to eight transformed layers
- *            (inc/bgi/gfx/background.h; selected by "91 40", the layers
+ *            (src/include/bgi/gfx/background.h; selected by "91 40", the layers
  *            addressed by "91 41" .. "91 4A")
  *
  * Every layer is a bitmap of any size placed with its centre point
@@ -19,17 +19,17 @@
  */
 #include "background_internal.h"
 
-static void Bg12_Destroy(DispObj_t* o, int flags)
+static void Bg12_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	Background_Dtor((Background_t*)o);
+	Background_Dtor((Background_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
 // every layer empty and hidden, layer 0 current
-void Bg12_Ctor(Bg12_t* b)
+void Bg12_Ctor(OpenBGI_t* o, Bg12_t* b)
 {
-	Background_Ctor(&b->bg, 12);
+	Background_Ctor(o, &b->bg, 12);
 	b->bg.obj.vt = &Bg12_Vtbl.base;
 	b->current = 0;
 	memset(b->layer, 0, sizeof b->layer);
@@ -112,7 +112,7 @@ int Bg12_LayerGetLevel(Bg12_t* b, int* out, int i)
 /* the layer's bitmap (any size) and its centre point (cx, cy) in 16.16;
  * bmp -1 removes the bitmap.  The centre deltas are reset.  0 ok,
  * 0x80000002 the bitmap is missing. */
-int Bg12_LayerSetBitmap(Bg12_t* b, int i, int bmp, int32_t cx, int32_t cy)
+int Bg12_LayerSetBitmap(OpenBGI_t* o, Bg12_t* b, int i, int bmp, int32_t cx, int32_t cy)
 {
 	Bg12Layer_t* L;
 	Bmp_t info;
@@ -122,11 +122,11 @@ int Bg12_LayerSetBitmap(Bg12_t* b, int i, int bmp, int32_t cx, int32_t cy)
 		L->hasBitmap = 0;
 		return 0;
 	}
-	if(!BgGetInfo(&info, bmp))
+	if(!BgGetInfo(o, &info, bmp))
 		return (int)0x80000002;
 	L->hasBitmap = 1;
 	L->bmp = bmp;
-	L->gen = BgGen(bmp);
+	L->gen = BgGen(o, bmp);
 	L->cx = cx;
 	L->cy = cy;
 	L->dcx = 0;
@@ -202,43 +202,43 @@ int Bg12_Select(Bg12_t* b, int i)
 }
 
 // the generic object operations address the current layer
-static void Bg12_SetPos(DispObj_t* o, int x, int y)
+static void Bg12_SetPos(OpenBGI_t* o, DispObj_t* obj, int x, int y)
 {
-	Bg12_t* b = (Bg12_t*)o;
+	Bg12_t* b = (Bg12_t*)obj;
 	Bg12_LayerSetPos(b, b->current, x, y);
 }
 
-static void Bg12_GetPos(DispObj_t* o, int32_t out[2])
+static void Bg12_GetPos(OpenBGI_t* o, DispObj_t* obj, int32_t out[2])
 {
-	Bg12_t* b = (Bg12_t*)o;
+	Bg12_t* b = (Bg12_t*)obj;
 	Bg12_LayerGetPos(b, out, b->current);
 }
 
-static void Bg12_SetLevel(DispObj_t* o, int level)
+static void Bg12_SetLevel(OpenBGI_t* o, DispObj_t* obj, int level)
 {
-	Bg12_t* b = (Bg12_t*)o;
+	Bg12_t* b = (Bg12_t*)obj;
 	Bg12_LayerSetLevel(b, b->current, level);
 }
 
-static int Bg12_GetLevel(DispObj_t* o)
+static int Bg12_GetLevel(OpenBGI_t* o, DispObj_t* obj)
 {
-	Bg12_t* b = (Bg12_t*)o;
+	Bg12_t* b = (Bg12_t*)obj;
 	int level = 0;
 	Bg12_LayerGetLevel(b, &level, b->current);
 	return level;
 }
 
 // the setParam slot: 0x80 centre delta, 0x81 angle delta, 0x82 scale delta, 0x8F curves (always 0)
-static int Bg12_SetParam(DispObj_t* o, int no, int a, int c)
+static int Bg12_SetParam(OpenBGI_t* o, DispObj_t* obj, int no, int a, int c)
 {
-	Bg12_t* b = (Bg12_t*)o;
+	Bg12_t* b = (Bg12_t*)obj;
 	switch(no)
 	{
 		case 0x80: Bg12_LayerSetCentreDelta(b, b->current, a, c); return 0;
 		case 0x81: Bg12_LayerSetAngleDelta(b, b->current, a); return 0;
 		case 0x82: Bg12_LayerSetScaleDelta(b, b->current, a, c); return 0;
 		case 0x8f: Bg12_LayerSetCurves(b, b->current, a, c); return 0;
-		default: return DispObj_SetParam(o, no, a, c);
+		default: return DispObj_SetParam(o, obj, no, a, c);
 	}
 }
 
@@ -261,19 +261,19 @@ static int32_t Bg12_ScaleAt(int32_t s, int32_t ds, int32_t e)
  * blended, through a temporary bitmap when their effect is not a plain
  * alpha blend.  The destination is cleared when layer 0 did not draw.
  * Always returns 1. */
-static int Bg12_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
+static int Bg12_Render(OpenBGI_t* o, Background_t* bg, Bmp_t* dst, const Rect_t* local)
 {
 	Bg12_t* b = (Bg12_t*)bg;
 	Bmp_t back, src;
 	int i, drawn = 0;
-	Gfx_GetBackBmp(&back);
+	Gfx_GetBackBmp(o, &back);
 	for(i = 0; i < 8; i++)
 	{
 		Bg12Layer_t L = b->layer[i];
 		int32_t t, x, y, cx, cy, angle, sx, sy;
 		if(!L.hasBitmap || !L.visible)
 			goto next;
-		if(!BgCurrent(&src, L.bmp, L.gen))
+		if(!BgCurrent(o, &src, L.bmp, L.gen))
 			goto next;
 		t = DispObj_GetProgress(&b->bg.obj, 1);
 		x = (int32_t)((uint32_t)L.x - ((uint32_t)local->l << 16)); // relative to the dirty part

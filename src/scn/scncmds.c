@@ -5,7 +5,7 @@
  * scncmds.c - the command table of a game, read from its sysprg.arc
  *             (interface in scn.h)
  *
- * The scenario interpreter of a 1.494+ game is written in the engine's
+ * The scenario interpreter of a 1.492+ game is written in the engine's
  * own script language: scrctrl._bp fills a dispatch table in global memory
  * with one handler per base token and exports a few helpers (pop, push,
  * pop-and-resolve, range check ..) through a vector table; the other
@@ -20,8 +20,8 @@
 #include "scn_internal.h"
 #include "bgi/arcread.h"
 #include "bgi/asm.h"
-#include "bgi/os.h"
 #include "bgi/msg.h"
+#include "bgi/sjis.h"
 
 // the base opcodes of the engine's bytecode this scan recognizes
 #define OP_PUSH_I8    0x00
@@ -119,21 +119,21 @@ static void FreeProg(Prog_t* p)
 }
 
 // load every "*._bp" entry of the archive whose name starts with "scr" plus script._bp
-static int LoadPrograms(ArcRead_t* a, Prog_t** out, int* count)
+static int LoadPrograms(OpenBGI_t* o, ArcRead_t* a, Prog_t** out, int* count)
 {
 	uint32_t i;
 	int n = 0;
 	*out = (Prog_t*)calloc(a->count + 1, sizeof **out);
 	for(i = 0; i < a->count; i++)
 	{
-		const ArcEntry_t* e = &a->entries[i];
+		const ArcReadEntry_t* e = &a->entries[i];
 		uint32_t size;
 		int dsc;
 		uint8_t* raw;
 		Prog_t* p;
 		if(strncmp(e->name, "scr", 3) != 0 || strstr(e->name, "._bp") == NULL)
 			continue;
-		raw = ArcRead_Load(a, e, &size, &dsc);
+		raw = ArcRead_Load(o, a, e, &size, &dsc);
 		if(!raw || size < 16)
 		{
 			BGI_Free(raw);
@@ -331,7 +331,8 @@ static void ExamineHandler(const Prog_t* p, int isCtrl, uint32_t vecBase, const 
 				if(r == H_RANGECHK || r == H_NULLCHK)
 				{
 					const char* s = (const char*)p->area + in->target;
-					size_t n = strnlen(s, p->size - in->target);
+					const char* nul = (const char*)memchr(s, 0, p->size - in->target);
+					size_t n = nul ? (size_t)(nul - s) : p->size - in->target; // (within the area)
 					if(plen + n + 2 < sizeof c->params)
 					{
 						if(plen)
@@ -452,32 +453,32 @@ static void ModuleTag(const char* module, char* out, size_t n)
 	snprintf(out, n, "%s", s);
 }
 
-int Scn_ScanCommands(const char* sysprgPath, ScnCmdTable_t* out)
+int Scn_ScanCommands(OpenBGI_t* o, const char* sysprgPath, ScnCmdTable_t* out)
 {
 	ArcRead_t* a = ArcRead_Open(sysprgPath);
 	int ok;
 	memset(out, 0, sizeof *out);
 	if(!a)
 		return 0;
-	ok = Scn_ScanCommandsArc(a, sysprgPath, out);
+	ok = Scn_ScanCommandsArc(o, a, sysprgPath, out);
 	ArcRead_Close(a);
 	return ok;
 }
 
-int Scn_ScanCommandsArc(ArcRead_t* a, const char* sysprgPath, ScnCmdTable_t* out)
+int Scn_ScanCommandsArc(OpenBGI_t* o, ArcRead_t* a, const char* sysprgPath, ScnCmdTable_t* out)
 {
 	Prog_t* progs = NULL;
 	int count = 0, i, cap = 0, ctrl = -1;
 	uint32_t table = 0, vecBase = 0, subs[H_COUNT] = {0};
 	memset(out, 0, sizeof *out);
-	if(!LoadPrograms(a, &progs, &count))
+	if(!LoadPrograms(o, a, &progs, &count))
 		return 0;
 	for(i = 0; i < count; i++)
 		if(strcmp(progs[i].name, "scrctrl") == 0)
 			ctrl = i;
 	if(ctrl < 0)
 	{
-		fprintf(stderr, "%s: no scrctrl._bp - not a scenario system of the 1.494+ kind\n", sysprgPath);
+		fprintf(stderr, "%s: no scrctrl._bp - not a scenario system of the 1.492+ kind\n", sysprgPath);
 		goto fail;
 	}
 	table = FindRegistrations(&progs[ctrl], 0, out, &cap);
@@ -593,7 +594,7 @@ void Scn_WriteCommands(const ScnCmdTable_t* t, FILE* out)
 	{
 		const ScnCmd_t* c = &t->cmds[i];
 		char utf[sizeof c->params * 3 + 1];
-		OS_SjisToUtf8(c->params, utf, sizeof utf);
+		Sjis_ToUtf8(c->params, utf, sizeof utf, 0);
 		fprintf(out, "  0x%03x  %-9s %-20s %4d %6d  0x%04x   %s\n", c->token, c->module, c->name, c->args, c->result, c->handler, utf);
 	}
 }

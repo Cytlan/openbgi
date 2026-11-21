@@ -8,6 +8,7 @@
  */
 #include "wm_internal.h"
 #include "bgi/version.h"
+#include "bgi/core.h"
 
 // every volume at full (0x80), no fades, nothing loaded; the voice pointer is cleared as well
 void Record_Reset(WmRecord_t* r)
@@ -24,10 +25,10 @@ void Record_Reset(WmRecord_t* r)
  * From 1.588 on the sum is not cut: only one volume at 0 silences (each
  * is tested on its own, 48 dB = its full range), and the voice floors a
  * deep attenuation itself. */
-int Record_Level(const WmRecord_t* r)
+int Record_Level(OpenBGI_t* o, const WmRecord_t* r)
 {
 	int level;
-	if(gEngine->gen >= GEN_1_588)
+	if(o->engine.profile->gen >= GEN_1_588)
 	{
 		const int32_t v[4] = {r->master, r->aux, r->volume, r->fadeLevel};
 		int i;
@@ -76,7 +77,7 @@ void Fade_Start(Fade_t* f, uint32_t now, int ms, int32_t from, int32_t to)
 
 /* step the fades of a table at `now` and apply the changed levels to the
  * voices (the 20 ms timer tick) */
-void Records_Tick(WmRecord_t* recs, int count, uint32_t now)
+void Records_Tick(OpenBGI_t* o, WmRecord_t* recs, int count, uint32_t now)
 {
 	int i;
 	for(i = 0; i < count; i++)
@@ -96,32 +97,32 @@ void Records_Tick(WmRecord_t* recs, int count, uint32_t now)
 			changed = 1;
 		}
 		if(changed)
-			Voice_SetVolume(r->voice, Record_Level(r));
+			Voice_SetVolume(r->voice, Record_Level(o, r));
 	}
 }
 
 // the library is initialised and its timer runs
-int Wm_Running(void)
+int Wm_Running(OpenBGI_t* o)
 {
-	return (gWmFlags & 3) == 3;
+	return (o->snd.wmFlags & 3) == 3;
 }
 
 // the checks of an effect call: 0, or WM_E_NOT_RUNNING, WM_E_BAD_CHANNEL, WM_E_NOT_LOADED
-int Wm_SeCheck(int slot)
+int Wm_SeCheck(OpenBGI_t* o, int slot)
 {
-	if(!Wm_Running())
+	if(!Wm_Running(o))
 		return WM_E_NOT_RUNNING;
 	if((uint32_t)slot >= WM_SE_SLOTS)
 		return WM_E_BAD_CHANNEL;
-	return gSe[slot].active ? 0 : WM_E_NOT_LOADED;
+	return o->snd.se[slot].active ? 0 : WM_E_NOT_LOADED;
 }
 
 // the checks of a music call: the same codes for a channel
-int Wm_BgmCheck(int ch)
+int Wm_BgmCheck(OpenBGI_t* o, int ch)
 {
-	if(!Wm_Running())
+	if(!Wm_Running(o))
 		return WM_E_NOT_RUNNING;
 	if((uint32_t)ch >= WM_BGM_CHANNELS)
 		return WM_E_BAD_CHANNEL;
-	return gBgm[ch].active ? 0 : WM_E_NOT_LOADED;
+	return o->snd.bgm[ch].active ? 0 : WM_E_NOT_LOADED;
 }

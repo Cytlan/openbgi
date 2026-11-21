@@ -5,7 +5,7 @@
  * layout_internal.h - shared between the files of the rich text layout
  *                     (layout.c, layout_common.c, markup.c, layout_h.c,
  *                     layout_v.c); the public entry points are declared in
- *                     inc/bgi/gfx/text.h
+ *                     src/include/bgi/gfx/text.h
  *
  * A layout produces a list of RichChar nodes hanging off RichState.head,
  * one per glyph, each with a ready-made bitmap (glyph plus optional
@@ -20,7 +20,7 @@
  *   size      the font's pixel size (also the line height without spacing)
  *   glyphW    size * widthPct / 100: the advance of a full-width glyph
  *   gap       proportional slack after a glyph (Font_GapFor2)
- *   pitch     gCharPitch, extra pixels after every fixed-width glyph
+ *   pitch     o->text.charPitch, extra pixels after every fixed-width glyph
  *   sdx, sdy  shadow offset in pixels (style[1] / style[2] percent of size)
  *   hangSize  the width reserved on the right for overhanging punctuation
  */
@@ -39,20 +39,20 @@ int Layout_Pct(int v, int pct); // v * pct / 100, rounded towards zero
 int Layout_Min1(int v);         // shadow offsets are never less than one pixel
 
 // A fresh RichChar node with the reveal delay `delay` and the ruby fade default.
-RichChar_t* Layout_NewNode(int delay);
+RichChar_t* Layout_NewNode(OpenBGI_t* o, int delay);
 
 /* Paint the glyph `g` (code `code`, rasterised by `font`) into a new w x h
  * bitmap `dst` with its shadow or outline per `style`, offset by (sdx,
  * sdy); `view` is the painted cell to copy from and `rotate` turns the
  * glyph's recoloured shadow for vertical writing. */
-void Layout_GlyphBitmap(Bmp_t* dst, int w, int h, const Bmp_t* view, const Glyph_t* g, int code,
+void Layout_GlyphBitmap(OpenBGI_t* o, Bmp_t* dst, int w, int h, const Bmp_t* view, const Glyph_t* g, int code,
 	FontRaster_t* font, const int32_t style[5], int sdx, int sdy, int rotate);
 
 // The pixels a style's shadow adds to a glyph bitmap in one direction (twice for the outline style).
-int Layout_ShadowReserve(const int32_t style[5], int sd);
+int Layout_ShadowReserve(OpenBGI_t* o, const int32_t style[5], int sd);
 
 // The pixels added after a fixed-pitch glyph of `fi`; 0 for proportional text.
-int Layout_Pitch(int proportional, const FontInfo_t* fi);
+int Layout_Pitch(OpenBGI_t* o, int proportional, const FontInfo_t* fi);
 
 // ---- layout_h.c: the line records of the alignment pass ---------------------------------
 
@@ -66,7 +66,7 @@ typedef struct LineRec // one laid-out line (column) for the alignment pass
 
 void Layout_FreeLineRecs(LineRec_t* r);
 
-// ---- markup.c: the inline markup of 1.494 on ------------------------------------------
+// ---- markup.c: the inline markup of 1.492 on ------------------------------------------
 
 typedef struct TagDef
 {
@@ -120,16 +120,16 @@ void Markup_Free(Markup_t* m);
 
 /* Copy the `len` bytes of tag text between the brackets into buf
  * (lower-cased) and find the tag; its index or -1. */
-int Markup_Match(char* buf, size_t cap, const char* text, int len);
+int Markup_Match(OpenBGI_t* o, char* buf, size_t cap, const char* text, int len);
 
 /* Apply tag `tag` with its argument text `args`; `after` is the text behind
  * the closing bracket, `p` the '<'.  Always 1: the tag was consumed and the
  * layout continues behind it. */
-int Markup_Apply(Markup_t* m, int tag, const char* args, const char* after, const char* p, RubyDict_t* dict,
+int Markup_Apply(OpenBGI_t* o, Markup_t* m, int tag, const char* args, const char* after, const char* p, RubyDict_t* dict,
 	int32_t cur[2], const Rect_t* area);
 
 /* The no-break run starting at `p` (a Latin word) copied to out; the
  * byte count, 0 when `p` does not start one. */
-int Markup_WordRun(char* out, const char* p);
+int Markup_WordRun(OpenBGI_t* o, char* out, const char* p);
 
 #endif

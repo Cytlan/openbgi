@@ -4,7 +4,7 @@
  *
  * tests/blit.c - unit test of the bitmap descriptor, the effect blitters
  *                and the transforms (src/gfx/bitmap.c and src/gfx/blit*.c,
- *                declared in inc/bgi/gfx/bitmap.h); built as bin/test_blit
+ *                declared in src/include/bgi/gfx/bitmap.h); built as test_blit
  *                by `make test`
  *
  * Mostly a sanity and memory-safety pass: every effect code goes through
@@ -45,6 +45,8 @@
  *                visible as the window it is attached to (1.529 on)
  */
 #include "bgi/gfx/bitmap.h"
+#include "bgi/core.h"
+#include "host/os.h"
 #include "bgi/gfx/bmpmgr.h"
 #include "bgi/gfx/bmpops.h"
 #include "bgi/gfx/dispobj.h"
@@ -54,17 +56,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static int gFails; // the number of failed checks so far
-// evaluate a condition; print it with its location and count a failure when it is false
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 /* Fill a picture with a deterministic pattern derived from (x, y) and
  * `salt`, in its own pixel mode: 5-5-5 for RGB16, one byte for GRAY8,
@@ -129,7 +121,7 @@ static void Clone(Bmp_t* out, const Bmp_t* src)
  * 0x00, and the blend-over 0xF0 at 0 equals the raw copy.  A failure
  * means an effect routine writes the wrong pixels or the dispatcher's
  * checks changed. */
-static void TestEffects(int mode)
+static void TestEffects(OpenBGI_t* o, int mode)
 {
 	static const int codes[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x20, 0x21, 0x22, 0x23,
 		0x24, 0x25, 0x26, 0x27, 0x40, 0x41, 0x80, 0xC0, 0xC1, 0xF0, 0xFF, 0x0a, 0x77, 0x100}; // the last three do not exist
@@ -137,7 +129,7 @@ static void TestEffects(int mode)
 	size_t i;
 	int level;
 	printf("effects, mode %d\n", mode);
-	Gfx_SetScreenMode(mode);
+	Gfx_SetScreenMode(o, mode);
 	Bmp_Alloc(&dst, 61, 37, mode); // odd sizes: no row is a whole number of 4- or 8-pixel groups
 	Bmp_Alloc(&src, 61, 37, mode == PM_RGB16 ? PM_RGB16 : PM_ARGB32);
 	FillPattern(&dst, 1);
@@ -202,13 +194,13 @@ static void TestEffects(int mode)
  * the source pixel that lands on it or unchanged; without one the result
  * is 4 and nothing changes.  A failure means the clipping writes outside
  * the overlap or crops the source at the wrong offset. */
-static void TestClipping(void)
+static void TestClipping(OpenBGI_t* o)
 {
 	Bmp_t dst, src, before;
 	static const int positions[][2] = {{0, 0}, {-5, -7}, {50, 30}, {-100, 0}, {0, -100}, {200, 200}, {-20, 31}, {60, -36}, {3, 3}};
 	size_t i;
 	printf("clipping\n");
-	Gfx_SetScreenMode(PM_RGB32);
+	Gfx_SetScreenMode(o, PM_RGB32);
 	Bmp_Alloc(&dst, 64, 40, PM_RGB32);
 	Bmp_Alloc(&src, 21, 17, PM_RGB32);
 	FillPattern(&dst, 5);
@@ -250,12 +242,12 @@ static void TestClipping(void)
  * (build with AddressSanitizer) and for the result codes that are
  * checkable: a zero scale is refused with 0x13, Blit_ToGray returns 0,
  * Blit_InvertGray 1 on a GRAY8 picture and 0 on another mode. */
-static void TestTransforms(void)
+static void TestTransforms(OpenBGI_t* o)
 {
 	Bmp_t dst, src, gray;
 	int i;
 	printf("transforms\n");
-	Gfx_SetScreenMode(PM_RGB32);
+	Gfx_SetScreenMode(o, PM_RGB32);
 	Bmp_Alloc(&dst, 97, 71, PM_RGB32);
 	Bmp_Alloc(&src, 45, 33, PM_ARGB32);
 	Bmp_Alloc(&gray, 45, 33, PM_GRAY8);
@@ -474,14 +466,14 @@ static void TestBicubic(void)
  * bitmap takes the source's mode; a 1-pixel-wide source and an empty slot
  * fail with their codes; a 16-bit source makes the bitmap but leaves it
  * unfiltered. */
-static void TestHalfSize(void)
+static void TestHalfSize(OpenBGI_t* o)
 {
 	Bmp_t s, d;
 	int x, y;
 	printf("half size\n");
-	gBmpMgr = BmpMgr_New(4);
-	CHECK(BmpMgr_Create(gBmpMgr, 0, 5, 3, PM_ARGB32));
-	BmpMgr_GetInfo(gBmpMgr, &s, 0);
+	o->gfx.bmpMgr = BmpMgr_New(4);
+	CHECK(BmpMgr_Create(o->gfx.bmpMgr, 0, 5, 3, PM_ARGB32));
+	BmpMgr_GetInfo(o->gfx.bmpMgr, &s, 0);
 	for(y = 0; y < 3; y++)
 		for(x = 0; x < 5; x++)
 		{
@@ -491,8 +483,8 @@ static void TestHalfSize(void)
 			p[2] = (uint8_t)(x * y * 9);
 			p[3] = (uint8_t)(1 + x + y);
 		}
-	CHECK(BmpOp_HalfSize(1, 0) == 0);
-	CHECK(BmpMgr_GetInfo(gBmpMgr, &d, 1) && d.w == 3 && d.h == 2 && d.mode == PM_ARGB32);
+	CHECK(BmpOp_HalfSize(o, 1, 0) == 0);
+	CHECK(BmpMgr_GetInfo(o->gfx.bmpMgr, &d, 1) && d.w == 3 && d.h == 2 && d.mode == PM_ARGB32);
 	for(y = 0; y < 2; y++)
 		for(x = 0; x < 3; x++)
 		{
@@ -512,13 +504,13 @@ static void TestHalfSize(void)
 				CHECK(d.pixels[y * d.pitch + x * 4 + c] == want);
 			}
 		}
-	CHECK(BmpMgr_Create(gBmpMgr, 2, 1, 8, PM_RGB32));
-	CHECK(BmpOp_HalfSize(1, 2) == 0x80000006u);
-	CHECK(BmpOp_HalfSize(1, 3) == 0x8000000au);
-	CHECK(BmpMgr_Create(gBmpMgr, 2, 4, 4, PM_RGB16));
-	CHECK(BmpOp_HalfSize(3, 2) == 0 && BmpMgr_GetInfo(gBmpMgr, &d, 3) && d.w == 2 && d.h == 2 && d.mode == PM_RGB16);
-	BmpMgr_Delete(gBmpMgr);
-	gBmpMgr = NULL;
+	CHECK(BmpMgr_Create(o->gfx.bmpMgr, 2, 1, 8, PM_RGB32));
+	CHECK(BmpOp_HalfSize(o, 1, 2) == 0x80000006u);
+	CHECK(BmpOp_HalfSize(o, 1, 3) == 0x8000000au);
+	CHECK(BmpMgr_Create(o->gfx.bmpMgr, 2, 4, 4, PM_RGB16));
+	CHECK(BmpOp_HalfSize(o, 3, 2) == 0 && BmpMgr_GetInfo(o->gfx.bmpMgr, &d, 3) && d.w == 2 && d.h == 2 && d.mode == PM_RGB16);
+	BmpMgr_Delete(o->gfx.bmpMgr);
+	o->gfx.bmpMgr = NULL;
 }
 
 /* "91 31" and setParam 0xC0 / 0xC1 (1.573 on): an object with its hidden
@@ -526,33 +518,33 @@ static void TestHalfSize(void)
  * "90 31"'s enabled flag reach the children only when the parent's
  * setParam 0xC1 / 0xC0 asked for it; before 1.573 the two parameters do
  * not exist. */
-static void TestHiddenSwitch(void)
+static void TestHiddenSwitch(OpenBGI_t* o)
 {
 	DispObj_t parent, child;
 	printf("hidden switch\n");
-	CHECK(Engine_SelectProfile("1.636"));
-	DispObj_Ctor(&parent, 0, 1);
-	DispObj_Ctor(&child, 0, 2);
-	CHECK(DispObj_AttachChild(&parent, &child, 0, 0));
-	parent.vt->setVisible(&parent, 1);
-	CHECK(DispObj_IsVisible(&parent) && DispObj_IsVisible(&child));
+	CHECK(Engine_SelectProfile(o, "1.636"));
+	DispObj_Ctor(o, &parent, 0, 1);
+	DispObj_Ctor(o, &child, 0, 2);
+	CHECK(DispObj_AttachChild(o, &parent, &child, 0, 0));
+	parent.vt->setVisible(o, &parent, 1);
+	CHECK(DispObj_IsVisible(o, &parent) && DispObj_IsVisible(o, &child));
 	DispObj_SetHidden(&parent, 1);
-	CHECK(!DispObj_IsVisible(&parent) && DispObj_IsVisible(&child) && parent.visible && parent.enabled);
+	CHECK(!DispObj_IsVisible(o, &parent) && DispObj_IsVisible(o, &child) && parent.visible && parent.enabled);
 	DispObj_SetEnabled(&parent, 0);
 	CHECK(child.enabled == 1);
-	CHECK(DispObj_SetParam(&parent, 0xc1, 1, 0) == 0 && DispObj_SetParam(&parent, 0xc0, 1, 0) == 0);
+	CHECK(DispObj_SetParam(o, &parent, 0xc1, 1, 0) == 0 && DispObj_SetParam(o, &parent, 0xc0, 1, 0) == 0);
 	DispObj_SetHidden(&parent, 0);
 	DispObj_SetHidden(&parent, 5);
 	DispObj_SetEnabled(&parent, 1);
-	CHECK(child.hidden == 5 && !DispObj_IsVisible(&child) && child.enabled == 1);
+	CHECK(child.hidden == 5 && !DispObj_IsVisible(o, &child) && child.enabled == 1);
 	DispObj_SetEnabled(&parent, 0);
 	DispObj_SetHidden(&parent, 0);
 	CHECK(child.enabled == 0 && child.hidden == 0 && parent.priority == 0);
 	DispObj_Dtor(&child);
 	DispObj_Dtor(&parent);
-	CHECK(Engine_SelectProfile("1.553"));
-	DispObj_Ctor(&parent, 0, 3);
-	CHECK(DispObj_SetParam(&parent, 0xc0, 1, 0) == (int)0xffff0001);
+	CHECK(Engine_SelectProfile(o, "1.553"));
+	DispObj_Ctor(o, &parent, 0, 3);
+	CHECK(DispObj_SetParam(o, &parent, 0xc0, 1, 0) == (int)0xffff0001);
 	DispObj_Dtor(&parent);
 }
 
@@ -562,23 +554,23 @@ static void TestHiddenSwitch(void)
  * then), it becomes visible when the window fades in.  In 1.69 build 472
  * its own flag counts.  A failure means the panels' buttons stop
  * answering after their window faded (after a load in senmomo). */
-static void TestVirtualVisibility(void)
+static void TestVirtualVisibility(OpenBGI_t* o)
 {
 	DispObj_t win;
 	VirtualObject_t v;
 	printf("virtual\n");
-	CHECK(Engine_SelectProfile("1.636"));
-	DispObj_Ctor(&win, 0, 1);
-	win.vt->setVisible(&win, 1);
-	DispObj_SetFade(&win, 0x100);
-	VirtualObject_Ctor(&v, 2, &win);
-	CHECK(DispObj_AttachChild(&win, &v.obj, 0, 0));
-	v.obj.vt->setVisible(&v.obj, win.vt->isVisible(&win)); // as the panels do: 0 here
-	CHECK(!v.obj.vt->isVisible(&v.obj));
-	DispObj_SetFade(&win, 0);
-	CHECK(v.obj.vt->isVisible(&v.obj) && !v.obj.visible);
-	CHECK(Engine_SelectProfile("1.69/472"));
-	CHECK(!v.obj.vt->isVisible(&v.obj));
+	CHECK(Engine_SelectProfile(o, "1.636"));
+	DispObj_Ctor(o, &win, 0, 1);
+	win.vt->setVisible(o, &win, 1);
+	DispObj_SetFade(o, &win, 0x100);
+	VirtualObject_Ctor(o, &v, 2, &win);
+	CHECK(DispObj_AttachChild(o, &win, &v.obj, 0, 0));
+	v.obj.vt->setVisible(o, &v.obj, win.vt->isVisible(o, &win)); // as the panels do: 0 here
+	CHECK(!v.obj.vt->isVisible(o, &v.obj));
+	DispObj_SetFade(o, &win, 0);
+	CHECK(v.obj.vt->isVisible(o, &v.obj) && !v.obj.visible);
+	CHECK(Engine_SelectProfile(o, "1.69/472"));
+	CHECK(!v.obj.vt->isVisible(o, &v.obj));
 	DispObj_Dtor(&v.obj);
 	DispObj_Dtor(&win);
 }
@@ -586,17 +578,20 @@ static void TestVirtualVisibility(void)
 // run every group; exit status 1 when any check failed
 int main(void)
 {
-	Blit_InitTables();
+	OpenBGI_t* o = OpenBGI_New(OS_Host()); // the engine whose code the test runs
+	if(!o)
+		return 1;
+	Blit_InitTables(o);
 	TestRects();
 	TestGatherAdd();
-	TestEffects(PM_RGB32);
-	TestEffects(PM_RGB16);
-	TestClipping();
-	TestTransforms();
+	TestEffects(o, PM_RGB32);
+	TestEffects(o, PM_RGB16);
+	TestClipping(o);
+	TestTransforms(o);
 	TestBicubic();
-	TestHalfSize();
-	TestHiddenSwitch();
-	TestVirtualVisibility();
+	TestHalfSize(o);
+	TestHiddenSwitch(o);
+	TestVirtualVisibility(o);
 	if(gFails)
 	{
 		printf("%d failure(s)\n", gFails);

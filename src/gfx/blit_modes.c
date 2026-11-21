@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * blit_modes.c - the arithmetic blend modes of Bmp_BlitEffect
- * (inc/bgi/gfx/bitmap.h):
+ * (src/include/bgi/gfx/bitmap.h):
  *
  *   0x03 / 0x22  Blit_Sub   saturating subtract         (ARGB32 -> RGB32)
  *   0x04 / 0x23  Blit_Mul   multiply                    (RGB32, ARGB32, GRAY8)
@@ -25,14 +25,7 @@
  * destination keeps its old value.  Other mode combinations than the ones
  * listed draw nothing, as does a level of 0.
  */
-#include "bgi/gfx/bitmap.h"
-
-// pack a lane to a byte with unsigned saturation (packuswb)
-static inline uint8_t Sat8(int v)
-{
-	return (uint8_t)(v < 0 ? 0 : v > 255 ? 255
-										 : v);
-}
+#include "blit_internal.h"
 
 /* pmullw + psraw 7 on one lane: the low 16 bits of the product, shifted
  * arithmetically.  Products never exceed 16 bits in these routines except
@@ -41,8 +34,6 @@ static inline int Mul7(int a, int w)
 {
 	return (int)(int16_t)(uint16_t)(a * w) >> 7;
 }
-
-#define ROW(b, y) ((b)->pixels + (size_t)(y) * (size_t)(b)->pitch)
 
 // alpha weight of an ARGB32 source pixel for the given level (the tables of the header)
 static inline int AlphaWeight(uint32_t sv, int level)
@@ -235,6 +226,17 @@ static void Screen32_Alpha(Bmp_t* dst, const Bmp_t* src, int level)
 			if(!(sv & 0xfe000000u))
 				continue;
 			w = AlphaWeight(sv, level);
+			if(w >= 0 && w <= 128)
+			{ // (the weighted colour stays a byte: its three lanes at once, and a sum that is never negative)
+				uint32_t s2 = Scale3(sv, (uint32_t)w, 7);
+				for(i = 0; i < 24; i += 8)
+				{
+					uint32_t dc = (dv >> i) & 0xff, sc = (s2 >> i) & 0xff, v = dc + sc - ((dc * sc) >> 8);
+					out |= (v > 255 ? 255 : v) << i;
+				}
+				d[x] = out;
+				continue;
+			}
 			for(i = 0; i < 24; i += 8)
 			{
 				int s2 = ((int)((sv >> i) & 0xff) * w) >> 7;

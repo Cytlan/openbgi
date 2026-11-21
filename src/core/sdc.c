@@ -30,12 +30,11 @@
  * window 0x801 bytes, match length 2..17.
  *
  * Both encoders verify their output by decoding it again before reporting
- * success.  The scrambler uses the global hash generator and takes the
- * engine lock while it does.
+ * success.  The scrambler uses the engine's hash generator
+ * (BGI_HashSeed).
  */
 #include "bgi/codec.h"
 #include "bgi/sys.h"
-#include "bgi/os.h"
 
 #define SDC_WINDOW  0x801 // bytes the LZ coder looks back
 #define SDC_MAX_LEN 0x11  // longest match a token can code
@@ -210,21 +209,20 @@ static uint32_t SdcLzDecode(uint8_t* dst, const uint8_t* lz, uint32_t encLen)
 /* scramble the payload of the SDC file at `file` in place and fill key /
  * sum / xor of its header; encLen must already be set.  The key is the
  * millisecond field of the current system time. */
-static void SdcScramble(uint8_t* file)
+static void SdcScramble(OpenBGI_t* o, uint8_t* file)
 {
 	SdcHeader_t* h = (SdcHeader_t*)file;
 	uint8_t* p = file + sizeof(SdcHeader_t);
 	uint32_t n = h->encLen, sum = 0, x = 0;
-	OsLocalTime_t lt;
+	OpenBGI_DateTime_t lt;
 
-	EngineLock_Enter(); // the generator state is global
 	// only the millisecond field of the time is used, which is the same in
 	// local time and in the system time the original reads
-	OS_LocalTime(&lt);
-	BGI_HashSeed(lt.millis);
+	Clock_LocalTime(o, &lt);
+	BGI_HashSeed(o, lt.millis);
 	while(n--)
 	{
-		uint8_t v = (uint8_t)(*p + BGI_HashNext());
+		uint8_t v = (uint8_t)(*p + BGI_HashNext(o));
 		*p++ = v;
 		sum += v;
 		x ^= v;
@@ -232,24 +230,22 @@ static void SdcScramble(uint8_t* file)
 	h->key = lt.millis;
 	h->sum = (uint16_t)sum;
 	h->xor = (uint16_t)x;
-	EngineLock_Leave();
 }
 
 // unscramble the payload into a new buffer (BGI_Free it); NULL when the checks fail
-static uint8_t* SdcUnscramble(const uint8_t* file)
+static uint8_t* SdcUnscramble(OpenBGI_t* o, const uint8_t* file)
 {
 	const SdcHeader_t* h = (const SdcHeader_t*)file;
 	const uint8_t* p = file + sizeof(SdcHeader_t);
 	uint8_t* buf;
 	uint32_t n = h->encLen, i, sum = 0, x = 0;
 
-	EngineLock_Enter();
-	BGI_HashSeed(h->key);
+	BGI_HashSeed(o, h->key);
 	buf = (uint8_t*)BGI_Alloc(n ? n : 1);
 	for(i = 0; i < n; i++)
 	{
 		uint8_t v = p[i];
-		buf[i] = (uint8_t)(v - BGI_HashNext());
+		buf[i] = (uint8_t)(v - BGI_HashNext(o));
 		sum += v; // the checks cover the scrambled bytes
 		x ^= v;
 	}
@@ -258,7 +254,6 @@ static uint8_t* SdcUnscramble(const uint8_t* file)
 		BGI_Free(buf);
 		buf = NULL;
 	}
-	EngineLock_Leave();
 	return buf;
 }
 
@@ -273,14 +268,14 @@ int SdcIsFormat(const void* data)
 
 /* "80 C1": decode the SDC file at src into dst (SdcOutSize(src) bytes);
  * returns the decoded size, 0 when the magic or the checks fail */
-uint32_t SdcDecode(void* dst, const void* src)
+uint32_t SdcDecode(OpenBGI_t* o, void* dst, const void* src)
 {
 	const SdcHeader_t* h = (const SdcHeader_t*)src;
 	uint8_t* lz;
 	uint32_t n;
 	if(!SdcIsFormat(src))
 		return 0;
-	lz = SdcUnscramble((const uint8_t*)src);
+	lz = SdcUnscramble(o, (const uint8_t*)src);
 	if(!lz)
 		return 0;
 	n = SdcLzDecode((uint8_t*)dst, lz, h->encLen);
@@ -291,7 +286,7 @@ uint32_t SdcDecode(void* dst, const void* src)
 /* "80 C0": encode size bytes of src into dst (header + payload).  The
  * result is verified by decoding it again; returns the total number of
  * bytes written, or 0 when the round trip failed. */
-uint32_t SdcEncode(void* dst, const void* src, uint32_t size)
+uint32_t SdcEncode(OpenBGI_t* o, void* dst, const void* src, uint32_t size)
 {
 	uint8_t* copy = (uint8_t*)BGI_Alloc(size ? size : 1);
 	uint8_t* file = (uint8_t*)dst;
@@ -305,10 +300,10 @@ uint32_t SdcEncode(void* dst, const void* src, uint32_t size)
 	memcpy(h->magic, SDC_MAGIC, 16);
 	h->encLen = encLen;
 	h->outSize = size;
-	SdcScramble(file);
+	SdcScramble(o, file);
 
 	check = (uint8_t*)BGI_Alloc(size ? size * 2 : 1);
-	if(SdcDecode(check, dst) == size && memcmp(check, copy, size) == 0)
+	if(SdcDecode(o, check, dst) == size && memcmp(check, copy, size) == 0)
 		result = encLen + sizeof(SdcHeader_t);
 	BGI_Free(check);
 	BGI_Free(copy);

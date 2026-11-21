@@ -15,12 +15,14 @@
  * reach meanwhile, so a definition may use other names but cannot loop.
  * Every output line records the file and line it came from.
  */
+#include "bgi/asmout.h"
 #include "bgi/prep.h"
-#include "bgi/os.h"
-#include "bgi/os_common.h"
+#include "bgi/sjis.h"
 
 #include <ctype.h>
 #include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define PREP_DEPTH_MAX  16  // #include inside an included file, this deep
 #define PREP_FILES_MAX  256 // files of one source
@@ -56,7 +58,10 @@ typedef struct Scan
 typedef struct Prep
 {
 	const PrepIncludes_t* inc;
-	FILE* log;
+	char sep;     // the separator of the caller's paths besides '/' ('/' when it has none)
+	int sjis;     // its paths are Shift-JIS: a trail byte is no separator
+	int foldCase; // two names of one file may differ in the case of their letters
+	AsmOut_t* log;
 	int errors, warnings;
 	char* buf; // the expanded text
 	size_t len, cap;
@@ -75,11 +80,11 @@ static void Errorf(Prep_t* p, int file, int line, const char* fmt, ...)
 	p->errors++;
 	if(p->errors > 50)
 		return;
-	fprintf(p->log, "%s:%d: error: ", p->files[file].name, line);
+	AsmOut_Printf(p->log, "%s:%d: error: ", p->files[file].name, line);
 	va_start(ap, fmt);
-	vfprintf(p->log, fmt, ap);
+	AsmOut_VPrintf(p->log, fmt, ap);
 	va_end(ap);
-	fputc('\n', p->log);
+	AsmOut_Putc(p->log, '\n');
 }
 
 static int IsIdentStart(int c)
@@ -373,72 +378,93 @@ static char* DupStr(const char* s)
 	return d;
 }
 
-static int IsSep(int c)
+static int IsSep(const Prep_t* p, int c)
 {
-	return c == '/' || c == OS_NATIVE_SEP;
+	return c == '/' || c == p->sep;
 }
 
-/* `dir` and a name as one native path; a directory that ends in a
- * separator (or is empty) takes none */
-static void JoinPath(char* out, size_t n, const char* dir, const char* name)
+// the bytes of the character at `s`: two for a Shift-JIS lead byte with its trail when the paths are Shift-JIS
+static size_t CharLen(const Prep_t* p, const char* s)
 {
-	if(!dir[0] || OsCommon_FilePart(dir)[0] == 0)
+	return p->sjis && Sjis_IsLead((uint8_t)s[0]) && s[1] ? 2 : 1;
+}
+
+// the last component of a path: after its last separator
+static const char* FilePart(const Prep_t* p, const char* path)
+{
+	const char* s = path;
+	const char* part = path;
+	while(*s)
+	{
+		if(IsSep(p, (unsigned char)*s))
+			part = s + 1;
+		s += CharLen(p, s);
+	}
+	return part;
+}
+
+/* `dir` and a name as one path of the caller's; a directory that ends in
+ * a separator (or is empty) takes none */
+static void JoinPath(const Prep_t* p, char* out, size_t n, const char* dir, const char* name)
+{
+	if(!dir[0] || FilePart(p, dir)[0] == 0)
 		snprintf(out, n, "%s%s", dir, name);
 	else
-		snprintf(out, n, "%s%c%s", dir, OS_NATIVE_SEP, name);
+		snprintf(out, n, "%s%c%s", dir, p->sep, name);
 }
 
 /* The full path of a file without its "." and "dir/.." components: what
  * tells whether two #include lines name the same file. */
-static void PathKey(const char* path, char* out, size_t n)
+static void PathKey(const Prep_t* p, const char* path, char* out, size_t n)
 {
 	char full[PREP_PATH_MAX];
-	size_t i = 0, o = 0, start;
-	OS_NativeAbsolute(path, full, sizeof full);
+	size_t i = 0, off = 0, start;
 	if(n == 0)
 		return;
+	if(p->inc && p->inc->absolute)
+		p->inc->absolute(p->inc->ctx, path, full, sizeof full);
+	else
+		snprintf(full, sizeof full, "%s", path);
 	// what precedes the first separator (nothing, or a drive) is kept as it is
-	while(full[i] && !IsSep((unsigned char)full[i]) && o + 1 < n)
-		out[o++] = full[i++];
-	start = o;
+	while(full[i] && !IsSep(p, (unsigned char)full[i]) && off + 1 < n)
+		out[off++] = full[i++];
+	start = off;
 	while(full[i])
 	{
 		size_t len = 0;
-		while(IsSep((unsigned char)full[i]))
+		while(IsSep(p, (unsigned char)full[i]))
 			i++;
-		while(full[i + len] && !IsSep((unsigned char)full[i + len]))
-			len++;
+		while(full[i + len] && !IsSep(p, (unsigned char)full[i + len]))
+			len += CharLen(p, full + i + len);
 		if(len == 0 || (len == 1 && full[i] == '.'))
 			; // nothing
 		else if(len == 2 && full[i] == '.' && full[i + 1] == '.')
 		{ // drop the component before it
-			while(o > start && !IsSep((unsigned char)out[o - 1]))
-				o--;
-			if(o > start)
-				o--;
+			while(off > start && !IsSep(p, (unsigned char)out[off - 1]))
+				off--;
+			if(off > start)
+				off--;
 		}
-		else if(o + len + 2 < n)
+		else if(off + len + 2 < n)
 		{
-			out[o++] = OS_NATIVE_SEP;
-			memcpy(out + o, full + i, len);
-			o += len;
+			out[off++] = p->sep;
+			memcpy(out + off, full + i, len);
+			off += len;
 		}
 		i += len;
 	}
-	out[o] = 0;
+	out[off] = 0;
 }
 
-// whether two keys name one file: Windows does not tell the case of the letters apart
-static int SameKey(const char* a, const char* b)
+// whether two keys name one file (without telling the case of the letters apart where the caller's file system does not)
+static int SameKey(const Prep_t* p, const char* a, const char* b)
 {
-#if defined(_WIN32)
+	if(!p->foldCase)
+		return strcmp(a, b) == 0;
 	for(; *a && *b; a++, b++)
 		if(tolower((unsigned char)*a) != tolower((unsigned char)*b))
 			return 0;
 	return *a == *b;
-#else
-	return strcmp(a, b) == 0;
-#endif
 }
 
 // the length of the byte order mark some editors put in front of UTF-8 text
@@ -457,7 +483,7 @@ static int AddFile(Prep_t* p, const char* name, const char* path, char* text)
 	f = &p->files[p->fileCount];
 	f->name = DupStr(name);
 	f->path = DupStr(path);
-	PathKey(path, key, sizeof key);
+	PathKey(p, path, key, sizeof key);
 	f->key = DupStr(key);
 	f->text = text;
 	return p->fileCount++;
@@ -491,21 +517,24 @@ static void Include(Prep_t* p, const char* s, const char* e, int file, int line)
 	snprintf(rel, sizeof rel, "%s", name);
 	for(n = 0; rel[n]; n++)
 		if(rel[n] == '/')
-			rel[n] = OS_NATIVE_SEP;
-	OS_Utf8ToNative(rel, native, sizeof native);
+			rel[n] = p->sep;
+	if(inc && inc->fromUtf8)
+		inc->fromUtf8(inc->ctx, rel, native, sizeof native);
+	else
+		snprintf(native, sizeof native, "%s", rel);
 	for(k = -1; k < dirs; k++)
 	{
 		uint8_t* text;
 		uint32_t size = 0;
 		if(k < 0)
-			snprintf(path, sizeof path, "%.*s%s", (int)(OsCommon_FilePart(from) - from), from, native);
+			snprintf(path, sizeof path, "%.*s%s", (int)(FilePart(p, from) - from), from, native);
 		else
-			JoinPath(path, sizeof path, inc->dirs[k], native);
-		PathKey(path, key, sizeof key);
+			JoinPath(p, path, sizeof path, inc->dirs[k], native);
+		PathKey(p, path, key, sizeof key);
 		for(i = 0; i < p->fileCount; i++)
-			if(SameKey(p->files[i].key, key))
+			if(SameKey(p, p->files[i].key, key))
 				return;
-		text = inc && inc->read ? inc->read(inc->ctx, path, &size) : OS_ReadNativeFile(path, &size);
+		text = inc && inc->read ? inc->read(inc->ctx, path, &size) : NULL;
 		if(!text)
 			continue;
 		index = p->depth < PREP_DEPTH_MAX ? AddFile(p, path, path, (char*)text) : -1;
@@ -577,7 +606,7 @@ static int HasDirective(const char* text, size_t len)
 	return 0;
 }
 
-void Prep_Expand(const char* text, size_t len, const char* fileName, const PrepIncludes_t* inc, FILE* log, PrepText_t* out)
+void Prep_ExpandTo(const char* text, size_t len, const char* fileName, const PrepIncludes_t* inc, AsmOut_t* log, PrepText_t* out)
 {
 	Prep_t* p;
 	char path[PREP_PATH_MAX];
@@ -592,10 +621,13 @@ void Prep_Expand(const char* text, size_t len, const char* fileName, const PrepI
 		return;
 	p = (Prep_t*)calloc(1, sizeof *p); // the table of files makes it too large for the stack
 	p->inc = inc;
-	p->log = log ? log : stderr;
+	p->sep = inc && inc->sep ? inc->sep : '/';
+	p->sjis = inc && inc->sjis;
+	p->foldCase = inc && inc->foldCase;
+	p->log = log;
 	// the text itself is file 0; its includes are looked for beside it
 	if(inc && inc->baseDir)
-		JoinPath(path, sizeof path, inc->baseDir, OsCommon_FilePart(fileName));
+		JoinPath(p, path, sizeof path, inc->baseDir, FilePart(p, fileName));
 	else
 		snprintf(path, sizeof path, "%s", fileName);
 	AddFile(p, fileName, path, NULL);
@@ -624,6 +656,14 @@ void Prep_Expand(const char* text, size_t len, const char* fileName, const PrepI
 	}
 	free(p->macros);
 	free(p);
+}
+
+void Prep_Expand(const char* text, size_t len, const char* fileName, const PrepIncludes_t* inc, FILE* log, PrepText_t* out)
+{
+	AsmOut_t w;
+	memset(&w, 0, sizeof w);
+	w.fp = log ? log : stderr;
+	Prep_ExpandTo(text, len, fileName, inc, &w, out);
 }
 
 const char* Prep_Where(const PrepText_t* t, int line, int* srcLine)

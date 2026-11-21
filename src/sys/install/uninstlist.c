@@ -2,7 +2,7 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * uninstlist.c - the list of installed files, "uninst.lst" (inc/bgi/install.h)
+ * uninstlist.c - the list of installed files, "uninst.lst" (src/include/bgi/install.h)
  *
  * One file name per line, in the installation directory; a line starting
  * with '@' names a file the uninstaller keeps (the save files, the
@@ -13,14 +13,13 @@
  */
 #include "install_internal.h"
 #include "bgi/file.h"
-#include "bgi/os.h"
 
 /* "80 F4": delete every file named in "<dir>\uninst.lst" except the kept
  * ('@') lines, the list itself and the names in `keep` (a NULL-terminated
  * list, or NULL).  A '$' line is handed to the file deletion as it is,
  * '$' included, so it matches nothing: the sub-directories stay.  1 when
  * the list could be opened. */
-int UninstListProcess(const char* dir, char** keep)
+int UninstListProcess(OpenBGI_t* o, const char* dir, char** keep)
 {
 	char path[0x104], line[0x104];
 	File_t f;
@@ -28,7 +27,7 @@ int UninstListProcess(const char* dir, char** keep)
 
 	sprintf(path, "%s\\%s", dir, UNINST_LIST);
 	File_Ctor(&f);
-	opened = File_OpenRead(&f, path);
+	opened = File_OpenRead(o, &f, path);
 	if(opened)
 	{
 		uint32_t size = File_Size(&f);
@@ -57,7 +56,7 @@ int UninstListProcess(const char* dir, char** keep)
 					continue;
 			}
 			sprintf(path, "%s\\%s", dir, line);
-			OS_FileDelete(path);
+			Fs_FileDelete(o, path);
 		}
 		BGI_Free(buf);
 	}
@@ -70,7 +69,7 @@ int UninstListProcess(const char* dir, char** keep)
  * the list was rewritten, 0 when it could not be opened or written.  A
  * name counts as mentioned when it occurs anywhere in the list, also as
  * part of a longer name. */
-int UninstListAppend(const char* dir, char** names)
+int UninstListAppend(OpenBGI_t* o, const char* dir, char** names)
 {
 	char path[0x104];
 	File_t f;
@@ -78,7 +77,7 @@ int UninstListAppend(const char* dir, char** names)
 
 	File_Ctor(&f);
 	sprintf(path, "%s\\%s", dir, UNINST_LIST);
-	if(File_OpenRead(&f, path))
+	if(File_OpenRead(o, &f, path))
 	{
 		char* buf = (char*)BGI_Alloc(0x100000); // 1 MB, the list's size limit
 		uint32_t size = File_Size(&f);
@@ -94,7 +93,7 @@ int UninstListAppend(const char* dir, char** names)
 				end += strlen(end);
 			}
 		}
-		if(File_Create(&f, path))
+		if(File_Create(o, &f, path))
 		{
 			uint32_t len = (uint32_t)strlen(buf) + 1;
 			ok = File_Write(&f, buf, len) == len;

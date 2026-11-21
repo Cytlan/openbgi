@@ -7,14 +7,12 @@
  * The lookup is server.js's: each component of a relative path is matched
  * against the directory's entries, exactly first, then without regard to
  * ASCII case; ".." is refused; "" is the root.  Reads are ranged and capped
- * at the server's 16 MB; nothing writes.  The Shift-JIS table comes from
- * iconv (CP932) in place of the browser's TextDecoder.
+ * at the server's 16 MB; nothing writes.
  */
 #include "tools/wasm/hostmock.h"
-#include "bgi/os.h"
+#include "host/os.h"
 
 #include <dirent.h>
-#include <iconv.h>
 #include <sys/stat.h>
 #include <strings.h>
 
@@ -187,36 +185,4 @@ void WasmHostJs_ListTake(void* dst)
 void WasmHostJs_OverlayChanged(void)
 {
 	gChanged++;
-}
-
-void WasmHostJs_SjisTable(uint32_t* table)
-{
-	iconv_t cd = iconv_open("UTF-8", "CP932");
-	uint32_t code;
-	if(cd == (iconv_t)-1)
-		return;
-	for(code = 0x8100; code < 0x10000; code++)
-	{
-		char in[2] = {(char)(code >> 8), (char)code};
-		char out[8];
-		char* ip = in;
-		char* op = out;
-		size_t il = 2, ol = sizeof out;
-		const uint8_t* u = (const uint8_t*)out;
-		size_t len;
-		uint32_t lead = code >> 8, trail = code & 0xff;
-		if((lead > 0x9f && lead < 0xe0) || lead > 0xfc || trail < 0x40 || trail == 0x7f || trail > 0xfc)
-			continue;
-		iconv(cd, NULL, NULL, NULL, NULL);
-		if(iconv(cd, &ip, &il, &op, &ol) == (size_t)-1 || il != 0)
-			continue;
-		len = sizeof out - ol;
-		if(len == 1)
-			table[code] = u[0];
-		else if(len == 2)
-			table[code] = ((u[0] & 0x1fu) << 6) | (u[1] & 0x3fu);
-		else if(len == 3)
-			table[code] = ((u[0] & 0x0fu) << 12) | ((u[1] & 0x3fu) << 6) | (u[2] & 0x3fu);
-	}
-	iconv_close(cd);
 }

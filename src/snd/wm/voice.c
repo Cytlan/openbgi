@@ -8,13 +8,14 @@
  * A voice stands in for a DirectSound secondary buffer: an effect plays
  * from its decoded samples, music is pulled from its decoder through a
  * 4-second ring that Voice_Pump keeps half a second ahead, restarting the
- * stream where it says it continues.  The mixer runs in the OS layer's
- * audio thread (OS_AudioStart, 44.1 kHz stereo like the original's
- * primary buffer) under the library lock; attenuations are applied as
- * linear gains and sources with another sample rate are interpolated
- * linearly.
+ * stream where it says it continues.  The mixer (Wm_Mix, 44.1 kHz stereo
+ * like the original's primary buffer) runs on the engine's thread when
+ * the sound out asks for frames (src/snd/sndout.c); attenuations are
+ * applied as linear gains and sources with another sample rate are
+ * interpolated linearly.
  */
 #include "wm_internal.h"
+#include "bgi/core.h"
 
 // ---- voices ------------------------------------------------------------------------------------
 
@@ -145,7 +146,7 @@ int Voice_IsPlaying(const Voice_t* v)
 /* the decoder pump: keep the ring at least half a second ahead,
  * decoding up to half a second at a time and restarting the stream where
  * it says it continues; a stream that has ended marks the voice done */
-void Voice_Pump(Voice_t* v)
+void Voice_Pump(OpenBGI_t* o, Voice_t* v)
 {
 	uint32_t half = v->rate / 2;
 	while(!v->done && v->ringFrames - v->ringCount > half)
@@ -168,11 +169,11 @@ void Voice_Pump(Voice_t* v)
 			{
 				if(WmStream_Continues(v->stream))
 				{
-					WmStream_Restart(v->stream);
-					SND_DEBUG("music channel %d restarts (loop %d)\n", (int)(v - gBgmVoices), WmStream_LoopCount(v->stream) + 1);
+					WmStream_Restart(o, v->stream);
+					SND_DEBUG(o, "music channel %d restarts (loop %d)\n", (int)(v - o->snd.bgmVoices), WmStream_LoopCount(o, v->stream) + 1);
 					continue;
 				}
-				SND_DEBUG("music channel %d reached its end\n", (int)(v - gBgmVoices));
+				SND_DEBUG(o, "music channel %d reached its end\n", (int)(v - o->snd.bgmVoices));
 				v->done = 1;
 				break;
 			}
@@ -213,14 +214,14 @@ static int Voice_Frame(const Voice_t* v, uint32_t index, int16_t* l, int16_t* r)
  * accumulator, resampling to the mixer's rate by linear interpolation;
  * an effect that runs out stops and rewinds itself, music stops once the
  * pump has found the end and the ring is empty */
-static void Voice_Mix(Voice_t* v, int32_t* acc, int frames)
+static void Voice_Mix(OpenBGI_t* o, Voice_t* v, int32_t* acc, int frames)
 {
 	uint32_t step = (uint32_t)(((uint64_t)v->rate << 16) / WM_MIX_RATE); // source frames per output frame, 16.16
 	int i;
 	if(!v->playing || !v->stream)
 		return;
 	if(v->isBgm)
-		Voice_Pump(v);
+		Voice_Pump(o, v);
 	for(i = 0; i < frames; i++)
 	{
 		int16_t l0, r0, l1, r1;
@@ -264,35 +265,26 @@ static void Voice_Mix(Voice_t* v, int32_t* acc, int frames)
 	}
 }
 
-/* the audio thread's callback: every voice summed into `frames` stereo
- * frames of `out`, clamped to 16 bits, 4096 frames at a time */
-// the external source (Wm_SetExternalMix), read on the mixer's thread under the lock
-static WmExternalMix_t gExternalMix;
-static void* gExternalMixUser;
-
-void Wm_SetExternalMix(WmExternalMix_t fn, void* user)
+void Wm_SetExternalMix(OpenBGI_t* o, WmExternalMix_t fn, void* user)
 {
-	OS_LockEnter(gWmLock);
-	gExternalMix = fn;
-	gExternalMixUser = user;
-	OS_LockLeave(gWmLock);
+	o->snd.externalMix = fn;
+	o->snd.externalMixUser = user;
 }
 
-int Wm_MixRunning(void)
+int Wm_MixRunning(OpenBGI_t* o)
 {
-	return gAudioRunning;
+	return o->snd.audioRunning;
 }
 
 /* hold every playing voice where it is (`hold` non-zero), or let the held
  * ones play on; the original stops each sound buffer and marks it paused,
  * then plays the paused ones again */
-void Wm_HoldAll(int hold)
+void Wm_HoldAll(OpenBGI_t* o, int hold)
 {
 	int i;
-	OS_LockEnter(gWmLock);
 	for(i = 0; i < WM_BGM_CHANNELS + WM_SE_SLOTS; i++)
 	{
-		Voice_t* v = i < WM_BGM_CHANNELS ? &gBgmVoices[i] : &gSeVoices[i - WM_BGM_CHANNELS];
+		Voice_t* v = i < WM_BGM_CHANNELS ? &o->snd.bgmVoices[i] : &o->snd.seVoices[i - WM_BGM_CHANNELS];
 		if(hold && v->playing)
 		{
 			v->playing = 0;
@@ -304,25 +296,26 @@ void Wm_HoldAll(int hold)
 			v->held = 0;
 		}
 	}
-	OS_LockLeave(gWmLock);
 }
 
-void Mixer_Fill(void* user, int16_t* out, int frames)
+/* every voice summed into `frames` stereo frames of `out`, clamped to 16
+ * bits, 4096 frames at a time (the music channels, the effect slots, the
+ * wave of Wm_PlayWave, then the external source) */
+void Wm_Mix(OpenBGI_t* o, int16_t* out, int frames)
 {
-	static int32_t acc[4096 * 2];
+	int32_t* acc = o->snd.mixAcc;
 	int i, n;
-	BGI_UNUSED(user);
-	OS_LockEnter(gWmLock);
 	while(frames > 0)
 	{
 		n = frames > 4096 ? 4096 : frames;
 		memset(acc, 0, (size_t)n * 2 * sizeof(int32_t));
 		for(i = 0; i < WM_BGM_CHANNELS; i++)
-			Voice_Mix(&gBgmVoices[i], acc, n);
+			Voice_Mix(o, &o->snd.bgmVoices[i], acc, n);
 		for(i = 0; i < WM_SE_SLOTS; i++)
-			Voice_Mix(&gSeVoices[i], acc, n);
-		if(gExternalMix)
-			gExternalMix(gExternalMixUser, acc, n);
+			Voice_Mix(o, &o->snd.seVoices[i], acc, n);
+		Voice_Mix(o, &o->snd.waveVoice, acc, n);
+		if(o->snd.externalMix)
+			o->snd.externalMix(o->snd.externalMixUser, acc, n);
 		for(i = 0; i < n * 2; i++)
 		{
 			int32_t v = acc[i];
@@ -332,5 +325,4 @@ void Mixer_Fill(void* user, int16_t* out, int frames)
 		out += n * 2;
 		frames -= n;
 	}
-	OS_LockLeave(gWmLock);
 }

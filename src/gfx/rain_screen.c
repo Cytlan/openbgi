@@ -5,42 +5,41 @@
  * rain_screen.c - the rain screen display object: streaks falling through
  *                 a perspective camera (the generator of src/gfx/rain.c),
  *                 drawn into the screen's own surface, optionally through
- *                 a gray mask.  Interface: inc/bgi/gfx/screens.h.
+ *                 a gray mask.  Interface: src/include/bgi/gfx/screens.h.
  *
  * The screen is reached through the graphics manager (src/gfx/mgr/screens.c)
- * by the "C0 4x" instructions.  The parameters (area, fall per stage,
- * streak length, colour, drops per stage and stage interval, camera,
- * angles, projection distance) are kept in the screen and pushed to the
- * generator as a block by every setter; the generator exists only from
- * "C0 42" on, so a setter called before it keeps the value and reports
- * 0x80000002.  The screens are updated once per scheduler pass and redrawn
- * at the effect frame rate (Rain_FrameTick); gEffectsEnabled, the switch
- * of "C0 4F", hides them all.
+ * by the "C0 4x" instructions.  The parameters (area, fall per stage, streak
+ * length, colour, drops per stage and stage interval, camera, angles,
+ * projection distance) are kept in the screen and pushed to the generator as
+ * a block by every setter; the generator exists only from "C0 42" on, so a
+ * setter called before it keeps the value and reports 0x80000002.  The
+ * screens are updated once per scheduler pass and redrawn at the effect
+ * frame rate (Rain_FrameTick); o->rain.effectsEnabled, the switch of
+ * "C0 4F", hides them all.
  */
 #include <string.h>
 
 #include "bgi/common.h"
 #include "bgi/gfx/screens.h"
+#include "bgi/core.h"
 
-int gEffectsEnabled = 1; // the switch of "C0 4F": 0 hides every rain screen and stops the effect frames
-
-void Fx_SetEffectsEnabled(int on)
+void Fx_SetEffectsEnabled(OpenBGI_t* o, int on)
 {
-	gEffectsEnabled = on;
+	o->rain.effectsEnabled = on;
 }
 
-int Fx_GetEffectsEnabled(void)
+int Fx_GetEffectsEnabled(OpenBGI_t* o)
 {
-	return gEffectsEnabled;
+	return o->rain.effectsEnabled;
 }
 
 /* a display object of class order 5 with no generator, no surface and the
  * default parameters, which place the spawn plane below the floor (yTop
  * -4000, yBottom 4000, y up): a script has to set the area before the
  * rain can be seen */
-void RainScreen_Ctor(RainScreen_t* r, int slotId)
+void RainScreen_Ctor(OpenBGI_t* o, RainScreen_t* r, int slotId)
 {
-	DispObj_Ctor(&r->obj, 5, slotId);
+	DispObj_Ctor(o, &r->obj, 5, slotId);
 	r->obj.vt = &RainScreen_Vtbl;
 	r->gen = NULL;
 	memset(&r->surf, 0, sizeof r->surf);
@@ -74,17 +73,17 @@ void RainScreen_Dtor(RainScreen_t* r)
 	DispObj_Dtor(&r->obj);
 }
 
-static void RainScreen_Destroy(DispObj_t* o, int flags)
+static void RainScreen_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	RainScreen_Dtor((RainScreen_t*)o);
+	RainScreen_Dtor((RainScreen_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
 /* "C0 42": replace the generator by a fresh one with the screen's
  * parameters and view, pre-aged by `prerollMs` milliseconds (RainGen_Start
  * says how much of that takes effect) */
-void RainScreen_Start(RainScreen_t* r, uint32_t prerollMs)
+void RainScreen_Start(OpenBGI_t* o, RainScreen_t* r, uint32_t prerollMs)
 {
 	RainParams_t oldP;
 	RainView_t oldV;
@@ -93,36 +92,36 @@ void RainScreen_Start(RainScreen_t* r, uint32_t prerollMs)
 	r->gen = RainGen_New();
 	RainGen_SetParams(r->gen, &oldP, &r->params);
 	RainGen_SetView(r->gen, &oldV, &r->view);
-	RainGen_Start(r->gen, prerollMs);
+	RainGen_Start(o, r->gen, prerollMs);
 }
 
 /* "C0 40": size the object and allocate its surface (the back buffer's
  * mode with alpha).  0 ok, 0x80000001 when the object rejects the size
  * (the old surface stays). */
-int RainScreen_SetSize(RainScreen_t* r, int w, int h)
+int RainScreen_SetSize(OpenBGI_t* o, RainScreen_t* r, int w, int h)
 {
-	int ok = r->obj.vt->setSize(&r->obj, w, h);
+	int ok = r->obj.vt->setSize(o, &r->obj, w, h);
 	if(ok)
 	{
 		BGI_Free(r->surf.pixels);
-		Bmp_AllocScreen(&r->surf, w, h, 1);
+		Bmp_AllocScreen(o, &r->surf, w, h, 1);
 		Bmp_Clear(&r->surf, NULL);
 	}
 	return ok ? 0 : (int)0x80000001;
 }
 
 // once per scheduler pass: run the stages that are due.  0 ok, 0x80000002 without a generator
-int RainScreen_Update(RainScreen_t* r)
+int RainScreen_Update(OpenBGI_t* o, RainScreen_t* r)
 {
 	if(r->gen)
-		RainGen_Update(r->gen);
+		RainGen_Update(o, r->gen);
 	return r->gen ? 0 : (int)0x80000002;
 }
 
 /* every effect frame (Rain_FrameTick): clear the surface, draw the drops
  * into it and dirty the whole layer.  0 ok, 0x80000003 without a surface,
  * 0x80000002 without a generator. */
-int RainScreen_Redraw(RainScreen_t* r)
+int RainScreen_Redraw(OpenBGI_t* o, RainScreen_t* r)
 {
 	if(!r->surf.pixels)
 		return (int)0x80000003;
@@ -130,7 +129,7 @@ int RainScreen_Redraw(RainScreen_t* r)
 		return (int)0x80000002;
 	Bmp_Clear(&r->surf, NULL);
 	RainGen_Render(r->gen, r->surf.pixels, r->surf.w, r->surf.h, r->surf.pitch, r->surf.bpp * 8);
-	r->obj.vt->invalidate(&r->obj);
+	r->obj.vt->invalidate(o, &r->obj);
 	return 0;
 }
 
@@ -231,9 +230,9 @@ int RainScreen_SetDistance(RainScreen_t* r, int n)
 	return RainScreen_PushView(r);
 }
 
-static int RainScreen_IsVisible(DispObj_t* o) // hidden while the effects are switched off ("C0 4F")
+static int RainScreen_IsVisible(OpenBGI_t* o, DispObj_t* obj) // hidden while the effects are switched off ("C0 4F")
 {
-	return DispObj_IsVisible(o) && Fx_GetEffectsEnabled();
+	return DispObj_IsVisible(o, obj) && Fx_GetEffectsEnabled(o);
 }
 
 /* the compositor's draw: the surface with the object's effect and level,
@@ -241,9 +240,9 @@ static int RainScreen_IsVisible(DispObj_t* o) // hidden while the effects are sw
  * the object and is skipped when its bitmap was replaced since).  Effect
  * 0 copies where the mask is set, 1 and 0x20 blend there with the level;
  * any other effect goes through a masked copy of the surface. */
-static void RainScreen_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t minKey)
+static void RainScreen_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t* local, uint32_t minKey)
 {
-	RainScreen_t* r = (RainScreen_t*)o;
+	RainScreen_t* r = (RainScreen_t*)obj;
 	Bmp_t src, mask;
 	int effect;
 	(void)minKey;
@@ -253,39 +252,39 @@ static void RainScreen_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint3
 	Bmp_Crop(&src, local);
 	if(r->maskBmp == -1)
 	{
-		Bmp_BlitEffect(dst, &src, DispObj_GetEffect(o), DispObj_EffectiveLevel(o));
+		Bmp_BlitEffect(dst, &src, DispObj_GetEffect(obj), DispObj_EffectiveLevel(obj));
 		return;
 	}
-	if(!BmpMgr_GetInfo(gDispBmpMgr, &mask, r->maskBmp))
+	if(!BmpMgr_GetInfo(o->gfx.dispBmpMgr, &mask, r->maskBmp))
 		return;
-	if(BmpMgr_Generation(gDispBmpMgr, r->maskBmp) != r->maskGen)
+	if(BmpMgr_Generation(o->gfx.dispBmpMgr, r->maskBmp) != r->maskGen)
 		return;
 	Bmp_Crop(&mask, local);
-	effect = DispObj_GetEffect(o);
+	effect = DispObj_GetEffect(obj);
 	if(effect == 0)
 	{
 		Blit_Masked(dst, &src, &mask, 0);
 	}
 	else if(effect == 1 || effect == 0x20)
 	{
-		Blit_Masked(dst, &src, &mask, DispObj_EffectiveLevel(o));
+		Blit_Masked(dst, &src, &mask, DispObj_EffectiveLevel(obj));
 	}
 	else
 	{
 		Bmp_t tmp;
 		Bmp_Alloc(&tmp, src.w, src.h, src.mode);
 		Blit_MaskedTo(&tmp, &src, &mask);
-		Bmp_BlitEffect(dst, &tmp, effect, DispObj_EffectiveLevel(o));
+		Bmp_BlitEffect(dst, &tmp, effect, DispObj_EffectiveLevel(obj));
 		Bmp_Free(&tmp);
 	}
 }
 
 // "C0 45": position, effect, level and priority in one call; always 0
-int RainScreen_SetDraw(RainScreen_t* r, int x, int y, int effect, int level, int prio)
+int RainScreen_SetDraw(OpenBGI_t* o, RainScreen_t* r, int x, int y, int effect, int level, int prio)
 {
-	r->obj.vt->setPos(&r->obj, x, y);
+	r->obj.vt->setPos(o, &r->obj, x, y);
 	DispObj_SetEffect(&r->obj, effect);
-	r->obj.vt->setLevel(&r->obj, level);
+	r->obj.vt->setLevel(o, &r->obj, level);
 	DispObj_SetPriority(&r->obj, (uint32_t)prio);
 	return 0;
 }
@@ -294,7 +293,7 @@ int RainScreen_SetDraw(RainScreen_t* r, int x, int y, int effect, int level, int
  * screen's own size, or without a mask for -1.  0 ok, 0x80000005 no such
  * bitmap, 0x80000006 wrong mode or size.  The bitmap's generation is
  * remembered: a bitmap loaded into the slot later is ignored. */
-int RainScreen_SetMask(RainScreen_t* r, int bmp)
+int RainScreen_SetMask(OpenBGI_t* o, RainScreen_t* r, int bmp)
 {
 	Bmp_t info;
 	int w, h;
@@ -303,7 +302,7 @@ int RainScreen_SetMask(RainScreen_t* r, int bmp)
 		r->maskBmp = -1;
 		return 0;
 	}
-	if(!BmpMgr_GetInfo(gDispBmpMgr, &info, bmp))
+	if(!BmpMgr_GetInfo(o->gfx.dispBmpMgr, &info, bmp))
 		return (int)0x80000005;
 	if(info.mode != 3)
 		return (int)0x80000006;
@@ -311,7 +310,7 @@ int RainScreen_SetMask(RainScreen_t* r, int bmp)
 	if(w != info.w || h != info.h)
 		return (int)0x80000006;
 	r->maskBmp = bmp;
-	r->maskGen = BmpMgr_Generation(gDispBmpMgr, bmp);
+	r->maskGen = BmpMgr_Generation(o->gfx.dispBmpMgr, bmp);
 	return 0;
 }
 

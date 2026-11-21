@@ -18,6 +18,7 @@
  */
 #include "bgi/gfx/bmpops.h"
 #include "bgi/gfx/bmpmgr.h"
+#include "bgi/core.h"
 
 typedef struct ToneCurve
 {
@@ -26,12 +27,10 @@ typedef struct ToneCurve
 	struct ToneCurve* next;
 } ToneCurve_t;
 
-static ToneCurve_t* gToneCurves;
-
-static ToneCurve_t* ToneCurve_Find(int32_t id)
+static ToneCurve_t* ToneCurve_Find(OpenBGI_t* o, int32_t id)
 {
 	ToneCurve_t* c;
-	for(c = gToneCurves; c; c = c->next)
+	for(c = o->gfx.toneCurves; c; c = c->next)
 		if(c->id == id)
 			return c;
 	return NULL;
@@ -89,14 +88,14 @@ static void Spline3(uint8_t out[256], int x1, int y1)
  * y 0 .. 255: nothing is registered - the original's handler does not
  * report this code, so neither does ours); 0x8000000f no curve `id` to
  * remove. */
-uint32_t ToneCurve_Register(int32_t id, const int32_t* points)
+uint32_t ToneCurve_Register(OpenBGI_t* o, int32_t id, const int32_t* points)
 {
 	ToneCurve_t* c;
 	int k;
 	if(!points)
 	{
 		ToneCurve_t** link;
-		for(link = &gToneCurves; *link; link = &(*link)->next)
+		for(link = &o->gfx.toneCurves; *link; link = &(*link)->next)
 		{
 			if((*link)->id == id)
 			{
@@ -111,13 +110,13 @@ uint32_t ToneCurve_Register(int32_t id, const int32_t* points)
 	for(k = 0; k < 3; k++)
 		if(points[k * 2] <= 0 || points[k * 2] >= 255 || points[k * 2 + 1] < 0 || points[k * 2 + 1] > 255)
 			return 0x16;
-	c = ToneCurve_Find(id);
+	c = ToneCurve_Find(o, id);
 	if(!c)
 	{
 		c = (ToneCurve_t*)BGI_Alloc(sizeof *c);
 		c->id = id;
-		c->next = gToneCurves;
-		gToneCurves = c;
+		c->next = o->gfx.toneCurves;
+		o->gfx.toneCurves = c;
 	}
 	for(k = 0; k < 3; k++)
 		Spline3(c->lut[k], points[k * 2], points[k * 2 + 1]);
@@ -125,13 +124,13 @@ uint32_t ToneCurve_Register(int32_t id, const int32_t* points)
 }
 
 // drop every curve (the graphics manager goes)
-void ToneCurve_FreeAll(void)
+void ToneCurve_FreeAll(OpenBGI_t* o)
 {
-	while(gToneCurves)
+	while(o->gfx.toneCurves)
 	{
-		ToneCurve_t* next = gToneCurves->next;
-		BGI_Free(gToneCurves);
-		gToneCurves = next;
+		ToneCurve_t* next = o->gfx.toneCurves->next;
+		BGI_Free(o->gfx.toneCurves);
+		o->gfx.toneCurves = next;
 	}
 }
 
@@ -178,18 +177,18 @@ static uint32_t TonePixel(uint32_t px, const ToneCurve_t* c, uint32_t monoColour
  * src, 0x8000000f no such curve, 0x80000011 src is not RGB32 / ARGB32,
  * 0x80000013 bad effect, 0x80000014 bad film level, 0x80000015 bad
  * monochrome level. */
-uint32_t BmpOp_ToneCurve(int dst, int src, int32_t curveId, uint32_t monoColour, int monoLevel, uint32_t filmColour,
+uint32_t BmpOp_ToneCurve(OpenBGI_t* o, int dst, int src, int32_t curveId, uint32_t monoColour, int monoLevel, uint32_t filmColour,
 	int effect, int filmLevel)
 {
 	Bmp_t s, d;
 	const ToneCurve_t* c;
 	int y, x, w, h;
-	if(!BmpMgr_GetInfo(gBmpMgr, &s, src))
+	if(!BmpMgr_GetInfo(o->gfx.bmpMgr, &s, src))
 		return 0x8000000au;
-	if(!BmpMgr_Create(gBmpMgr, dst, s.w, s.h, s.mode))
+	if(!BmpMgr_Create(o->gfx.bmpMgr, dst, s.w, s.h, s.mode))
 		return 0x80000009u;
-	BmpMgr_GetInfo(gBmpMgr, &d, dst);
-	c = ToneCurve_Find(curveId);
+	BmpMgr_GetInfo(o->gfx.bmpMgr, &d, dst);
+	c = ToneCurve_Find(o, curveId);
 	if(!c)
 		return 0x8000000fu;
 	if(s.mode != PM_RGB32 && s.mode != PM_ARGB32)

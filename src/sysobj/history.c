@@ -2,12 +2,13 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * history.c - the message back-log (inc/bgi/sysobj/history.h)
+ * history.c - the message back-log (src/include/bgi/sysobj/history.h)
  *
  * A doubly linked list from the newest record to the oldest; the strings
  * are heap copies made at insertion.
  */
 #include "bgi/sysobj/history.h"
+#include "bgi/core.h"
 
 typedef struct HistNode // one record
 {
@@ -20,11 +21,6 @@ typedef struct HistNode // one record
 	struct HistNode* newer; // NULL at the newest record
 	struct HistNode* older; // NULL at the oldest record
 } HistNode_t;
-
-static HistNode_t* gHistOldest; // the two ends of the list, NULL when empty
-static HistNode_t* gHistNewest;
-static uint32_t gHistMax;   // records allowed (History_Reset)
-static uint32_t gHistCount; // records in the list
 
 // free a record and its strings (the caller has unlinked it)
 static void HistNode_Free(HistNode_t* n)
@@ -40,24 +36,24 @@ static void HistNode_Free(HistNode_t* n)
 }
 
 // Drop every record and set the bound.
-void History_Reset(int max)
+void History_Reset(OpenBGI_t* o, int max)
 {
-	HistNode_t* n = gHistNewest;
+	HistNode_t* n = o->sysobj.histNewest;
 	while(n)
 	{
 		HistNode_t* older = n->older;
 		HistNode_Free(n);
 		n = older;
 	}
-	gHistOldest = NULL;
-	gHistNewest = NULL;
-	gHistMax = (uint32_t)max;
-	gHistCount = 0;
+	o->sysobj.histOldest = NULL;
+	o->sysobj.histNewest = NULL;
+	o->sysobj.histMax = (uint32_t)max;
+	o->sysobj.histCount = 0;
 }
 
-int History_Count(void)
+int History_Count(OpenBGI_t* o)
 {
-	return (int)gHistCount;
+	return (int)o->sysobj.histCount;
 }
 
 // a heap copy of an optional string; -1 when it is `maxLen` characters or longer
@@ -77,7 +73,7 @@ static int HistDup(char** dst, const char* s, size_t maxLen)
 /* Append a record as the newest.  The length limits are checked in the
  * order arc, file, name, msg, reading and the result code names the first
  * field that is too long; nothing is kept then. */
-uint32_t History_Add(uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5, uint32_t a6, uint32_t a7,
+uint32_t History_Add(OpenBGI_t* o, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5, uint32_t a6, uint32_t a7,
 	uint32_t a8, uint32_t a9, const char* arc, const char* file, const char* name, const char* msg,
 	const char* reading)
 {
@@ -111,32 +107,32 @@ uint32_t History_Add(uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_
 	n->msg = BGI_Strdup(msg);
 
 	n->newer = NULL;
-	n->older = gHistNewest;
-	if(gHistNewest)
-		gHistNewest->newer = n;
+	n->older = o->sysobj.histNewest;
+	if(o->sysobj.histNewest)
+		o->sysobj.histNewest->newer = n;
 	else
-		gHistOldest = n;
-	gHistNewest = n;
+		o->sysobj.histOldest = n;
+	o->sysobj.histNewest = n;
 
-	if(gHistCount < gHistMax)
+	if(o->sysobj.histCount < o->sysobj.histMax)
 	{
-		gHistCount++;
+		o->sysobj.histCount++;
 	}
 	else
 	{
-		HistNode_t* old = gHistOldest; // the list is full: the oldest record goes
-		gHistOldest = old->newer;
-		gHistOldest->older = NULL;
+		HistNode_t* old = o->sysobj.histOldest; // the list is full: the oldest record goes
+		o->sysobj.histOldest = old->newer;
+		o->sysobj.histOldest->older = NULL;
 		HistNode_Free(old);
 	}
 	return 0;
 }
 
 // History_Add from a record; empty strings count as "not given".
-uint32_t History_AddStruct(const void* recp)
+uint32_t History_AddStruct(OpenBGI_t* o, const void* recp)
 {
 	const HistoryRec_t* r = (const HistoryRec_t*)recp;
-	return History_Add(r->v1, r->v[0], r->v[1], r->v[2], r->v[3], r->v[4], r->v[5], r->v[6], r->v[7],
+	return History_Add(o, r->v1, r->v[0], r->v[1], r->v[2], r->v[3], r->v[4], r->v[5], r->v[6], r->v[7],
 		r->arc[0] ? r->arc : NULL, r->file[0] ? r->file : NULL, r->name[0] ? r->name : NULL, r->msg,
 		r->reading[0] ? r->reading : NULL);
 }
@@ -144,12 +140,12 @@ uint32_t History_AddStruct(const void* recp)
 /* Copy record `idx` (0 = newest) into a HistoryRec_t: the first 0x200
  * bytes are cleared and filled, the reading (beyond them) only on request,
  * so a 0x200-byte buffer suffices without it.  1 ok, 0 for a bad index. */
-int History_Get(void* dst, int idx, int withReading)
+int History_Get(OpenBGI_t* o, void* dst, int idx, int withReading)
 {
 	HistoryRec_t* r = (HistoryRec_t*)dst;
-	HistNode_t* n = gHistNewest;
+	HistNode_t* n = o->sysobj.histNewest;
 	int i;
-	if((uint32_t)idx >= gHistCount)
+	if((uint32_t)idx >= o->sysobj.histCount)
 		return 0;
 	for(i = 0; i < idx; i++)
 		n = n->older;

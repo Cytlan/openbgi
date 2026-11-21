@@ -3,17 +3,13 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * bitmap.c - rectangles, bitmap descriptors, fills and the blit entry
- * points (inc/bgi/gfx/bitmap.h).  The effect routines themselves live in
+ * points (src/include/bgi/gfx/bitmap.h).  The effect routines themselves live in
  * blit.c (copies, blends, add, punch, dim, tint), blit_modes.c (the
  * arithmetic blend modes), blit_filter.c, blit_displace.c, blit_ripple.c,
  * blit_rotate.c, blit_scale.c and blit_xform.c.
  */
 #include "bgi/gfx/bitmap.h"
-
-int gScreenMode;                             // pixel mode of the back buffer
-int gBmpOption;                              // "90 0F": the composition key colour of put ARGB32 pictures
-static int gBlitSse, gBlitSse2, gBlitTuning; // the CPU switches of the original's blitter selection
-static int gBlitTablesReady;                 // Blit_InitTables was called
+#include "bgi/core.h"
 
 static const int gModeBytes[6] = {2, 4, 4, 1, 4, 4}; // bytes per pixel for the modes 0 .. 5; PM_VECDIST (6, 6-byte pixels) has no entry
 
@@ -62,14 +58,14 @@ void Rect_FromBmp(Rect_t* out, const Bmp_t* b)
 
 // ---- modes -----------------------------------------------------------------
 
-int ScreenMode(void)
+int ScreenMode(OpenBGI_t* o)
 {
-	return gScreenMode;
+	return o->gfx.screenMode;
 }
 
-int ScreenBytesPerPixel(void)
+int ScreenBytesPerPixel(OpenBGI_t* o)
 {
-	return ModeBytes(ScreenMode());
+	return ModeBytes(ScreenMode(o));
 }
 
 int ModeBytes(int mode)
@@ -82,43 +78,43 @@ int ModeBits(int mode)
 	return ModeBytes(mode) << 3;
 }
 
-void Gfx_SetScreenMode(int m)
+void Gfx_SetScreenMode(OpenBGI_t* o, int m)
 {
-	gScreenMode = m;
+	o->gfx.screenMode = m;
 }
 
-void Gfx_SetBmpOption(int v)
+void Gfx_SetBmpOption(OpenBGI_t* o, int v)
 {
-	gBmpOption = v;
+	o->gfx.bmpOption = v;
 }
 
-int Gfx_GetBmpOption(void)
+int Gfx_GetBmpOption(OpenBGI_t* o)
 {
-	return gBmpOption;
+	return o->gfx.bmpOption;
 }
 
-void Blit_SetSse(int on)
+void Blit_SetSse(OpenBGI_t* o, int on)
 {
-	gBlitSse = on;
+	o->gfx.blitSse = on;
 }
 
-void Blit_SetSse2(int on)
+void Blit_SetSse2(OpenBGI_t* o, int on)
 {
-	gBlitSse2 = on;
+	o->gfx.blitSse2 = on;
 }
 
-void Blit_SetTuning(int v)
+void Blit_SetTuning(OpenBGI_t* o, int v)
 {
-	gBlitTuning = v;
+	o->gfx.blitTuning = v;
 }
 
 /* Prepare the multiply tables of the MMX blitters (entry i holds
  * i * 0x100010001 for i = 0 .. 0x100).  The C blitters compute the products
  * directly; only the flag is kept so that the start-up call sequence is the
  * same as the original's. */
-void Blit_InitTables(void)
+void Blit_InitTables(OpenBGI_t* o)
 {
-	gBlitTablesReady = 1;
+	o->gfx.blitTablesReady = 1;
 }
 
 // equal modes, or RGB32 <-> ARGB32
@@ -149,9 +145,9 @@ int Bmp_ModesMatch(const Bmp_t* a, const Bmp_t* b)
 	}
 }
 
-int Bmp_ScreenCompatible(const Bmp_t* b)
+int Bmp_ScreenCompatible(OpenBGI_t* o, const Bmp_t* b)
 {
-	return ModesCompatible(ScreenMode(), b->mode);
+	return ModesCompatible(ScreenMode(o), b->mode);
 }
 
 // ---- descriptors ------------------------------------------------------------
@@ -177,9 +173,9 @@ int Bmp_Alloc(Bmp_t* b, int w, int h, int mode)
 }
 
 // Bmp_Alloc in the back buffer's pixel mode; withAlpha asks for ARGB32 in place of RGB32
-int Bmp_AllocScreen(Bmp_t* b, int w, int h, int withAlpha)
+int Bmp_AllocScreen(OpenBGI_t* o, Bmp_t* b, int w, int h, int withAlpha)
 {
-	int mode = ScreenMode();
+	int mode = ScreenMode(o);
 	if(withAlpha && mode == PM_RGB32)
 		mode = PM_ARGB32;
 	return Bmp_Alloc(b, w, h, mode);

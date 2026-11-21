@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * tests/win32wide.c - unit test of the Win32 back end's string conversions
- *                     (src/os/win32/wide.c, declared in inc/bgi/os_win32.h)
+ *                     (src/host/win32/wide.c, declared in src/host/os_win32.h)
  *                     run on a host; built on its own by the Makefile as
- *                     bin/test_win32wide, against the stub windows.h of
+ *                     test_win32wide, against the stub windows.h of
  *                     tools/win32stub/ and with 16-bit wchar_t
  *
  * wide.c needs six functions of Windows: the two code page converters and,
@@ -38,25 +38,15 @@
  * are "タユタマ", Tayutama, in Shift-JIS and in UTF-16); W_BJORN is "Bjørn",
  * a name with a letter code page 932 does not have.
  */
-#include "bgi/os_win32.h"
+#include "host/os_win32.h"
 
-#include "bgi/os.h"
-#include "bgi/os_common.h"
+#include "host/os.h"
+#include "host/os_common.h"
 
 #include <errno.h>
 #include <iconv.h>
 
-static int gFails; // the number of failed checks so far
-// evaluate a condition; print it with its location and count a failure when it is false
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 // ---- the mock of Windows -----------------------------------------------------------------------
 
@@ -356,21 +346,21 @@ static void TestCommandLine(void)
 {
 	char out[0x400];
 	puts("command");
-	CHECK(Win32_CmdLineFromWide(L"bgi.exe", out, sizeof out) == 0 && out[0] == 0);
+	CHECK(Win32_CmdLineFromWide(L"openbgi.exe", out, sizeof out) == 0 && out[0] == 0);
 	CHECK(Win32_CmdLineFromWide(NULL, out, sizeof out) == 0);
-	Win32_CmdLineFromWide(L"bgi.exe  --list-engines", out, sizeof out);
+	Win32_CmdLineFromWide(L"openbgi.exe  --list-engines", out, sizeof out);
 	CHECK(strcmp(out, "--list-engines") == 0);
-	Win32_CmdLineFromWide(L"\"C:\\Program Files\\OpenBGI\\bgi.exe\" --engine=1.69/444  \"Do not use mutex.\" boot.arc", out, sizeof out);
+	Win32_CmdLineFromWide(L"\"C:\\Program Files\\OpenBGI\\openbgi.exe\" --engine=1.69/444  \"Do not use mutex.\" boot.arc", out, sizeof out);
 	CHECK(strcmp(out, "--engine=1.69/444  \"Do not use mutex.\" boot.arc") == 0);
-	Win32_CmdLineFromWide(L"bgi.exe " W_TAYUTAMA L".arc", out, sizeof out);
+	Win32_CmdLineFromWide(L"openbgi.exe " W_TAYUTAMA L".arc", out, sizeof out);
 	CHECK(strcmp(out, SJ_TAYUTAMA ".arc") == 0);
 	// an option's value and a quoted path with a blank are paths of their own: both get an alias
-	Win32_CmdLineFromWide(L"\"F:\\x\\bgi.exe\" --games=F:\\" W_BJORN L"\\g.json \"G:\\My " W_BJORN L"\\boot dir\\b.arc\" --raw", out, sizeof out);
+	Win32_CmdLineFromWide(L"\"F:\\x\\openbgi.exe\" --games=F:\\" W_BJORN L"\\g.json \"G:\\My " W_BJORN L"\\boot dir\\b.arc\" --raw", out, sizeof out);
 	CHECK(strcmp(out, "--games=F:\\Bj_rn\\g.json \"G:\\My Bj_rn\\boot dir\\b.arc\" --raw") == 0);
 	CHECK(Wide("F:\\Bj_rn\\g.json", L"F:\\" W_BJORN L"\\g.json"));
 	CHECK(Wide("G:\\My Bj_rn\\boot dir\\b.arc", L"G:\\My " W_BJORN L"\\boot dir\\b.arc"));
 	// an argument that does not fit the buffer is left out whole
-	CHECK(Win32_CmdLineFromWide(L"bgi.exe ab cdefgh", out, 5) == 3 && strcmp(out, "ab ") == 0);
+	CHECK(Win32_CmdLineFromWide(L"openbgi.exe ab cdefgh", out, 5) == 3 && strcmp(out, "ab ") == 0);
 }
 
 static void TestHelpers(void)

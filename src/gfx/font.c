@@ -2,61 +2,59 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * font.c - glyph rasteriser, glyph cache and font cache (inc/bgi/gfx/font.h)
+ * font.c - glyph rasteriser, glyph cache and font cache (src/include/bgi/gfx/font.h)
  *
- * The original draws each character with GDI into an 8-bit DIB whose
- * palette runs from white (index 0) to black (255), at gAaScale times the
- * requested size, and then averages gAaScale x gAaScale blocks into a
- * (2*size) x size coverage cell.  Only the GDI call itself is delegated to
- * the OS layer (OS_FontRender); the oversampling, the box filter, the
- * cell layout, the ink-extent metrics and the LRU cache are reproduced
- * here exactly.  The painting helpers at the end turn a coverage cell into
- * pixels of a bitmap in the three screen formats.
+ * The original draws each character with GDI into an 8-bit DIB whose palette
+ * runs from white (index 0) to black (255), at o->font.aaScale times the
+ * requested size, and then averages o->font.aaScale x o->font.aaScale blocks
+ * into a (2*size) x size coverage cell.  Only the GDI call itself is
+ * delegated (Typeface_Render, gfx/typeface.c); the oversampling, the box
+ * filter, the cell layout, the ink-extent metrics and the LRU cache are
+ * reproduced here exactly.  The painting helpers at the end turn a coverage
+ * cell into pixels of a bitmap in the three screen formats.
  */
 #include "bgi/gfx/font.h"
 #include "bgi/gfx/bmpops.h" // FontNames_Resolve
 #include "bgi/strutil.h"    // TextPutChar
+#include "bgi/core.h"
 
 // ---- antialiasing parameters ("90 0D") ---------------------------------------------------------
-int gAaShift = 0;
-int gAaScale = 1;
-int gAaRowShift = 0;
 
 /* "90 0D": level 0..3 selects the oversampling (2, 4, 8 or 16 samples per
  * axis); levels above 3 are ignored (0), negative levels switch
- * oversampling off.  1 when applied.  The globals are read both when a
+ * oversampling off.  1 when applied.  The settings are read both when a
  * font is created (the buffer size) and when a glyph is rendered (the
  * filter), so a change does not apply cleanly to fonts already open. */
-int Gfx_SetAntialias(int level)
+int Gfx_SetAntialias(OpenBGI_t* o, int level)
 {
 	if(level > 3)
 		return 0;
 	switch(level)
 	{
 		case 0:
-			gAaShift = 2;
-			gAaScale = 2;
-			gAaRowShift = 1;
+			o->font.aaShift = 2;
+			o->font.aaScale = 2;
+			o->font.aaRowShift = 1;
 			break;
 		case 1:
-			gAaShift = 4;
-			gAaScale = 4;
-			gAaRowShift = 2;
+			o->font.aaShift = 4;
+			o->font.aaScale = 4;
+			o->font.aaRowShift = 2;
 			break;
 		case 2:
-			gAaShift = 6;
-			gAaScale = 8;
-			gAaRowShift = 3;
+			o->font.aaShift = 6;
+			o->font.aaScale = 8;
+			o->font.aaRowShift = 3;
 			break;
 		case 3:
-			gAaShift = 8;
-			gAaScale = 16;
-			gAaRowShift = 4;
+			o->font.aaShift = 8;
+			o->font.aaScale = 16;
+			o->font.aaRowShift = 4;
 			break;
 		default:
-			gAaShift = 0;
-			gAaScale = 1;
-			gAaRowShift = 0;
+			o->font.aaShift = 0;
+			o->font.aaScale = 1;
+			o->font.aaRowShift = 0;
 			break; // level < 0
 	}
 	return 1;
@@ -73,12 +71,12 @@ FontRaster_t* FontRaster_New(void)
 	return f;
 }
 
-// release the OS font and the oversampling buffer; the cells stay allocated
+// release the font and the oversampling buffer; the cells stay allocated
 void FontRaster_Close(FontRaster_t* f)
 {
 	if(!f->open)
 		return;
-	OS_FontClose(f->os);
+	Typeface_Close(f->os);
 	f->os = NULL;
 	BGI_Free(f->ss);
 	f->ss = NULL;
@@ -113,21 +111,21 @@ static void FontRaster_AllocCells(FontRaster_t* f, int size, int capacity)
 	}
 }
 
-/* open the OS font at gAaScale times the size, with the average
- * (half-width) character width gAaScale * size * widthPct / 200 so that a
- * full-width glyph fills the whole cell, and allocate the oversampling
- * buffer of renderW * gAaScale x gAaScale * size bytes (rows dword
- * aligned).  1 ok, 0 when the OS refuses the font. */
-static int FontRaster_CreateFont(FontRaster_t* f, const char* face, int size, int widthPct, int bold, int italic)
+/* open the font at o->font.aaScale times the size, with the average
+ * (half-width) character width o->font.aaScale * size * widthPct / 200
+ * so that a full-width glyph fills the whole cell, and allocate the
+ * oversampling buffer of renderW * o->font.aaScale x o->font.aaScale *
+ * size bytes (rows dword aligned).  1 ok, 0 when no font can be had. */
+static int FontRaster_CreateFont(OpenBGI_t* o, FontRaster_t* f, const char* face, int size, int widthPct, int bold, int italic)
 {
 	f->glyphW = (size * widthPct) / 100;
 	// an italic font gets a DIB a quarter wider for the shear
 	f->renderW = italic ? (size * widthPct * 5) / 400 : f->glyphW;
 	if(f->renderW > f->cellW)
 		f->renderW = f->cellW;
-	f->ssH = gAaScale * size;
-	f->ssW = f->renderW * gAaScale;
-	f->os = OS_FontOpen(face, f->ssH, (gAaScale * size * widthPct) / 200, bold, italic);
+	f->ssH = o->font.aaScale * size;
+	f->ssW = f->renderW * o->font.aaScale;
+	f->os = Typeface_Open(o, face, f->ssH, (o->font.aaScale * size * widthPct) / 200, bold, italic);
 	if(!f->os)
 		return 0;
 	f->ssPitch = (f->ssW + 3) & ~3; // DIB rows are dword aligned
@@ -143,7 +141,7 @@ static int FontRaster_CreateFont(FontRaster_t* f, const char* face, int size, in
 /* (re)open the rasteriser: `capacity` glyphs are cached.  0 ok, 0x80000001
  * capacity < 2, 0x80000002 size not 4..200, 0x80000003 width not 25..200,
  * 0x80000004 the font could not be created. */
-int FontRaster_Init(FontRaster_t* f, const char* face, int size, int widthPct, int bold, int italic, int capacity)
+int FontRaster_Init(OpenBGI_t* o, FontRaster_t* f, const char* face, int size, int widthPct, int bold, int italic, int capacity)
 {
 	FontRaster_Close(f);
 	if(capacity < 2)
@@ -153,28 +151,29 @@ int FontRaster_Init(FontRaster_t* f, const char* face, int size, int widthPct, i
 	if(widthPct < 25 || widthPct > 200)
 		return (int)0x80000003;
 	FontRaster_AllocCells(f, size, capacity);
-	if(!FontRaster_CreateFont(f, face, size, widthPct, bold, italic))
+	if(!FontRaster_CreateFont(o, f, face, size, widthPct, bold, italic))
 		return (int)0x80000004;
 	f->open = 1;
 	return 0;
 }
 
-/* draw one character through the OS layer and reduce it into `cell`
- * (box filter of gAaScale x gAaScale samples, or a plain copy without
- * oversampling); the columns right of renderW are cleared.  Fills the ink
- * extent into g->left .. g->bottom. */
-static void FontRaster_Render(FontRaster_t* f, Glyph_t* g, uint8_t* cell, int code)
+/* draw one character with the engine's typeface (the host's renderer or
+ * its own) and reduce it into `cell` (box filter of o->font.aaScale x
+ * o->font.aaScale samples, or a plain
+ * copy without oversampling); the columns right of renderW are cleared.
+ * Fills the ink extent into g->left .. g->bottom. */
+static void FontRaster_Render(OpenBGI_t* o, FontRaster_t* f, Glyph_t* g, uint8_t* cell, int code)
 {
 	char str[8];
 	int len, x, y, size = f->size, cw = f->cellW, gw = f->renderW;
 
 	// the character's bytes in the text encoding (Shift-JIS, or UTF-8 from "81 00")
-	len = TextPutChar(str, (uint32_t)code);
+	len = TextPutChar(o, str, (uint32_t)code);
 	str[len] = 0;
 	memset(f->ss, 0, (size_t)f->ssBytes);
-	OS_FontRender(f->os, str, len, f->ss, f->ssPitch, f->ssW, f->ssH);
+	Typeface_Render(f->os, str, len, f->ss, f->ssPitch, f->ssW, f->ssH);
 
-	if(code == 0x20 || code == (gTextUtf8 ? 0x3000 : 0x8140))
+	if(code == 0x20 || code == (o->enc.textUtf8 ? 0x3000 : 0x8140))
 	{ // spaces: blank cell, half advance
 		memset(cell, 0, (size_t)f->cellBytes);
 		g->left = 0;
@@ -184,7 +183,7 @@ static void FontRaster_Render(FontRaster_t* f, Glyph_t* g, uint8_t* cell, int co
 		return;
 	}
 
-	if(gAaScale > 1)
+	if(o->font.aaScale > 1)
 	{
 		const uint8_t* rowBase = f->ss;
 		uint8_t* d = cell;
@@ -195,15 +194,15 @@ static void FontRaster_Render(FontRaster_t* f, Glyph_t* g, uint8_t* cell, int co
 			{
 				const uint8_t* p = col;
 				int sum = 0, i, j;
-				for(j = 0; j < gAaScale; j++, p += f->ssPitch)
-					for(i = 0; i < gAaScale; i++)
+				for(j = 0; j < o->font.aaScale; j++, p += f->ssPitch)
+					for(i = 0; i < o->font.aaScale; i++)
 						sum += p[i];
-				*d++ = (uint8_t)(sum >> gAaShift);
-				col += gAaScale;
+				*d++ = (uint8_t)(sum >> o->font.aaShift);
+				col += o->font.aaScale;
 			}
 			for(; x < cw; x++)
 				*d++ = 0;
-			rowBase += f->ssPitch << gAaRowShift;
+			rowBase += f->ssPitch << o->font.aaRowShift;
 		}
 	}
 	else
@@ -256,7 +255,7 @@ static void FontRaster_Render(FontRaster_t* f, Glyph_t* g, uint8_t* cell, int co
  * one visited.  *out receives a copy of the glyph record (its `pixels`
  * point into the cache and stay valid until the slot is recycled); the
  * result is `out`. */
-const Glyph_t* FontRaster_Glyph(FontRaster_t* f, Glyph_t* out, int code)
+const Glyph_t* FontRaster_Glyph(OpenBGI_t* o, FontRaster_t* f, Glyph_t* out, int code)
 {
 	GlyphSlot_t *prev = NULL, *s = f->lru;
 	int i;
@@ -286,7 +285,7 @@ const Glyph_t* FontRaster_Glyph(FontRaster_t* f, Glyph_t* out, int code)
 		}
 		s->g.code = code;
 		s->g.dbcs = code >= 0x100;
-		FontRaster_Render(f, &s->g, s->g.pixels, code);
+		FontRaster_Render(o, f, &s->g, s->g.pixels, code);
 	}
 	s->next = f->lru;
 	f->lru = s;
@@ -294,17 +293,17 @@ const Glyph_t* FontRaster_Glyph(FontRaster_t* f, Glyph_t* out, int code)
 	return out;
 }
 
-/* the font's own advance of `code` (see font.h): the OS layer measures at
+/* the font's own advance of `code` (see font.h): the typeface measures at
  * the oversampled size, so the value is scaled back down */
-int FontRaster_Advance(FontRaster_t* f, int code)
+int FontRaster_Advance(OpenBGI_t* o, FontRaster_t* f, int code)
 {
 	char str[8];
 	int len;
 	if(!f || !f->os)
 		return 0;
-	len = TextPutChar(str, (uint32_t)code);
+	len = TextPutChar(o, str, (uint32_t)code);
 	str[len] = 0;
-	return OS_FontCharAdvance(f->os, str, len) / gAaScale;
+	return Typeface_Advance(f->os, str, len) / o->font.aaScale;
 }
 
 // ---- FontCache ---------------------------------------------------------------------------------
@@ -398,7 +397,7 @@ int FontCache_AmountFor(FontCache_t* c, const char* name, int size, int widthPct
  * resolved through FontNames_Resolve, the glyph amount from the requests)
  * and append it to the list; *handle receives its number, one above the
  * last entry's.  0 ok, or the FontRaster_Init error (*handle is 0 then). */
-int FontCache_Open(FontCache_t* c, int* handle, const char* name, int size, int widthPct, int bold)
+int FontCache_Open(OpenBGI_t* o, FontCache_t* c, int* handle, const char* name, int size, int widthPct, int bold)
 {
 	FontEntry_t *e, *last = NULL;
 	FontRaster_t* f;
@@ -413,7 +412,7 @@ int FontCache_Open(FontCache_t* c, int* handle, const char* name, int size, int 
 		}
 	}
 	f = FontRaster_New();
-	r = FontRaster_Init(f, FontNames_Resolve(name), size, widthPct, bold, 0, FontCache_AmountFor(c, name, size, widthPct, bold));
+	r = FontRaster_Init(o, f, FontNames_Resolve(o, name), size, widthPct, bold, 0, FontCache_AmountFor(c, name, size, widthPct, bold));
 	if(r != 0)
 	{
 		FontRaster_Delete(f); // the original leaks it
@@ -457,11 +456,11 @@ int FontCache_GetInfo(FontCache_t* c, FontInfo_t* out, int handle)
 }
 
 // "91 0F" (1.529 on): FontCache_Open, then the two extra widths stored on the rasteriser
-int FontCache_OpenExtra(FontCache_t* c, int* handle, const char* name, int size, int widthPct, int bold, int extraUpright,
+int FontCache_OpenExtra(OpenBGI_t* o, FontCache_t* c, int* handle, const char* name, int size, int widthPct, int bold, int extraUpright,
 	int extraItalic)
 {
 	FontInfo_t fi;
-	int r = FontCache_Open(c, handle, name, size, widthPct, bold);
+	int r = FontCache_Open(o, c, handle, name, size, widthPct, bold);
 	if(r == 0 && FontCache_GetInfo(c, &fi, *handle))
 	{
 		fi.font->extraW[0] = extraUpright;
@@ -484,11 +483,11 @@ void Bmp_CropGlyph(Bmp_t* b, const Glyph_t* g)
  * ARGB32 gets the colour with the coverage as alpha, RGB32 a 0/1 mask,
  * RGB16 the 5-5-5 colour scaled by the coverage; other modes are left
  * alone. */
-void Font_PaintGlyph(Bmp_t* cell, Glyph_t* g, int code, FontRaster_t* font, uint32_t colour)
+void Font_PaintGlyph(OpenBGI_t* o, Bmp_t* cell, Glyph_t* g, int code, FontRaster_t* font, uint32_t colour)
 {
 	int rows, cols, y, x;
 	const uint8_t* src;
-	FontRaster_Glyph(font, g, code);
+	FontRaster_Glyph(o, font, g, code);
 	rows = cell->h < font->size ? cell->h : font->size;
 	cols = cell->w < font->cellW ? cell->w : font->cellW;
 	src = g->pixels;

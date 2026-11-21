@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * mosaic.c - background type 11: the mosaic ("flip") transition between two
- *            bitmaps (inc/bgi/gfx/background.h; selected by "90 4A")
+ *            bitmaps (src/include/bgi/gfx/background.h; selected by "90 4A")
  *
  * The front bitmap is drawn as a mosaic of (level + 1)-pixel blocks
  * (Blit_Flip).  With `link` set the back bitmap (or a solid colour) is
@@ -14,16 +14,16 @@
  */
 #include "background_internal.h"
 
-static void Bg11_Destroy(DispObj_t* o, int flags)
+static void Bg11_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	Background_Dtor((Background_t*)o);
+	Background_Dtor((Background_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
-void Bg11_Ctor(Bg11_t* b)
+void Bg11_Ctor(OpenBGI_t* o, Bg11_t* b)
 {
-	Background_Ctor(&b->bg, 11);
+	Background_Ctor(o, &b->bg, 11);
 	b->bg.obj.vt = &Bg11_Vtbl.base;
 	b->front = -1;
 	b->back = -1;
@@ -33,21 +33,21 @@ void Bg11_Ctor(Bg11_t* b)
 
 /* front and back are screen-sized bitmaps, or back is BG_BLACK / BG_WHITE.
  * 0 ok, 0x80000001 front unusable, 0x80000002 back unusable. */
-int Bg11_Set(Bg11_t* b, int front, int back)
+int Bg11_Set(OpenBGI_t* o, Bg11_t* b, int front, int back)
 {
-	if(!Bg_BitmapUsable(front))
+	if(!Bg_BitmapUsable(o, front))
 		return (int)0x80000001;
 	if(back == BG_BLACK || back == BG_WHITE)
 	{
 		b->front = front;
-		b->frontGen = BgGen(front);
+		b->frontGen = BgGen(o, front);
 		b->back = back;
 		return 0;
 	}
-	if(!Bg_BitmapUsable(back))
+	if(!Bg_BitmapUsable(o, back))
 		return (int)0x80000002;
-	b->frontGen = BgGen(front);
-	b->backGen = BgGen(back);
+	b->frontGen = BgGen(o, front);
+	b->backGen = BgGen(o, back);
 	b->front = front;
 	b->back = back;
 	return 0;
@@ -76,13 +76,13 @@ int Bg11_SetLink(Bg11_t* b, int link)
  * bitmaps are not cropped to `local`: the mosaic reads whole blocks, and
  * the compositor does not band this background type.  0 once the front
  * bitmap has been replaced; a replaced back bitmap is skipped. */
-static int Bg11_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
+static int Bg11_Render(OpenBGI_t* o, Background_t* bg, Bmp_t* dst, const Rect_t* local)
 {
 	Bg11_t* b = (Bg11_t*)bg;
 	Bmp_t front, back;
 	int level;
 	(void)local;
-	if(!BgCurrent(&front, b->front, b->frontGen))
+	if(!BgCurrent(o, &front, b->front, b->frontGen))
 		return 0;
 	level = DispObj_EffectiveLevel(&b->bg.obj);
 	if(b->back == BG_BLACK || b->back == BG_WHITE)
@@ -92,7 +92,7 @@ static int Bg11_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
 	}
 	else if(b->link == 1)
 	{
-		if(BgCurrent(&back, b->back, b->backGen))
+		if(BgCurrent(o, &back, b->back, b->backGen))
 			Blit_Flip(dst, &back, 0x100 - level, b->style, 0);
 	}
 	Blit_Flip(dst, &front, level, b->style, b->link == 1 ? level : 0);

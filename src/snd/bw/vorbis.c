@@ -8,11 +8,12 @@
  * Three back ends: libvorbisfile when BGI_HAVE_VORBISFILE is defined (the
  * original links it statically), stb_vorbis when BGI_USE_STB_VORBIS is,
  * and - without either - silence of the right length, so that games whose
- * every sound is Vorbis still run (see docs/building.md).  A pair stream
+ * every sound is Vorbis still run (see docs/dev/building.md).  A pair stream
  * has two decoders, one per part; `which` selects it.  The back ends
  * share Vorbis_Decode, which pulls raw PCM bytes through Vorbis_ReadBytes.
  */
 #include "bw_internal.h"
+#include "bgi/core.h"
 
 #if defined(BGI_HAVE_VORBISFILE)
 // the ov_callbacks: the source minus its 0x40-byte header, positions relative to the Ogg data
@@ -46,7 +47,7 @@ static long VorbisTell(void* ds)
 }
 
 // open decoder `which` on the stream's current source; 1 ok, 0 when libvorbisfile rejects the data
-int Vorbis_Open(WmStream_t* s, int which)
+int Vorbis_Open(OpenBGI_t* o, WmStream_t* s, int which)
 {
 	ov_callbacks cb;
 	cb.read_func = VorbisRead;
@@ -82,7 +83,7 @@ uint32_t Vorbis_ReadBytes(WmStream_t* s, int which, uint8_t* buf, uint32_t n)
 }
 #elif defined(BGI_USE_STB_VORBIS)
 // load the Ogg data behind the header into memory and open decoder `which` on it; 1 ok
-int Vorbis_Open(WmStream_t* s, int which)
+int Vorbis_Open(OpenBGI_t* o, WmStream_t* s, int which)
 {
 	uint32_t n = WmSource_Size(s->src) - 0x40;
 	int err = 0;
@@ -122,13 +123,12 @@ uint32_t Vorbis_ReadBytes(WmStream_t* s, int which, uint8_t* buf, uint32_t n)
 /* no Vorbis decoder in this build: the stream opens and plays as silence
  * of the right length, so that games whose every sound is Vorbis still
  * run (the loader would otherwise report a fatal error for each effect) */
-int Vorbis_Open(WmStream_t* s, int which)
+int Vorbis_Open(OpenBGI_t* o, WmStream_t* s, int which)
 {
-	static int warned; // the notice goes to stderr once per run
-	if(!warned)
+	if(!o->snd.noDecoderSaid)
 	{
-		fprintf(stderr, "bgi: built without a Vorbis decoder; BW codec 3 sounds play as silence\n");
-		warned = 1;
+		fprintf(stderr, "openbgi: built without a Vorbis decoder; BW codec 3 sounds play as silence\n");
+		o->snd.noDecoderSaid = 1;
 	}
 	return 1;
 }

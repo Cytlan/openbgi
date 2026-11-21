@@ -4,7 +4,7 @@
  *
  * bpc_internal.h - what the program decompiler (bpdec.c) and compiler
  *                  (bpcomp.c) share: the operator table and the shapes of
- *                  the original compiler's output (docs/bpc.md)
+ *                  the original compiler's output (docs/modding/programs.md)
  *
  * The shapes, as both sides rely on them:
  *   function   push_fp; push F; add; set_fp; (push_local_addr n; store 2)*
@@ -54,7 +54,6 @@
 #define BPC_INTERNAL_H_
 
 #include "bgi/bpc.h"
-#include "bgi/os.h"
 
 // the binary operators: base opcode, source spelling and precedence (higher binds tighter)
 typedef struct BpcOperator

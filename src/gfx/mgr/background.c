@@ -4,10 +4,10 @@
  *
  * background.c - the graphics manager's background operations: replacing the
  *                background object by type, its bitmaps, the layers
- *                (inc/bgi/gfx/gfxmgr.h)
+ *                (src/include/bgi/gfx/gfxmgr.h)
  *
  * Each of the "90 40" .. "90 4A" and "91 40" instructions selects one of
- * the background types of inc/bgi/gfx/background.h: the Gfx_BgSet*
+ * the background types of src/include/bgi/gfx/background.h: the Gfx_BgSet*
  * wrapper swaps the manager's background object for one of that type
  * (Gfx_SetBgType) and hands the arguments to the new object's setters,
  * mapping their 0x8000000n results onto the small codes the instruction
@@ -30,23 +30,23 @@
  * types give type 1); the new object takes the visibility and mode of
  * the last Gfx_BgShow.  Then tell the compositor the type and repaint
  * everything. */
-void Gfx_SetBgType(Gfx_t* g, int type)
+void Gfx_SetBgType(OpenBGI_t* o, Gfx_t* g, int type)
 {
 	Background_t* bg = g->background;
 
 	if(type != bg->typeId)
 	{
 		Compositor_Remove(g->comp, &bg->obj);
-		bg->obj.vt->destroy(&bg->obj, 1);
+		bg->obj.vt->destroy(o, &bg->obj, 1);
 		g->background = NULL;
 	}
 	if(g->background == NULL)
 	{
-		bg = Background_Create((uint32_t)(type - 1) < 12u ? type : 1);
+		bg = Background_Create(o, (uint32_t)(type - 1) < 12u ? type : 1);
 		g->background = bg;
-		Compositor_Add(g->comp, &bg->obj);
-		bg->obj.vt->setVisible(&bg->obj, g->bgVisible);
-		((const BackgroundVtbl_t*)bg->obj.vt)->setMode(bg, g->bgMode);
+		Compositor_Add(o, g->comp, &bg->obj);
+		bg->obj.vt->setVisible(o, &bg->obj, g->bgVisible);
+		((const BackgroundVtbl_t*)bg->obj.vt)->setMode(o, bg, g->bgMode);
 	}
 	Compositor_SetBgType(g->comp, g->background->typeId);
 	Compositor_InvalidateAll(g->comp);
@@ -61,13 +61,13 @@ int Gfx_BgTypeId(Gfx_t* g)
 /* "90 4C": show / hide the background and set its mode (0 paints black,
  * anything else renders the type); both are remembered for the next
  * background object.  The whole screen is repainted. */
-void Gfx_BgShow(Gfx_t* g, int visible, int mode)
+void Gfx_BgShow(OpenBGI_t* o, Gfx_t* g, int visible, int mode)
 {
 	Background_t* bg = g->background;
 	g->bgVisible = visible;
 	g->bgMode = mode;
-	bg->obj.vt->setVisible(&bg->obj, visible);
-	((const BackgroundVtbl_t*)bg->obj.vt)->setMode(bg, mode);
+	bg->obj.vt->setVisible(o, &bg->obj, visible);
+	((const BackgroundVtbl_t*)bg->obj.vt)->setMode(o, bg, mode);
 	Compositor_InvalidateAll(g->comp);
 }
 
@@ -75,29 +75,29 @@ void Gfx_BgShow(Gfx_t* g, int visible, int mode)
 #define BGOBJ(g) (&(g)->background->obj)
 
 // "90 40": type 1, one screen-sized bitmap; 1 ok, 0 the bitmap is unusable
-int Gfx_BgSetBitmap(Gfx_t* g, int bmp)
+int Gfx_BgSetBitmap(OpenBGI_t* o, Gfx_t* g, int bmp)
 {
-	Gfx_SetBgType(g, 1);
-	return Bg1_Set((Bg1_t*)BG(g), bmp);
+	Gfx_SetBgType(o, g, 1);
+	return Bg1_Set(o, (Bg1_t*)BG(g), bmp);
 }
 
 /* "90 41": type 2, `bmp` cross-faded by `level` with `second` (a bitmap
  * or BG_BLACK / BG_WHITE); 1 ok, 0 a bitmap is unusable */
-int Gfx_BgSetFade(Gfx_t* g, int bmp, int second, int level)
+int Gfx_BgSetFade(OpenBGI_t* o, Gfx_t* g, int bmp, int second, int level)
 {
-	Gfx_SetBgType(g, 2);
-	BGOBJ(g)->vt->setLevel(BGOBJ(g), level);
-	return Bg2_Set((Bg2_t*)BG(g), bmp, second);
+	Gfx_SetBgType(o, g, 2);
+	BGOBJ(g)->vt->setLevel(o, BGOBJ(g), level);
+	return Bg2_Set(o, (Bg2_t*)BG(g), bmp, second);
 }
 
 /* "90 42": type 3, the 2 x 2 tiled view of four bitmaps with its origin
  * at (x, y); 0 ok, 1 the origin is out of range, 2 a bitmap is unusable */
-int Gfx_BgSetScroll(Gfx_t* g, int b0, int b1, int b2, int b3, int x, int y)
+int Gfx_BgSetScroll(OpenBGI_t* o, Gfx_t* g, int b0, int b1, int b2, int b3, int x, int y)
 {
-	Gfx_SetBgType(g, 3);
-	if(!Bg3_SetOrigin((Bg3_t*)BG(g), x, y))
+	Gfx_SetBgType(o, g, 3);
+	if(!Bg3_SetOrigin(o, (Bg3_t*)BG(g), x, y))
 		return 1;
-	return Bg3_Set((Bg3_t*)BG(g), b0, b1, b2, b3) ? 0 : 2;
+	return Bg3_Set(o, (Bg3_t*)BG(g), b0, b1, b2, b3) ? 0 : 2;
 }
 
 /* "90 43": type 4, bmp1 at (x1, y1) over bmp2 (a bitmap or a sentinel)
@@ -105,23 +105,23 @@ int Gfx_BgSetScroll(Gfx_t* g, int b0, int b1, int b2, int b3, int x, int y)
  * -1 = none, `param` the threshold parameter).  0 ok, 1 / 2 bmp1 / bmp2
  * missing, 3 the gray map missing, 4 not grayscale, 5 not screen sized,
  * -1 any other result. */
-int Gfx_BgSetBlend(Gfx_t* g, int x1, int y1, int bmp1, int x2, int y2, int bmp2, int gray, int param, int level)
+int Gfx_BgSetBlend(OpenBGI_t* o, Gfx_t* g, int x1, int y1, int bmp1, int x2, int y2, int bmp2, int gray, int param, int level)
 {
 	uint32_t r;
 
-	Gfx_SetBgType(g, 4);
-	r = (uint32_t)Bg4_Set((Bg4_t*)BG(g), x1, y1, bmp1, x2, y2, bmp2);
+	Gfx_SetBgType(o, g, 4);
+	r = (uint32_t)Bg4_Set(o, (Bg4_t*)BG(g), x1, y1, bmp1, x2, y2, bmp2);
 	if(r == 0x80000001u)
 		return 1;
 	if(r == 0x80000002u)
 		return 2;
 	if(r != 0)
 		return -1;
-	r = (uint32_t)Bg4_SetWipe((Bg4_t*)BG(g), gray, param);
+	r = (uint32_t)Bg4_SetWipe(o, (Bg4_t*)BG(g), gray, param);
 	switch(r)
 	{
 		case 0:
-			BGOBJ(g)->vt->setLevel(BGOBJ(g), level);
+			BGOBJ(g)->vt->setLevel(o, BGOBJ(g), level);
 			return 0;
 		case 0x80000003u: return 3;
 		case 0x80000004u: return 4;
@@ -132,13 +132,13 @@ int Gfx_BgSetBlend(Gfx_t* g, int x1, int y1, int bmp1, int x2, int y2, int bmp2,
 
 /* "90 44": type 5, the flip book of the n bitmaps in `list` with frame
  * `level` shown; 0 ok, 1 n is not 2..32, 2 a bitmap is unusable */
-int Gfx_BgSetFrames(Gfx_t* g, int n, const int* list, int level)
+int Gfx_BgSetFrames(OpenBGI_t* o, Gfx_t* g, int n, const int* list, int level)
 {
 	uint32_t r;
 
-	Gfx_SetBgType(g, 5);
-	BGOBJ(g)->vt->setLevel(BGOBJ(g), level);
-	r = (uint32_t)Bg5_Set((Bg5_t*)BG(g), n, list);
+	Gfx_SetBgType(o, g, 5);
+	BGOBJ(g)->vt->setLevel(o, BGOBJ(g), level);
+	r = (uint32_t)Bg5_Set(o, (Bg5_t*)BG(g), n, list);
 	switch(r)
 	{
 		case 0: return 0;
@@ -152,15 +152,15 @@ int Gfx_BgSetFrames(Gfx_t* g, int n, const int* list, int level)
  * (-1 = none) at `level`, `amount` selecting bilinear sampling.  0 ok,
  * 1 / 2 the bitmap missing / not screen sized, 3 / 4 the same for vec1,
  * 5 / 6 for vec2. */
-int Gfx_BgSetDisplace(Gfx_t* g, int bmp, int vec1, int vec2, int level, int amount)
+int Gfx_BgSetDisplace(OpenBGI_t* o, Gfx_t* g, int bmp, int vec1, int vec2, int level, int amount)
 {
 	uint32_t r;
 
-	Gfx_SetBgType(g, 6);
-	r = (uint32_t)Bg6_Set((Bg6_t*)BG(g), bmp, vec1, vec2);
+	Gfx_SetBgType(o, g, 6);
+	r = (uint32_t)Bg6_Set(o, (Bg6_t*)BG(g), bmp, vec1, vec2);
 	if(r == 0)
 	{
-		BGOBJ(g)->vt->setLevel(BGOBJ(g), level);
+		BGOBJ(g)->vt->setLevel(o, BGOBJ(g), level);
 		Bg6_SetAmount((Bg6_t*)BG(g), amount);
 		return 0;
 	}
@@ -172,12 +172,12 @@ int Gfx_BgSetDisplace(Gfx_t* g, int bmp, int vec1, int vec2, int level, int amou
 /* "90 46": type 7, `bmp` through the box blur of edge type `type` at
  * `level`; 0 ok, 1 the bitmap is missing, 2 not screen sized, 3 the type
  * is not 0 or 1 */
-int Gfx_BgSetGradient(Gfx_t* g, int bmp, int type, int level)
+int Gfx_BgSetGradient(OpenBGI_t* o, Gfx_t* g, int bmp, int type, int level)
 {
 	uint32_t r;
 
-	Gfx_SetBgType(g, 7);
-	r = (uint32_t)Bg7_SetBitmap((Bg7_t*)BG(g), bmp);
+	Gfx_SetBgType(o, g, 7);
+	r = (uint32_t)Bg7_SetBitmap(o, (Bg7_t*)BG(g), bmp);
 	if(r == 0x80000001u)
 		return 1;
 	if(r == 0x80000002u)
@@ -189,7 +189,7 @@ int Gfx_BgSetGradient(Gfx_t* g, int bmp, int type, int level)
 		return 3;
 	if(r != 0)
 		return bmp;
-	BGOBJ(g)->vt->setLevel(BGOBJ(g), level);
+	BGOBJ(g)->vt->setLevel(o, BGOBJ(g), level);
 	return 0;
 }
 
@@ -199,19 +199,19 @@ int Gfx_BgSetGradient(Gfx_t* g, int bmp, int type, int level)
  * 3 the map is missing, 4 not a screen-sized vecdist map, 5 zero rings,
  * 6 unknown ripple definition, 7 the definition has fewer rings than
  * asked for. */
-int Gfx_BgSetRipple(Gfx_t* g, int bmp, int map, int rings, int rippleNo, int level)
+int Gfx_BgSetRipple(OpenBGI_t* o, Gfx_t* g, int bmp, int map, int rings, int rippleNo, int level)
 {
 	uint32_t r;
 
-	Gfx_SetBgType(g, 8);
-	r = (uint32_t)Bg8_SetBitmap((Bg8_t*)BG(g), bmp);
+	Gfx_SetBgType(o, g, 8);
+	r = (uint32_t)Bg8_SetBitmap(o, (Bg8_t*)BG(g), bmp);
 	if(r == 0x80000001u)
 		return 1;
 	if(r == 0x80000002u)
 		return 2;
 	if(r != 0)
 		return bmp;
-	r = (uint32_t)Bg8_SetRipple((Bg8_t*)BG(g), map, rings, rippleNo, level);
+	r = (uint32_t)Bg8_SetRipple(o, (Bg8_t*)BG(g), map, rings, rippleNo, level);
 	if(r == 0)
 		return 0;
 	if(r >= 0x80000003u && r <= 0x80000007u)
@@ -222,12 +222,12 @@ int Gfx_BgSetRipple(Gfx_t* g, int bmp, int map, int rings, int rippleNo, int lev
 /* "90 48": type 9, the w x h view of `bmp` (any size) at (x, y) stretched
  * over the screen; the position is handed to the object in 16.16.  0 ok,
  * 1 the bitmap is missing, 2 w or h below 2. */
-int Gfx_BgSetView(Gfx_t* g, int bmp, int x, int y, int w, int h)
+int Gfx_BgSetView(OpenBGI_t* o, Gfx_t* g, int bmp, int x, int y, int w, int h)
 {
 	uint32_t r;
 
-	Gfx_SetBgType(g, 9);
-	r = (uint32_t)Bg9_SetBitmap((Bg9_t*)BG(g), bmp);
+	Gfx_SetBgType(o, g, 9);
+	r = (uint32_t)Bg9_SetBitmap(o, (Bg9_t*)BG(g), bmp);
 	if(r == 0x80000001u)
 		return 1;
 	if(r != 0)
@@ -237,19 +237,19 @@ int Gfx_BgSetView(Gfx_t* g, int bmp, int x, int y, int w, int h)
 		return 2;
 	if(r != 0)
 		return bmp;
-	BGOBJ(g)->vt->setPos(BGOBJ(g), (int)((uint32_t)x << 16), (int)((uint32_t)y << 16));
+	BGOBJ(g)->vt->setPos(o, BGOBJ(g), (int)((uint32_t)x << 16), (int)((uint32_t)y << 16));
 	return 0;
 }
 
 /* "90 49": type 10, `bmp` (any size) zoomed by `scale` (16.16) and
  * rotated by `option` (16.16 degrees) about the centre; 0 ok, 1 the
  * bitmap is missing, 2 a zero scale */
-int Gfx_BgSetZoom(Gfx_t* g, int bmp, int scale, int option)
+int Gfx_BgSetZoom(OpenBGI_t* o, Gfx_t* g, int bmp, int scale, int option)
 {
 	uint32_t r;
 
-	Gfx_SetBgType(g, 10);
-	r = (uint32_t)Bg9_SetBitmap((Bg9_t*)BG(g), bmp);
+	Gfx_SetBgType(o, g, 10);
+	r = (uint32_t)Bg9_SetBitmap(o, (Bg9_t*)BG(g), bmp);
 	if(r == 0x80000001u)
 		return 1;
 	if(r != 0)
@@ -265,12 +265,12 @@ int Gfx_BgSetZoom(Gfx_t* g, int bmp, int scale, int option)
 /* "90 4A": type 11, the mosaic transition from `front` to `back` (a
  * bitmap or BG_BLACK / BG_WHITE) at `level`; 0 ok, 1 / 2 front / back
  * unusable, 3 the style is not 0, 4 the link flag is not 0 or 1 */
-int Gfx_BgSetFlip(Gfx_t* g, int front, int back, int style, int link, int level)
+int Gfx_BgSetFlip(OpenBGI_t* o, Gfx_t* g, int front, int back, int style, int link, int level)
 {
 	uint32_t r;
 
-	Gfx_SetBgType(g, 11);
-	r = (uint32_t)Bg11_Set((Bg11_t*)BG(g), front, back);
+	Gfx_SetBgType(o, g, 11);
+	r = (uint32_t)Bg11_Set(o, (Bg11_t*)BG(g), front, back);
 	if(r == 0x80000001u)
 		return 1;
 	if(r == 0x80000002u)
@@ -281,7 +281,7 @@ int Gfx_BgSetFlip(Gfx_t* g, int front, int back, int style, int link, int level)
 		return 3;
 	if(!Bg11_SetLink((Bg11_t*)BG(g), link))
 		return 4;
-	BGOBJ(g)->vt->setLevel(BGOBJ(g), level);
+	BGOBJ(g)->vt->setLevel(o, BGOBJ(g), level);
 	return 0;
 }
 
@@ -289,15 +289,15 @@ int Gfx_BgSetFlip(Gfx_t* g, int front, int back, int style, int link, int level)
  * centre (cx, cy) at (x, y), rotated by `angle` and scaled by (sx, sy)
  * (all 16.16), `smooth` for bilinear sampling; the layer is shown.  0 ok,
  * 3 the bitmap is missing, 4 a zero scale. */
-int Gfx_BgSetLayers(Gfx_t* g, int x, int y, int bmp, int32_t cx, int32_t cy, int32_t angle,
+int Gfx_BgSetLayers(OpenBGI_t* o, Gfx_t* g, int x, int y, int bmp, int32_t cx, int32_t cy, int32_t angle,
 	int32_t sx, int32_t sy, int smooth)
 {
 	Bg12_t* b;
 	uint32_t r;
 
-	Gfx_SetBgType(g, 12);
+	Gfx_SetBgType(o, g, 12);
 	b = (Bg12_t*)BG(g);
-	r = (uint32_t)Bg12_LayerSetBitmap(b, 0, bmp, cx, cy);
+	r = (uint32_t)Bg12_LayerSetBitmap(o, b, 0, bmp, cx, cy);
 	if(r == 0x80000002u)
 		return 3;
 	if(r != 0)
@@ -399,12 +399,12 @@ int Gfx_BglSetLevel(Gfx_t* g, int layer, int level)
 }
 
 // "91 46": the layer's bitmap (-1 removes it) and its centre point (cx, cy) in 16.16; 3 the bitmap is missing
-int Gfx_BglSetBitmap(Gfx_t* g, int layer, int bmp, int32_t cx, int32_t cy)
+int Gfx_BglSetBitmap(OpenBGI_t* o, Gfx_t* g, int layer, int bmp, int32_t cx, int32_t cy)
 {
 	uint32_t r;
 	if(BG(g)->typeId != 12)
 		return 1;
-	r = (uint32_t)Bg12_LayerSetBitmap((Bg12_t*)BG(g), layer, bmp, cx, cy);
+	r = (uint32_t)Bg12_LayerSetBitmap(o, (Bg12_t*)BG(g), layer, bmp, cx, cy);
 	if(r == 0)
 		return BglRepaint(g, layer);
 	if(r == 0x80000001u)

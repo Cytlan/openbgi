@@ -25,20 +25,20 @@
 #include "bgi/vm.h"
 #include "bgi/sys.h"
 #include "bgi/input.h"
+#include "bgi/inputmap.h"
 #include "bgi/display.h"
 #include "bgi/sysobj.h"
 #include "bgi/codec.h"
 #include "bgi/error.h"
 #include "bgi/msg.h"
-#include "bgi/os.h"
 
 // =========================================================================
 // WaitCounted
 // =========================================================================
 
-static void WaitCounted_Destroy(Wait_t* w);
+static void WaitCounted_Destroy(OpenBGI_t* o, Wait_t* w);
 // the base poll: done at once (in the original the same routine served as "80 5F")
-static int Wait_PollDone(Wait_t* w)
+static int Wait_PollDone(OpenBGI_t* o, Wait_t* w)
 {
 	BGI_UNUSED(w);
 	return 1;
@@ -48,21 +48,21 @@ const WaitVtbl_t WaitCounted_Vtbl = {
 	WaitCounted_Destroy, Wait_PollDone, Wait_SetTimer, Wait_IsDirtyBase, Wait_OnMessage};
 
 // the subclass increments the counter itself once its job is queued
-void WaitCounted_Ctor(Wait_t* w, Thread_t* t)
+void WaitCounted_Ctor(OpenBGI_t* o, Wait_t* w, Thread_t* t)
 {
-	Wait_Ctor(w, t);
+	Wait_Ctor(o, w, t);
 	w->vt = &WaitCounted_Vtbl;
 }
 
-void WaitCounted_Dtor(Wait_t* w)
+void WaitCounted_Dtor(OpenBGI_t* o, Wait_t* w)
 {
 	w->vt = &WaitCounted_Vtbl;
-	Wait_Dtor(w);
+	Wait_Dtor(o, w);
 }
 
-static void WaitCounted_Destroy(Wait_t* w)
+static void WaitCounted_Destroy(OpenBGI_t* o, Wait_t* w)
 {
-	WaitCounted_Dtor(w);
+	WaitCounted_Dtor(o, w);
 	BGI_Free(w);
 }
 
@@ -70,33 +70,33 @@ static void WaitCounted_Destroy(Wait_t* w)
 // WaitTimer
 // =========================================================================
 
-static void WaitTimer_Destroy(Wait_t* w);
-static int WaitTimer_Poll(Wait_t* w);
+static void WaitTimer_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitTimer_Poll(OpenBGI_t* o, Wait_t* w);
 static const WaitVtbl_t WaitTimer_Vtbl = {
 	WaitTimer_Destroy, WaitTimer_Poll, Wait_SetTimer, Wait_IsDirtyBase, Wait_OnMessage};
 
 // block for `ms` milliseconds (the remainder of the thread timer in "80 5A")
-Wait_t* WaitTimer_New(Thread_t* t, uint32_t ms)
+Wait_t* WaitTimer_New(OpenBGI_t* o, Thread_t* t, uint32_t ms)
 {
 	Wait_t* w = (Wait_t*)BGI_Alloc(sizeof(Wait_t));
-	Wait_Ctor(w, t);
+	Wait_Ctor(o, w, t);
 	w->vt = &WaitTimer_Vtbl;
-	Wait_SetTimer(w, ms);
+	Wait_SetTimer(o, w, ms);
 	return w;
 }
 
-static void WaitTimer_Destroy(Wait_t* w)
+static void WaitTimer_Destroy(OpenBGI_t* o, Wait_t* w)
 {
 	w->vt = &WaitTimer_Vtbl;
-	Wait_Dtor(w);
+	Wait_Dtor(o, w);
 	BGI_Free(w);
 }
 
 // done when the time is up or waits stopped blocking; pushes nothing
-static int WaitTimer_Poll(Wait_t* w)
+static int WaitTimer_Poll(OpenBGI_t* o, Wait_t* w)
 {
-	Wait_Tick(w);
-	if(Wait_TimerExpired(w) || !Wait_IsBlocking(w))
+	Wait_Tick(o, w);
+	if(Wait_TimerExpired(o, w) || !Wait_IsBlocking(o, w))
 		return 1;
 	return 0;
 }
@@ -113,9 +113,9 @@ typedef struct WaitTimerKey // 0x2c bytes
 	int32_t interrupted; // notification 1 arrived
 } WaitTimerKey_t;
 
-static void WaitTimerKey_Destroy(Wait_t* w);
-static int WaitTimerKey_Poll(Wait_t* w);
-static void WaitTimerKey_OnMessage(Wait_t* w, WaitMsg_t* m);
+static void WaitTimerKey_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitTimerKey_Poll(OpenBGI_t* o, Wait_t* w);
+static void WaitTimerKey_OnMessage(OpenBGI_t* o, Wait_t* w, WaitMsg_t* m);
 static const WaitVtbl_t WaitTimerKey_Vtbl = {
 	WaitTimerKey_Destroy, WaitTimerKey_Poll, Wait_SetTimer, Wait_IsDirtyBase, WaitTimerKey_OnMessage};
 
@@ -123,46 +123,46 @@ static const WaitVtbl_t WaitTimerKey_Vtbl = {
  * key layer at `prio` and input on them ends it early (as does a "80 4C"
  * notification with a = 1).  Pending triggers are swallowed so a press that
  * started the instruction does not end it. */
-Wait_t* WaitTimerKey_New(Thread_t* t, uint32_t ms, int keyBreak, uint32_t prio)
+Wait_t* WaitTimerKey_New(OpenBGI_t* o, Thread_t* t, uint32_t ms, int keyBreak, uint32_t prio)
 {
 	WaitTimerKey_t* w = (WaitTimerKey_t*)BGI_Alloc(sizeof(WaitTimerKey_t));
-	Wait_Ctor(&w->base, t);
+	Wait_Ctor(o, &w->base, t);
 	w->base.vt = &WaitTimerKey_Vtbl;
-	Wait_SetTimer(&w->base, ms);
+	Wait_SetTimer(o, &w->base, ms);
 	w->keyBreak = keyBreak;
 	if(keyBreak)
 	{
 		uint32_t key = (prio << 20) | 0xfffff;
 		w->prio = prio;
-		MouseLayer_Push(key);
-		KeyLayer_Push(key);
-		Input_Poll(key, key); // swallow pending triggers
+		MouseLayer_Push(o, key);
+		KeyLayer_Push(o, key);
+		Input_Poll(o, key, key); // swallow pending triggers
 	}
 	w->interrupted = 0;
 	return &w->base;
 }
 
-static void WaitTimerKey_Destroy(Wait_t* wb)
+static void WaitTimerKey_Destroy(OpenBGI_t* o, Wait_t* wb)
 {
 	WaitTimerKey_t* w = (WaitTimerKey_t*)wb;
 	w->base.vt = &WaitTimerKey_Vtbl;
 	if(w->keyBreak)
 	{
 		uint32_t key = (w->prio << 20) | 0xfffff;
-		MouseLayer_Pop(key);
-		KeyLayer_Pop(key);
+		MouseLayer_Pop(o, key);
+		KeyLayer_Pop(o, key);
 	}
-	Wait_Dtor(&w->base);
+	Wait_Dtor(o, &w->base);
 	BGI_Free(w);
 }
 
 /* pushes 1 when input ended the wait, 0 when the timer ran out, a
  * notification interrupted it or waits stopped blocking */
-static int WaitTimerKey_Poll(Wait_t* wb)
+static int WaitTimerKey_Poll(OpenBGI_t* o, Wait_t* wb)
 {
 	WaitTimerKey_t* w = (WaitTimerKey_t*)wb;
-	Wait_Tick(wb);
-	if(!Wait_TimerExpired(wb) && Wait_IsBlocking(wb) && !w->interrupted)
+	Wait_Tick(o, wb);
+	if(!Wait_TimerExpired(o, wb) && Wait_IsBlocking(o, wb) && !w->interrupted)
 	{
 		uint32_t key;
 		if(!w->keyBreak)
@@ -170,7 +170,7 @@ static int WaitTimerKey_Poll(Wait_t* wb)
 		key = (w->prio << 20) | 0xfffff;
 		// the input that ends the wait: skip (bit 31), the down key (0x2000),
 		// decide (0x100), wheel down (0x80) and the left button (0x1)
-		if(!(Input_Poll(key, key) & 0x80002181u))
+		if(!(Input_Poll(o, key, key) & 0x80002181u))
 			return 0;
 		Thread_Push(wb->thread, 1);
 		return 1;
@@ -180,7 +180,7 @@ static int WaitTimerKey_Poll(Wait_t* wb)
 }
 
 // "80 4C" with a = 1 ends the wait at the next poll (with result 0)
-static void WaitTimerKey_OnMessage(Wait_t* wb, WaitMsg_t* m)
+static void WaitTimerKey_OnMessage(OpenBGI_t* o, Wait_t* wb, WaitMsg_t* m)
 {
 	if(m->a == 1)
 		((WaitTimerKey_t*)wb)->interrupted = 1;
@@ -196,46 +196,46 @@ typedef struct WaitWinMsg // 0x24 bytes
 	uint32_t msg; // window message number
 } WaitWinMsg_t;
 
-static void WaitWinMsg_Destroy(Wait_t* w);
-static int WaitWinMsg_Poll(Wait_t* w);
+static void WaitWinMsg_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitWinMsg_Poll(OpenBGI_t* o, Wait_t* w);
 static const WaitVtbl_t WaitWinMsg_Vtbl = {
 	WaitWinMsg_Destroy, WaitWinMsg_Poll, Wait_SetTimer, Wait_IsDirtyBase, Wait_OnMessage};
 
 // block until the window receives message number `msg` (subscribed through WinMsgWait_Register)
-Wait_t* WaitWinMsg_New(Thread_t* t, uint32_t msg)
+Wait_t* WaitWinMsg_New(OpenBGI_t* o, Thread_t* t, uint32_t msg)
 {
 	WaitWinMsg_t* w = (WaitWinMsg_t*)BGI_Alloc(sizeof(WaitWinMsg_t));
-	Wait_Ctor(&w->base, t);
+	Wait_Ctor(o, &w->base, t);
 	w->base.vt = &WaitWinMsg_Vtbl;
 	w->msg = msg;
-	WinMsgWait_Register(t, msg); // keyed by the thread, as in the original
+	WinMsgWait_Register(o, t, msg); // keyed by the thread, as in the original
 	return &w->base;
 }
 
-static void WaitWinMsg_Destroy(Wait_t* wb)
+static void WaitWinMsg_Destroy(OpenBGI_t* o, Wait_t* wb)
 {
 	WaitWinMsg_t* w = (WaitWinMsg_t*)wb;
 	w->base.vt = &WaitWinMsg_Vtbl;
-	WinMsgWait_Unregister(wb->thread, w->msg);
-	Wait_Dtor(wb);
+	WinMsgWait_Unregister(o, wb->thread, w->msg);
+	Wait_Dtor(o, wb);
 	BGI_Free(w);
 }
 
 /* pushes wParam and lParam of the message, or -1, -1 when the wait was
  * abandoned (non-blocking mode).  A lost subscription ends the wait without
  * pushing anything, after a message box. */
-static int WaitWinMsg_Poll(Wait_t* wb)
+static int WaitWinMsg_Poll(OpenBGI_t* o, Wait_t* wb)
 {
 	WaitWinMsg_t* w = (WaitWinMsg_t*)wb;
 	WinMsgRec_t rec;
-	Wait_Tick(wb);
-	if(!WinMsgWait_Poll(&rec, wb->thread, w->msg))
+	Wait_Tick(o, wb);
+	if(!WinMsgWait_Poll(o, &rec, wb->thread, w->msg))
 	{
 		// the registration vanished: a bug in the original, reported as such
-		OS_MessageBox(MSG_WINMSG_LOST, MSG_BUG_FOUND, 0);
+		MsgBox_Plain(o, MSG_WINMSG_LOST, MSG_BUG_FOUND, 0);
 		return 1;
 	}
-	if(!Wait_IsBlocking(wb))
+	if(!Wait_IsBlocking(o, wb))
 	{
 		Thread_Push(wb->thread, 0xffffffffu);
 		Thread_Push(wb->thread, 0xffffffffu);
@@ -260,18 +260,18 @@ typedef struct WaitLock // 0x128 bytes
 	char name[0x100]; // the lock's name
 } WaitLock_t;
 
-static void WaitLock_Destroy(Wait_t* w);
-static int WaitLock_Poll(Wait_t* w);
+static void WaitLock_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitLock_Poll(OpenBGI_t* o, Wait_t* w);
 static const WaitVtbl_t WaitLock_Vtbl = {
 	WaitLock_Destroy, WaitLock_Poll, Wait_SetTimer, Wait_IsDirtyBase, Wait_OnMessage};
 
 /* queue the thread for lock `name` at priority `prio` (behind the waiters
  * of equal or higher priority) and block until it is admitted.  An unknown
  * lock is not an error here: the poll reports it. */
-Wait_t* WaitLock_New(Thread_t* t, SemMgr_t* mgr, const char* name, uint32_t prio)
+Wait_t* WaitLock_New(OpenBGI_t* o, Thread_t* t, SemMgr_t* mgr, const char* name, uint32_t prio)
 {
 	WaitLock_t* w = (WaitLock_t*)BGI_Alloc(sizeof(WaitLock_t));
-	Wait_Ctor(&w->base, t);
+	Wait_Ctor(o, &w->base, t);
 	w->base.vt = &WaitLock_Vtbl;
 	w->mgr = mgr;
 	strcpy(w->name, name);
@@ -279,26 +279,26 @@ Wait_t* WaitLock_New(Thread_t* t, SemMgr_t* mgr, const char* name, uint32_t prio
 	return &w->base;
 }
 
-static void WaitLock_Destroy(Wait_t* wb)
+static void WaitLock_Destroy(OpenBGI_t* o, Wait_t* wb)
 {
 	wb->vt = &WaitLock_Vtbl;
-	Wait_Dtor(wb);
+	Wait_Dtor(o, wb);
 	BGI_Free(wb);
 }
 
 /* pushes 0 when the lock was acquired, -1 when abandoned (non-blocking
  * mode), 0x80000001 when there is no such lock.  The place in the queue is
  * kept on abandonment; "80 B5" gives it back. */
-static int WaitLock_Poll(Wait_t* wb)
+static int WaitLock_Poll(OpenBGI_t* o, Wait_t* wb)
 {
 	WaitLock_t* w = (WaitLock_t*)wb;
-	Wait_Tick(wb);
+	Wait_Tick(o, wb);
 	if(!w->queued)
 	{
 		Thread_Push(wb->thread, 0x80000001u);
 		return 1;
 	}
-	if(!Wait_IsBlocking(wb))
+	if(!Wait_IsBlocking(o, wb))
 	{
 		Thread_Push(wb->thread, 0xffffffffu);
 		return 1;
@@ -328,91 +328,91 @@ typedef struct WaitEncode // 0x24 bytes
 	EncodeJob_t* job;
 } WaitEncode_t;
 
-static void WaitEncode_Destroy(Wait_t* w);
-static void WaitEncode2_Destroy(Wait_t* w);
-static int WaitEncode_Poll(Wait_t* w);
+static void WaitEncode_Destroy(OpenBGI_t* o, Wait_t* w);
+static void WaitEncode2_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitEncode_Poll(OpenBGI_t* o, Wait_t* w);
 static const WaitVtbl_t WaitEncode_Vtbl = {
 	WaitEncode_Destroy, WaitEncode_Poll, Wait_SetTimer, Wait_IsDirtyBase, Wait_OnMessage};
 static const WaitVtbl_t WaitEncode2_Vtbl = {
 	WaitEncode2_Destroy, WaitEncode_Poll, Wait_SetTimer, Wait_IsDirtyBase, Wait_OnMessage};
 
 // the SDC worker: encode `a` bytes of src into dst
-static void SdcEncodeJob_Run(EncodeJob_t* j)
+static void SdcEncodeJob_Run(OpenBGI_t* o, EncodeJob_t* j)
 {
-	j->result = SdcEncode(j->dst, j->src, j->a);
+	j->result = SdcEncode(o, j->dst, j->src, j->a);
 	j->done = 1;
 }
 
 /* the DCFS worker: difference-code the `b` frames of `a` bytes into a
  * temporary buffer of 1.5 x the frame data, then SDC-encode that into dst */
-static void DcfsEncodeJob_Run(EncodeJob_t* j)
+static void DcfsEncodeJob_Run(OpenBGI_t* o, EncodeJob_t* j)
 {
 	uint32_t frameBytes = j->a * j->b;
 	uint8_t* tmp = (uint8_t*)BGI_Alloc(frameBytes * 3 / 2 + 0x18);
 	DcfsEncode(tmp, &j->result, j->src, j->a, j->b);
-	j->result = SdcEncode(j->dst, tmp, j->result);
+	j->result = SdcEncode(o, j->dst, tmp, j->result);
 	BGI_Free(tmp);
 	j->done = 1;
 }
 
 /* SDC-encode `size` bytes of src into dst ("80 C0"); dst needs room for
  * size + size / 128 + 1 bytes plus the header */
-Wait_t* WaitEncode_New(Thread_t* t, void* dst, const void* src, uint32_t size)
+Wait_t* WaitEncode_New(OpenBGI_t* o, Thread_t* t, void* dst, const void* src, uint32_t size)
 {
 	WaitEncode_t* w = (WaitEncode_t*)BGI_Alloc(sizeof(WaitEncode_t));
-	WaitCounted_Ctor(&w->base, t);
+	WaitCounted_Ctor(o, &w->base, t);
 	w->base.vt = &WaitEncode_Vtbl;
 	w->job = (EncodeJob_t*)BGI_Calloc(sizeof(EncodeJob_t));
 	w->job->dst = dst;
 	w->job->src = src;
 	w->job->a = size;
-	WaitCount_Inc();
-	SdcEncodeJob_Run(w->job);
+	WaitCount_Inc(o);
+	SdcEncodeJob_Run(o, w->job);
 	return &w->base;
 }
 
 // DCFS + SDC-encode frameCount frames of frameSize bytes from src into dst ("80 C4")
-Wait_t* WaitEncode2_New(Thread_t* t, void* dst, const void* src, uint32_t frameSize, uint32_t frameCount)
+Wait_t* WaitEncode2_New(OpenBGI_t* o, Thread_t* t, void* dst, const void* src, uint32_t frameSize, uint32_t frameCount)
 {
 	WaitEncode_t* w = (WaitEncode_t*)BGI_Alloc(sizeof(WaitEncode_t));
-	WaitCounted_Ctor(&w->base, t);
+	WaitCounted_Ctor(o, &w->base, t);
 	w->base.vt = &WaitEncode2_Vtbl;
 	w->job = (EncodeJob_t*)BGI_Calloc(sizeof(EncodeJob_t));
 	w->job->dst = dst;
 	w->job->src = src;
 	w->job->a = frameSize;
 	w->job->b = frameCount;
-	WaitCount_Inc();
-	DcfsEncodeJob_Run(w->job);
+	WaitCount_Inc(o);
+	DcfsEncodeJob_Run(o, w->job);
 	return &w->base;
 }
 
 // the shared destructor body: the job record, the counter, the base
-static void WaitEncode_Free(WaitEncode_t* w)
+static void WaitEncode_Free(OpenBGI_t* o, WaitEncode_t* w)
 {
 	BGI_Free(w->job);
-	WaitCount_Dec();
-	WaitCounted_Dtor(&w->base);
+	WaitCount_Dec(o);
+	WaitCounted_Dtor(o, &w->base);
 	BGI_Free(w);
 }
 
-static void WaitEncode_Destroy(Wait_t* w)
+static void WaitEncode_Destroy(OpenBGI_t* o, Wait_t* w)
 {
 	w->vt = &WaitEncode_Vtbl;
-	WaitEncode_Free((WaitEncode_t*)w);
+	WaitEncode_Free(o, (WaitEncode_t*)w);
 }
 
-static void WaitEncode2_Destroy(Wait_t* w)
+static void WaitEncode2_Destroy(OpenBGI_t* o, Wait_t* w)
 {
 	w->vt = &WaitEncode2_Vtbl;
-	WaitEncode_Free((WaitEncode_t*)w);
+	WaitEncode_Free(o, (WaitEncode_t*)w);
 }
 
 // pushes the encoded size (0 on failure) once the worker is done
-static int WaitEncode_Poll(Wait_t* wb)
+static int WaitEncode_Poll(OpenBGI_t* o, Wait_t* wb)
 {
 	WaitEncode_t* w = (WaitEncode_t*)wb;
-	Wait_Tick(wb);
+	Wait_Tick(o, wb);
 	if(!w->job->done)
 		return 0;
 	Thread_Push(wb->thread, w->job->result);
@@ -420,6 +420,27 @@ static int WaitEncode_Poll(Wait_t* wb)
 }
 
 // the name of a wait class of this file, for the debugger (NULL: not one of these)
+/* The targets of this file's classes (bgi/inputmap.h): a timed wait that
+ * input ends ("80 5C" with keys) is reached by a click anywhere on its
+ * layer; 1 when `w` is one of this file's classes. */
+int WaitSys_Targets(OpenBGI_t* o, Wait_t* w, TargetSink_t* s)
+{
+	const WaitTimerKey_t* k = (const WaitTimerKey_t*)w;
+	TargetDesc_t d;
+	if(WaitSys_ClassName(w->vt) == NULL)
+		return 0;
+	if(w->vt != &WaitTimerKey_Vtbl || !k->keyBreak)
+		return 1;
+	TargetDesc_Init(&d, OPENBGI_TARGET_WAIT, (k->prio << 20) | 0xfffff);
+	TargetSink_Claim(s, d.layer);
+	d.flags = OPENBGI_TARGET_ANYWHERE;
+	d.whole = 1;
+	d.owner = Thread_GetId(w->thread);
+	d.reach = Target_ReachLayer;
+	TargetSink_Add(s, &d);
+	return 1;
+}
+
 const char* WaitSys_ClassName(const WaitVtbl_t* vt)
 {
 	if(vt == &WaitCounted_Vtbl)

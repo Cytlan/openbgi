@@ -5,7 +5,7 @@
  * blit_rotate.c - rotation / zoom ("stretch": "90 1D", background type 10), the
  *                 scaled copy ("transform": "90 1C", background type 9) and
  *                 the mosaic ("flip", background type 11) of
- *                 inc/bgi/gfx/bitmap.h
+ *                 src/include/bgi/gfx/bitmap.h
  */
 #include "blit_internal.h"
 

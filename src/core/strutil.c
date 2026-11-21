@@ -4,15 +4,17 @@
  *
  * strutil.c - Shift-JIS string helpers, the string primitives of the
  *             "6x" instructions and the script text encoding
- *             (inc/bgi/strutil.h)
+ *             (src/include/bgi/strutil.h)
  *
  * The Sjis* functions work on Shift-JIS bytes only.  The Text* functions
- * are the engine's character decoder of 1.653 on, which follows gTextUtf8
- * ("81 00"): the rest of the engine goes through them so that one switch
- * moves everything between the two encodings.
+ * are the engine's character decoder of 1.653 on, which follows
+ * o->enc.textUtf8 ("81 00"): the rest of the engine goes through them so
+ * that one switch moves everything between the two encodings.
  */
 #include "bgi/strutil.h"
-#include "bgi/os.h"
+#include "bgi/host.h"
+#include "bgi/sjis.h"
+#include "bgi/core.h"
 
 // 1 for the first byte of a double-byte Shift-JIS character (0x80 .. 0x9F, 0xE0 .. 0xFF)
 int SjisIsLead(uint8_t c)
@@ -45,32 +47,29 @@ static const char kKinsoku[] =
 	"\x81\x66\x81\x68";                                                        // ’ ” (closing single and double quotation marks)
 
 // 1 when `ch` (a TextGetChar code) is in the kinsoku set
-int IsKinsokuChar(uint32_t ch)
+int IsKinsokuChar(OpenBGI_t* o, uint32_t ch)
 {
-	// the table in the current code space, rebuilt when the encoding changes
-	static uint32_t codes[64];
-	static int count = 0, mode = -1;
 	int i;
-	if(mode != gTextUtf8)
+	if(o->enc.kinsokuMode != o->enc.textUtf8)
 	{
 		const char* p = kKinsoku;
-		count = 0;
-		while(*p && count < (int)BGI_COUNTOF(codes))
-			codes[count++] = TextTableChar(&p);
-		mode = gTextUtf8;
+		o->enc.kinsokuCount = 0;
+		while(*p && o->enc.kinsokuCount < (int)BGI_COUNTOF(o->enc.kinsokuCodes))
+			o->enc.kinsokuCodes[o->enc.kinsokuCount++] = TextTableChar(o, &p);
+		o->enc.kinsokuMode = o->enc.textUtf8;
 	}
-	for(i = 0; i < count; i++)
-		if(codes[i] == ch)
+	for(i = 0; i < o->enc.kinsokuCount; i++)
+		if(o->enc.kinsokuCodes[i] == ch)
 			return 1;
 	return 0;
 }
 
 // "6D": ASCII upper case to lower case in place; multi-byte characters (either encoding) are skipped whole
-void SjisStrLwr(char* s)
+void SjisStrLwr(OpenBGI_t* o, char* s)
 {
 	while(*s)
 	{
-		int len = TextCharLen(s);
+		int len = TextCharLen(o, s);
 		if(len == 1 && *s >= 'A' && *s <= 'Z')
 			*s = (char)(*s + 0x20);
 		s += len;
@@ -88,7 +87,7 @@ void SjisStrLwr(char* s)
  * 1 when the first 'a' already started a partial match.  Scripts rely on the
  * engine's behaviour, so it is reproduced as is.
  */
-int StrFindSjis(const char* s, const char* pat)
+int StrFindSjis(OpenBGI_t* o, const char* s, const char* pat)
 {
 	size_t plen = strlen(pat);
 	uint32_t* pc = (uint32_t*)BGI_Alloc(plen * 4 + 4);
@@ -97,13 +96,13 @@ int StrFindSjis(const char* s, const char* pat)
 
 	for(p = pat; *p;)
 	{
-		p += TextGetChar(&pc[pcount++], p);
+		p += TextGetChar(o, &pc[pcount++], p);
 	}
 	p = s;
 	while(*p)
 	{
 		uint32_t c;
-		int len = TextGetChar(&c, p);
+		int len = TextGetChar(o, &c, p);
 		if(c == pc[pi])
 		{
 			if(pi == 0)
@@ -126,11 +125,11 @@ int StrFindSjis(const char* s, const char* pat)
 /* "67": copy src to dst replacing every occurrence of `from` by `to`
  * (found with StrFindSjis, so its quirk applies); returns the number of
  * replacements. */
-int StrReplace(char* dst, const char* src, const char* from, const char* to)
+int StrReplace(OpenBGI_t* o, char* dst, const char* src, const char* from, const char* to)
 {
 	size_t nf = strlen(from), nt = strlen(to);
 	int count = 0;
-	int off = StrFindSjis(src, from);
+	int off = StrFindSjis(o, src, from);
 	while(off >= 0)
 	{
 		if(off > 0)
@@ -143,7 +142,7 @@ int StrReplace(char* dst, const char* src, const char* from, const char* to)
 		dst += nt;
 		src += nf;
 		count++;
-		off = StrFindSjis(src, from);
+		off = StrFindSjis(o, src, from);
 	}
 	strcpy(dst, src);
 	return count;
@@ -216,16 +215,13 @@ void SplitPath(const char* path, char* drive, char* dir, char* fname, char* ext)
 	}
 }
 
-
 // ---- the text encoding -------------------------------------------------------------
 
-int gTextUtf8;
-
-// "81 00": select TEXT_SJIS or TEXT_UTF8 for the script text; the OS layer follows (window titles, message boxes, font rendering)
-void Text_SetEncoding(int mode)
+// "81 00": select TEXT_SJIS or TEXT_UTF8 for the script text; the host follows (the texts and the paths it is handed)
+void Text_SetEncoding(OpenBGI_t* o, int mode)
 {
-	gTextUtf8 = mode == TEXT_UTF8;
-	OS_SetTextEncoding(gTextUtf8);
+	o->enc.textUtf8 = mode == TEXT_UTF8;
+	Host_TextEncoding(o, o->enc.textUtf8);
 }
 
 // one UTF-8 sequence, trusting its continuation bytes; the byte count
@@ -294,31 +290,31 @@ int TextGetCharMode(uint32_t* out, int* wide, const char* s, uint32_t mode)
 }
 
 // the character at s in the current encoding: its code and byte length
-int TextGetChar(uint32_t* out, const char* s)
+int TextGetChar(OpenBGI_t* o, uint32_t* out, const char* s)
 {
-	return TextGetCharMode(out, NULL, s, gTextUtf8 ? TEXT_UTF8 : TEXT_SJIS);
+	return TextGetCharMode(out, NULL, s, o->enc.textUtf8 ? TEXT_UTF8 : TEXT_SJIS);
 }
 
 // the byte length of the character at s in the current encoding
-int TextCharLen(const char* s)
+int TextCharLen(OpenBGI_t* o, const char* s)
 {
 	uint32_t c;
-	return TextGetChar(&c, s);
+	return TextGetChar(o, &c, s);
 }
 
 // does a character (code and byte length from TextGetChar) occupy a full-width cell
-int TextIsWide(uint32_t code, int len)
+int TextIsWide(OpenBGI_t* o, uint32_t code, int len)
 {
-	if(gTextUtf8)
+	if(o->enc.textUtf8)
 		return code >= 0x80 && !(code >= 0xff61 && code < 0xffa0);
 	return len == 2;
 }
 
 /* the bytes of `code` in the current encoding, without a terminator: one
  * byte or lead + trail in Shift-JIS, 1 .. 4 bytes of UTF-8; the count */
-int TextPutChar(char* dst, uint32_t code)
+int TextPutChar(OpenBGI_t* o, char* dst, uint32_t code)
 {
-	if(!gTextUtf8)
+	if(!o->enc.textUtf8)
 	{
 		if(code > 0xff)
 		{
@@ -358,15 +354,15 @@ int TextPutChar(char* dst, uint32_t code)
  * the text code) as a code of the current code space: in UTF-8 mode a
  * double-byte character is converted to its code point and a half-width
  * katakana byte to U+FF61 ..; *p advances past the character */
-uint32_t TextTableChar(const char** p)
+uint32_t TextTableChar(OpenBGI_t* o, const char** p)
 {
 	uint32_t c;
 	int dbcs = SjisGetChar(&c, *p);
 	*p += dbcs ? 2 : 1;
-	if(gTextUtf8)
+	if(o->enc.textUtf8)
 	{
 		if(dbcs)
-			c = OS_SjisToCodePoint((uint16_t)c);
+			c = Sjis_CodePoint((uint16_t)c);
 		else if(c >= 0xa1 && c <= 0xdf)
 			c = 0xff61 + (c - 0xa1); // half-width katakana
 	}
@@ -374,10 +370,10 @@ uint32_t TextTableChar(const char** p)
 }
 
 // 1 when `code` (a TextGetChar code) is one of the characters of the Shift-JIS literal `sjisSet`
-int TextCodeInSet(uint32_t code, const char* sjisSet)
+int TextCodeInSet(OpenBGI_t* o, uint32_t code, const char* sjisSet)
 {
 	while(*sjisSet)
-		if(TextTableChar(&sjisSet) == code)
+		if(TextTableChar(o, &sjisSet) == code)
 			return 1;
 	return 0;
 }

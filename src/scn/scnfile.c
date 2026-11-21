@@ -20,19 +20,7 @@
  * its image, so that the tools handle all three alike.
  */
 #include "scn_internal.h"
-
-static uint32_t Rd32(const uint8_t* p)
-{
-	return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-static void Wr32(uint8_t* p, uint32_t v)
-{
-	p[0] = (uint8_t)v;
-	p[1] = (uint8_t)(v >> 8);
-	p[2] = (uint8_t)(v >> 16);
-	p[3] = (uint8_t)(v >> 24);
-}
+#include "bgi/bytes.h"
 
 int Scn_OperandCount(uint32_t token)
 {
@@ -85,8 +73,8 @@ int Scn_Load(const uint8_t* data, uint32_t size, ScnFile_t* out, char* err, size
 	   * of its first function (`push_fp; push N; add; set_fp`; the whole of it,
 	   * since the 16-bit scenes of the 1.64 games may start with the bytes of
 	   * a push_fp token too) */
-		if(size < 20 || Rd32(data) != SCN_PUSHFP || Rd32(data + 4) != SCN_PUSH || Rd32(data + 12) != SCN_ADD ||
-			Rd32(data + 16) != SCN_SETFP)
+		if(size < 20 || Le32(data) != SCN_PUSHFP || Le32(data + 4) != SCN_PUSH || Le32(data + 12) != SCN_ADD ||
+			Le32(data + 16) != SCN_SETFP)
 		{
 			if(!Scn16_Check(data, size))
 				return Fail(err, errSize, "not a BurikoCompiledScriptVer1.00 file");
@@ -105,12 +93,12 @@ int Scn_Load(const uint8_t* data, uint32_t size, ScnFile_t* out, char* err, size
 		return Fail(err, errSize, "not a BurikoCompiledScriptVer1.00 file");
 	else
 	{
-		hdr = Rd32(data + 0x1c);
+		hdr = Le32(data + 0x1c);
 		base = 0x1c + hdr;
 		if(hdr < 8 || base > size || (base & 3))
 			return Fail(err, errSize, "bad header size");
 		p = data + 0x20;
-		n = Rd32(p);
+		n = Le32(p);
 		p += 4;
 		if(n > SCN_IMPORTS)
 			return Fail(err, errSize, "too many imports");
@@ -120,7 +108,7 @@ int Scn_Load(const uint8_t* data, uint32_t size, ScnFile_t* out, char* err, size
 		out->importCount = (int)n;
 		if(p + 4 > data + base)
 			return Fail(err, errSize, "bad export count");
-		n = Rd32(p);
+		n = Le32(p);
 		p += 4;
 		if(n > 0x10000)
 			return Fail(err, errSize, "too many exports");
@@ -132,7 +120,7 @@ int Scn_Load(const uint8_t* data, uint32_t size, ScnFile_t* out, char* err, size
 				Scn_Free(out);
 				return Fail(err, errSize, "bad export list");
 			}
-			out->exports[i].off = Rd32(p);
+			out->exports[i].off = Le32(p);
 			p += 4;
 		}
 		out->exportCount = (int)n;
@@ -150,7 +138,7 @@ int Scn_Load(const uint8_t* data, uint32_t size, ScnFile_t* out, char* err, size
 	q = base;
 	while(q + 4 <= size && q - base < strStart)
 	{
-		uint32_t t = Rd32(data + q);
+		uint32_t t = Le32(data + q);
 		int k = Scn_OperandCount(t);
 		uint32_t ref = 0;
 		int hasRef = 0;
@@ -161,12 +149,12 @@ int Scn_Load(const uint8_t* data, uint32_t size, ScnFile_t* out, char* err, size
 		}
 		if(t == SCN_STR || t == SCN_LINE)
 		{
-			ref = Rd32(data + q + 4);
+			ref = Le32(data + q + 4);
 			hasRef = 1;
 		}
 		else if(t == SCN_SRCINFO)
 		{
-			ref = Rd32(data + q + 12);
+			ref = Le32(data + q + 12);
 			hasRef = 1;
 		}
 		if(hasRef && ref < strStart)
@@ -181,7 +169,7 @@ int Scn_Load(const uint8_t* data, uint32_t size, ScnFile_t* out, char* err, size
 	out->codeLen = strStart / 4;
 	out->code = (uint32_t*)calloc(out->codeLen + 1, sizeof *out->code);
 	for(i = 0; i < out->codeLen; i++)
-		out->code[i] = Rd32(data + base + 4 * i);
+		out->code[i] = Le32(data + base + 4 * i);
 	out->stringsLen = size - base - strStart;
 	out->strings = (uint8_t*)calloc(out->stringsLen + 1, 1);
 	memcpy(out->strings, data + base + strStart, out->stringsLen);
@@ -212,7 +200,7 @@ uint8_t* Scn_Save(const ScnFile_t* f, uint32_t* size)
 		total = f->codeLen * 4 + f->stringsLen;
 		out = (uint8_t*)calloc(total + 1, 1);
 		for(i = 0; i < f->codeLen; i++)
-			Wr32(out + 4 * i, f->code[i]);
+			PutLe32(out + 4 * i, f->code[i]);
 		memcpy(out + f->codeLen * 4, f->strings, f->stringsLen);
 		*size = total;
 		return out;
@@ -226,8 +214,8 @@ uint8_t* Scn_Save(const ScnFile_t* f, uint32_t* size)
 	total = base + f->codeLen * 4 + f->stringsLen;
 	out = (uint8_t*)calloc(total + 1, 1);
 	memcpy(out, SCN_MAGIC, 28);
-	Wr32(out + 0x1c, base - 0x1c);
-	Wr32(out + 0x20, (uint32_t)f->importCount);
+	PutLe32(out + 0x1c, base - 0x1c);
+	PutLe32(out + 0x20, (uint32_t)f->importCount);
 	p = out + 0x24;
 	for(i = 0; i < (uint32_t)f->importCount; i++)
 	{
@@ -235,18 +223,18 @@ uint8_t* Scn_Save(const ScnFile_t* f, uint32_t* size)
 		memcpy(p, f->imports[i], n);
 		p += n;
 	}
-	Wr32(p, (uint32_t)f->exportCount);
+	PutLe32(p, (uint32_t)f->exportCount);
 	p += 4;
 	for(i = 0; i < (uint32_t)f->exportCount; i++)
 	{
 		size_t n = strlen(f->exports[i].name) + 1;
 		memcpy(p, f->exports[i].name, n);
 		p += n;
-		Wr32(p, f->exports[i].off);
+		PutLe32(p, f->exports[i].off);
 		p += 4;
 	}
 	for(i = 0; i < f->codeLen; i++)
-		Wr32(out + base + 4 * i, f->code[i]);
+		PutLe32(out + base + 4 * i, f->code[i]);
 	if(f->stringsLen)
 		memcpy(out + base + f->codeLen * 4, f->strings, f->stringsLen);
 	*size = total;

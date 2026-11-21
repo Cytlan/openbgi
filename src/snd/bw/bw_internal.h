@@ -4,7 +4,7 @@
  *
  * bw_internal.h - shared between the files of the BW stream decoder
  *                 (src/snd/bw: stream.c, source.c and the codecs); the
- *                 public interface is inc/bgi/snd/bw.h
+ *                 public interface is src/include/bgi/snd/bw.h
  *
  * A BW file is a 0x40-byte header (BwHeader_t) followed by the coded data
  * of one of four codecs.  WmStream_t holds the decoder state of all of
@@ -15,10 +15,11 @@
 #define BGI_SND_BW_INTERNAL_H
 
 #include "bgi/snd/bw.h"
-#include "bgi/os.h"
+#include "bgi/fs.h"
 #include "bgi/error.h"
 
 #if defined(BGI_HAVE_VORBISFILE)
+#define OV_EXCLUDE_STATIC_CALLBACKS // the decoder passes its own callbacks
 #include <vorbis/vorbisfile.h>
 #elif defined(BGI_USE_STB_VORBIS)
 #define STB_VORBIS_HEADER_ONLY
@@ -37,7 +38,7 @@
 struct WmSource
 {
 	int kind;       // WM_SRC_*
-	OsFile_t* file; // file / archive
+	FsFile_t* file; // file / archive
 	uint32_t base;  // archive: entry offset in the file
 	uint32_t size;  // bytes available
 	uint32_t pos;   // read position inside the entry / memory
@@ -138,7 +139,7 @@ uint32_t Huffman_DecodeFrames(WmStream_t* s, int16_t* dst, uint32_t frames); // 
 void Huffman_Restart(WmStream_t* s);                                         // back to the header's loop position
 
 // codec 3: `which` selects the decoder (the part of a pair)
-int Vorbis_Open(WmStream_t* s, int which); // 1 ok
+int Vorbis_Open(OpenBGI_t* o, WmStream_t* s, int which); // 1 ok
 void Vorbis_Close(WmStream_t* s, int which);
 void Vorbis_SeekFrame(WmStream_t* s, int which, uint32_t frame);
 uint32_t Vorbis_ReadBytes(WmStream_t* s, int which, uint8_t* buf, uint32_t n); // raw PCM bytes, 0 at the end

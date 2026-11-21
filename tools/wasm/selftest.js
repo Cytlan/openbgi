@@ -57,7 +57,7 @@ async function main()
 	for(let i = 0; i < big.length; i++)
 		big[i] = (i * 7 + (i >> 8)) & 0xff;
 	fs.writeFileSync(path.join(dir, 'Data01000.arc'), big);
-	fs.writeFileSync(path.join(dir, 'games.json'), '[]');
+	fs.writeFileSync(path.join(dir, 'openbgi.json'), '[]');
 	fs.writeFileSync(path.join(dir, 'Save', 'sysdat.dat'), 'hello');
 	fs.symlinkSync(outside, path.join(dir, 'link'));
 
@@ -83,7 +83,7 @@ async function main()
 		check(r.status === -1, 'STAT of an absolute path is refused');
 		r = await BgiNet.stat('link/secret.txt');
 		check(r.status === -1, 'a symbolic link out of the game directory is invisible');
-		r = await BgiNet.stat('save/../games.json');
+		r = await BgiNet.stat('save/../openbgi.json');
 		check(r.status === -1, '.. is refused even when it would stay inside');
 
 		let b = await BgiNet.read('data01000.arc', 1000, 0, 16);
@@ -116,14 +116,14 @@ async function main()
 			return out;
 		};
 		let l = names(await BgiNet.list(''));
-		check(l && l.map(e => e.name).sort().join() === 'Data01000.arc,Save,games.json', 'LIST of the root keeps the spelling and hides the link out (' + (l ? l.map(e => e.name).sort().join() : 'null') + ')');
+		check(l && l.map(e => e.name).sort().join() === 'Data01000.arc,Save,openbgi.json', 'LIST of the root keeps the spelling and hides the link out (' + (l ? l.map(e => e.name).sort().join() : 'null') + ')');
 		check(l && l.find(e => e.name === 'Save').attrs === 0x10, 'LIST marks the directory');
 		check(l && l.find(e => e.name === 'Data01000.arc').size === big.length, 'LIST carries the sizes');
 		l = names(await BgiNet.list('SAVE'));
 		check(l && l.length === 1 && l[0].name === 'sysdat.dat', 'LIST of a subdirectory by another case');
 		l = names(await BgiNet.list('link'));
 		check(l === null, 'LIST through the link fails');
-		l = names(await BgiNet.list('games.json'));
+		l = names(await BgiNet.list('openbgi.json'));
 		check(l === null, 'LIST of a file fails');
 
 		// many requests in flight at once keep their ids straight

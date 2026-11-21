@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * tests/bidi.c - unit test of the bidirectional text functions and the
- *                Arabic letter joining (src/core/bidi.c, inc/bgi/bidi.h);
- *                built as bin/test_bidi by `make test`
+ *                Arabic letter joining (src/base/bidi.c, src/include/bgi/bidi.h);
+ *                built as test_bidi by `make test`
  *
  * The strings are arrays of Unicode code points in reading order.  A
  * visual order is checked as the list of logical indices from left to
@@ -27,17 +27,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static int gFails; // the number of failed checks so far
-// evaluate a condition; print it with its location and count a failure when it is false
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 #define COUNT(a) ((int)(sizeof(a) / sizeof(a)[0]))
 

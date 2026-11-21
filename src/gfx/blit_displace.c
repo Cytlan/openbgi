@@ -5,7 +5,7 @@
  * blit_displace.c - the displacement by vector maps (effector mode 0, background
  *                   type 6, "90 1A") and the horizontal box blur (effector
  *                   mode 1, background type 7, "90 1B") of
- *                   inc/bgi/gfx/bitmap.h
+ *                   src/include/bgi/gfx/bitmap.h
  */
 #include "blit_internal.h"
 

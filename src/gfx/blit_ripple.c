@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * blit_ripple.c - the ripple blitters (effector mode 2, background type 8, sprite
- *                 mode 4) of inc/bgi/gfx/bitmap.h: a source read through a
+ *                 mode 4) of src/include/bgi/gfx/bitmap.h: a source read through a
  *                 ripple's vector map
  *
  * The map is a PM_VECDIST bitmap of the source view's size (VecDist_Radial

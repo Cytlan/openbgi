@@ -33,131 +33,103 @@
 #include "bgi/sys.h"
 #include "bgi/msg.h"
 #include "bgi/gfx.h"
+#include "bgi/core.h"
 
 // -------------------------------------------------------------------------
 // key state table (256 x 20 bytes)
 // -------------------------------------------------------------------------
-typedef struct KeyRec
-{
-	int32_t down;      // currently pressed
-	int32_t consumed;  // the press was reported by GetKeyTrigger
-	int32_t pending;   // presses not yet reported
-	int32_t counter;   // presses since KeyState_Clear
-	uint32_t repeatAt; // tick at which auto-repeat starts
-	int32_t repeatNew; // from 1.69 build 472 ("81 10"): every WM_KEYDOWN counts as a new press
-} KeyRec_t;
-
-static KeyRec_t gKeyState[256];
-
-int gInputEnable = 1;          // "80 10": the layers report nothing while 0
-static int gSkipKeyEnable = 1; // "80 14": the skip keys count
-static int gSkipLatch;         // "80 15": the skip function is held on without a key
-static int gSkipFlushed;       // set by Input_Flush: a held skip key does not count until released
-static uint32_t gInputSerial;  // bumped on every input message ("80 13")
-static int gSwapButtons;       // "80 1E": 1 exchanges the left and right buttons
-static int gKeysWhenInactive;  // "81 14": key states are read while the window is inactive
 
 #define KEY_REPEAT_DELAY 500 // ms before auto-repeat
 
 // virtual-key codes are 0..255; anything else is a script error
-static void CheckVirtualKey(int vk)
+static void CheckKeyCode(OpenBGI_t* o, int vk)
 {
 	if(vk < 0 || vk > 0xff)
-		ThrowScriptError(MSG_BAD_VIRTUAL_KEY);
+		ThrowScriptError(o, MSG_BAD_VIRTUAL_KEY);
 }
 
-uint32_t InputSerial_Get(void)
+uint32_t InputSerial_Get(OpenBGI_t* o)
 {
-	return gInputSerial;
+	return o->input.inputSerial;
 }
 
-void InputSerial_Bump(void)
+void InputSerial_Bump(OpenBGI_t* o)
 {
-	gInputSerial++;
+	o->input.inputSerial++;
 }
 
-void Set_InputEnable(int on)
+void Set_InputEnable(OpenBGI_t* o, int on)
 {
-	gInputEnable = on;
+	o->input.inputEnable = on;
 }
 
-void Set_SkipKeyEnable(int on)
+void Set_SkipKeyEnable(OpenBGI_t* o, int on)
 {
-	gSkipKeyEnable = on;
+	o->input.skipKeyEnable = on;
 }
 
-void Set_SkipLatch(int on)
+void Set_SkipLatch(OpenBGI_t* o, int on)
 {
-	gSkipLatch = on;
+	o->input.skipLatch = on;
 }
 
-int Input_SwapButtons(void)
+int Input_SwapButtons(OpenBGI_t* o)
 {
-	return gSwapButtons;
+	return o->input.swapButtons;
 }
 
 // "80 1E": 0 or 1; returns 1 when accepted, 0 for any other value
-int Input_SetSwapButtons(uint32_t v)
+int Input_SetSwapButtons(OpenBGI_t* o, uint32_t v)
 {
 	if(v > 1)
 		return 0;
-	gSwapButtons = (int)v;
+	o->input.swapButtons = (int)v;
 	return 1;
 }
 
 /*
  * The asynchronous state of a key ("80 11"), with the left / right mouse
  * buttons exchanged when the script asked for it: the left button (1)
- * then reads either physical button, the right button (2) reads key 0,
- * which is never down - it acts as the left one.  When the system has
- * the buttons swapped as well, both are checked so that either physical
- * button works.  Returns the GetAsyncKeyState value: bit 15 = down.
- * From 1.529 on nothing is down while the window is inactive, unless
- * "81 14" allows it.
+ * then reads either button, the right button (2) reads key 0, which is
+ * never down - it acts as the left one.  Returns the GetAsyncKeyState
+ * value: bit 15 = down.  The state is what the host reported
+ * (Input_KeyDown); the original reads the physical buttons and exchanges
+ * them itself when the system has them swapped, which the host's report
+ * of the primary button as the left one already is.  From 1.529 on
+ * nothing is down while the window is inactive, unless "81 14" allows
+ * it.
  */
-int GetKeyStateEx(int vk)
+int GetKeyStateEx(OpenBGI_t* o, int vk)
 {
 	int second = 0, r;
-	if(vk == 1 && gSwapButtons == 1)
+	if(vk == 1 && o->input.swapButtons == 1)
 		second = 2;
-	else if(vk == 2 && gSwapButtons == 1)
+	else if(vk == 2 && o->input.swapButtons == 1)
 		vk = 0;
-	if(Mouse_SysSwapped())
-	{ // SwapMouseButton state
-		if(vk == 1)
-		{
-			vk = 2;
-			second = second != 0; // 1 when the swap above also applied
-		}
-		else if(vk == 2)
-		{
-			vk = 1;
-		}
-	}
-	r = OS_KeyState(vk) ? 0x8000 : 0;
+	r = Input_KeyDown(o, vk) ? 0x8000 : 0;
 	if(second)
-		r |= OS_KeyState(second) ? 0x8000 : 0;
+		r |= Input_KeyDown(o, second) ? 0x8000 : 0;
 	// 1.529 on: nothing while the window is inactive, unless "81 14" allows it
-	if(gEngine->gen >= GEN_1_529 && !Window_IsActive() && !gKeysWhenInactive)
+	if(o->engine.profile->gen >= GEN_1_529 && !Window_IsActive(o) && !o->input.keysWhenInactive)
 		return 0;
 	return r;
 }
 
 // "81 14" of 1.529 on
-void Input_SetKeysWhenInactive(int on)
+void Input_SetKeysWhenInactive(OpenBGI_t* o, int on)
 {
-	gKeysWhenInactive = on;
+	o->input.keysWhenInactive = on;
 }
 
 /* "81 10" of 1.69 build 472 on: set the flag that makes the keyboard's
  * auto-repeat of key vk count as new presses (Input_OnKeyDown releases
  * the key before each press); the old value is returned. */
-int Key_SetRepeatNew(int vk, int on)
+int Key_SetRepeatNew(OpenBGI_t* o, int vk, int on)
 {
 	int old;
-	CheckVirtualKey(vk);
-	old = gKeyState[vk].repeatNew;
-	gKeyState[vk].repeatNew = on;
+	CheckKeyCode(o, vk);
+	old = o->input.keyState[vk].repeatNew;
+	o->input.keyState[vk].repeatNew = on;
 	return old;
 }
 
@@ -166,15 +138,15 @@ int Key_SetRepeatNew(int vk, int on)
  * nothing.  The mouse buttons (1, 2, 4, 5, 6) report every click to
  * GetKeyTrigger, a key only its first press while held.  `repeat` is not
  * used: a held key is recognised from the table. */
-int Input_OnKeyDown(int vk, int repeat)
+int Input_OnKeyDown(OpenBGI_t* o, int vk, int repeat)
 {
 	KeyRec_t* k;
 	int fresh;
 	BGI_UNUSED(repeat);
-	CheckVirtualKey(vk);
-	k = &gKeyState[vk];
+	CheckKeyCode(o, vk);
+	k = &o->input.keyState[vk];
 	if(k->repeatNew)
-		Input_OnKeyUp(vk);
+		Input_OnKeyUp(o, vk);
 	fresh = k->down == 0;
 	if(vk == 1 || vk == 2 || vk == 4 || vk == 5 || vk == 6)
 	{
@@ -187,33 +159,33 @@ int Input_OnKeyDown(int vk, int repeat)
 	}
 	k->pending++;
 	k->counter++;
-	k->repeatAt = GetTicks() + KEY_REPEAT_DELAY;
+	k->repeatAt = GetTicks(o) + KEY_REPEAT_DELAY;
 	k->down = 1;
 	return fresh;
 }
 
 // A release from the window's events.
-void Input_OnKeyUp(int vk)
+void Input_OnKeyUp(OpenBGI_t* o, int vk)
 {
-	CheckVirtualKey(vk);
-	gKeyState[vk].down = 0;
-	gKeyState[vk].consumed = 0;
+	CheckKeyCode(o, vk);
+	o->input.keyState[vk].down = 0;
+	o->input.keyState[vk].consumed = 0;
 }
 
 // Count a press without a state change (a button click that went to a knob).
-void Input_CountPress(int vk)
+void Input_CountPress(OpenBGI_t* o, int vk)
 {
-	CheckVirtualKey(vk);
-	gKeyState[vk].counter++;
+	CheckKeyCode(o, vk);
+	o->input.keyState[vk].counter++;
 }
 
 // a held key past its auto-repeat delay (the panels' hot keys)
-int Key_IsRepeating(int vk)
+int Key_IsRepeating(OpenBGI_t* o, int vk)
 {
-	const KeyRec_t* k = &gKeyState[vk];
+	const KeyRec_t* k = &o->input.keyState[vk];
 	if(!k->down)
 		return 0;
-	return GetTicks() >= k->repeatAt;
+	return GetTicks(o) >= k->repeatAt;
 }
 
 /*
@@ -224,17 +196,15 @@ int Key_IsRepeating(int vk)
  * message was lost (held in the table, up in the system) is released
  * first.
  */
-int GetKeyTrigger(int vk)
+int GetKeyTrigger(OpenBGI_t* o, int vk)
 {
-	static const uint32_t* const groups[4] = {
-		gStdKeys[STDKEY_DECIDE], gStdKeys[STDKEY_CANCEL],
-		gWheelUpKeys, gWheelDownKeys};
+	const uint32_t* const groups[4] = {o->input.stdKeys[STDKEY_DECIDE], o->input.stdKeys[STDKEY_CANCEL], o->input.wheelUpKeys, o->input.wheelDownKeys};
 	KeyRec_t* k;
 	uint32_t r;
-	CheckVirtualKey(vk);
-	k = &gKeyState[vk];
-	if(k->down && !(((uint32_t)GetKeyStateEx(vk) >> 15) & 1))
-		Input_OnKeyUp(vk); // the release message was lost
+	CheckKeyCode(o, vk);
+	k = &o->input.keyState[vk];
+	if(k->down && !(((uint32_t)GetKeyStateEx(o, vk) >> 15) & 1))
+		Input_OnKeyUp(o, vk); // the release message was lost
 
 	if(vk < 0xc1)
 	{
@@ -255,7 +225,7 @@ int GetKeyTrigger(int vk)
 		{
 			for(; *list; list++)
 			{
-				uint32_t t = (uint32_t)GetKeyTrigger((int)*list);
+				uint32_t t = (uint32_t)GetKeyTrigger(o, (int)*list);
 				if(t)
 				{
 					held |= t & 0x80000000u;
@@ -267,27 +237,27 @@ int GetKeyTrigger(int vk)
 	}
 }
 
-int GetKeyCounter(int vk)
+int GetKeyCounter(OpenBGI_t* o, int vk)
 {
-	return gKeyState[vk].counter;
+	return o->input.keyState[vk].counter;
 }
 
 // Forget everything, the counters included (the engine's reset).
-void KeyState_Clear(void)
+void KeyState_Clear(OpenBGI_t* o)
 {
-	memset(gKeyState, 0, sizeof gKeyState);
+	memset(o->input.keyState, 0, sizeof o->input.keyState);
 }
 
 // Forget the pressed state and the pending presses of every key; the counters stay.
-void Input_ClearStates(void)
+void Input_ClearStates(OpenBGI_t* o)
 {
 	int i;
 	for(i = 0; i < 256; i++)
 	{
-		gKeyState[i].down = 0;
-		gKeyState[i].consumed = 0;
-		gKeyState[i].pending = 0;
-		gKeyState[i].repeatAt = 0;
+		o->input.keyState[i].down = 0;
+		o->input.keyState[i].consumed = 0;
+		o->input.keyState[i].pending = 0;
+		o->input.keyState[i].repeatAt = 0;
 	}
 }
 
@@ -296,46 +266,18 @@ void Input_ClearStates(void)
 // -------------------------------------------------------------------------
 
 // the 24 key lists in mask-bit order; each list is 0-terminated
-uint32_t gStdKeys[STDKEY_COUNT][16] = {
-	{0x01},       // bit 0        left button
-	{0x02},       // bit 1        right button
-	{0x04},       // bit 2        middle button
-	{0x05},       // bit 4        X button 1
-	{0x06},       // bit 5        X button 2
-	{0x0e},       // bit 6  0x40  wheel up    ("80 1B")
-	{0x0f},       // bit 7  0x80  wheel down
-	{0x0d},       // bit 8  0x100 decide: Enter
-	{0x20},       // bit 9  0x200 cancel: Space
-	{0x26},       // bit 12 0x1000 up
-	{0x28},       // bit 13 0x2000 down
-	{0x25},       // bit 14 0x4000 left
-	{0x27},       // bit 15 0x8000 right
-	{0x31, 0x61}, // bit 16 '1' / numpad 1
-	{0x32, 0x62}, // bit 17 '2'
-	{0x33, 0x63}, // bit 18 '3'
-	{0x34, 0x64}, // bit 19 '4'
-	{0x35, 0x65}, // bit 20 '5'
-	{0x36, 0x66}, // bit 21 '6'
-	{0x37, 0x67}, // bit 22 '7'
-	{0x38, 0x68}, // bit 23 '8'
-	{0x39, 0x69}, // bit 24 '9'
-	{0x30, 0x60}, // bit 25 '0'
-	{0x09},       // bit 30 Tab
-};
+
 // the mask bit of each list, in the same order
 static const uint32_t gStdKeyBits[STDKEY_COUNT] = {
 	0x1, 0x2, 0x4, 0x10, 0x20, 0x40, 0x80, 0x100, 0x200, 0x1000, 0x2000,
 	0x4000, 0x8000, 0x10000, 0x20000, 0x40000, 0x80000, 0x100000, 0x200000,
 	0x400000, 0x800000, 0x1000000, 0x2000000, 0x40000000};
-uint32_t gSkipKeys[16] = {0x11};           // the skip keys (bit 31): Ctrl
-uint32_t gWheelUpKeys[3] = {0x26, 0x0e};   // 0xc3 = up + wheel up
-uint32_t gWheelDownKeys[3] = {0x28, 0x0f}; // 0xc4 = down + wheel down
 
 /* "80 1B": replace the keys of one of the assignable groups, named by its
  * mask bit (0x40 .. 0x8000; from 1.529 on also 0x40000000 Tab and
  * 0x80000000 the skip keys) with a 0-terminated list of at most 15.
  * 0 ok, 0x80000001 unknown group, 0x80000002 too many keys. */
-uint32_t SetStandardKey(uint32_t group, const uint32_t* keys)
+uint32_t SetStandardKey(OpenBGI_t* o, uint32_t group, const uint32_t* keys)
 {
 	int n = 0, slot;
 	while(keys[n])
@@ -353,32 +295,32 @@ uint32_t SetStandardKey(uint32_t group, const uint32_t* keys)
 		case 0x4000: slot = STDKEY_LEFT; break;
 		case 0x8000: slot = STDKEY_RIGHT; break;
 		case 0x40000000: // 1.529 on: Tab and the skip keys too
-			if(gEngine->gen < GEN_1_529)
+			if(o->engine.profile->gen < GEN_1_529)
 				return 0x80000001u;
 			slot = STDKEY_TAB;
 			break;
 		case 0x80000000:
-			if(gEngine->gen < GEN_1_529)
+			if(o->engine.profile->gen < GEN_1_529)
 				return 0x80000001u;
-			memcpy(gSkipKeys, keys, (size_t)(n + 1) * sizeof(uint32_t));
+			memcpy(o->input.skipKeys, keys, (size_t)(n + 1) * sizeof(uint32_t));
 			return 0;
 		default: return 0x80000001u;
 	}
-	memcpy(gStdKeys[slot], keys, (size_t)(n + 1) * sizeof(uint32_t));
+	memcpy(o->input.stdKeys[slot], keys, (size_t)(n + 1) * sizeof(uint32_t));
 	return 0;
 }
 
 // the trigger mask of the key groups (bits 6 .. 30); the triggers are consumed
-static uint32_t StdKeys_PollTriggers(void)
+static uint32_t StdKeys_PollTriggers(OpenBGI_t* o)
 {
 	uint32_t mask = 0;
 	int g;
 	for(g = STDKEY_WHEEL_UP; g < STDKEY_COUNT; g++)
 	{
 		const uint32_t* k;
-		for(k = gStdKeys[g]; *k; k++)
+		for(k = o->input.stdKeys[g]; *k; k++)
 		{
-			if(GetKeyTrigger((int)*k))
+			if(GetKeyTrigger(o, (int)*k))
 			{ // stops at the first hit: the other members keep their triggers
 				mask |= gStdKeyBits[g];
 				break;
@@ -391,35 +333,33 @@ static uint32_t StdKeys_PollTriggers(void)
 /* the standard-key mask the tween waits break on, 0x2000 (down) in the
  * reference; "81 1F" of 1.69 build 472 on makes it configurable
  * (or'ed with 0x180, wheel down and decide, by the waits) */
-static uint32_t gTweenKeyMask = 0x2000;
-void Input_SetTweenKeyMask(uint32_t mask)
+void Input_SetTweenKeyMask(OpenBGI_t* o, uint32_t mask)
 {
-	gTweenKeyMask = mask;
+	o->input.tweenKeyMask = mask;
 }
-uint32_t Input_TweenKeyMask(void)
+uint32_t Input_TweenKeyMask(OpenBGI_t* o)
 {
-	return gTweenKeyMask | 0x180;
+	return o->input.tweenKeyMask | 0x180;
 }
 
 /* 1.547 on ("81 1B"): the keys of a gamepad's controls - the buttons 0 ..
  * 31 and the directions up, down, left, right as 32 .. 35 (the hat, or
  * the stick past a quarter of its travel).  The original reads a
  * DirectInput joystick and taps the key of a control (a press and a
- * release) when it goes down; 0 is none.  The OS layer here reads no
- * gamepad, so the table is only kept. */
-uint32_t gPadKeys[PAD_CONTROLS];
+ * release) when it goes down; 0 is none.  No host hands a gamepad over
+ * yet, so the table is only kept. */
 
 // 0 ok, 0x80000002 an index past the table
-uint32_t Pad_SetKey(uint32_t index, uint32_t vk)
+uint32_t Pad_SetKey(OpenBGI_t* o, uint32_t index, uint32_t vk)
 {
 	if(index >= PAD_CONTROLS)
 		return 0x80000002;
-	gPadKeys[index] = vk;
+	o->input.padKeys[index] = vk;
 	return 0;
 }
 
 // "80 1C": the counters of every key in the groups of `mask`, summed
-int CountKeysByMask(uint32_t mask)
+int CountKeysByMask(OpenBGI_t* o, uint32_t mask)
 {
 	int g, sum = 0;
 	for(g = 0; g < STDKEY_COUNT; g++)
@@ -427,8 +367,8 @@ int CountKeysByMask(uint32_t mask)
 		const uint32_t* k;
 		if(!(mask & gStdKeyBits[g]))
 			continue;
-		for(k = gStdKeys[g]; *k; k++)
-			sum += GetKeyCounter((int)*k);
+		for(k = o->input.stdKeys[g]; *k; k++)
+			sum += GetKeyCounter(o, (int)*k);
 	}
 	return sum;
 }
@@ -462,12 +402,12 @@ int StdKey_MaskBit(uint32_t mask, int vk)
 // -------------------------------------------------------------------------
 
 // "80 16": forget the pending state of the skip keys; a skip key still held does not count until released
-void Input_Flush(void)
+void Input_Flush(OpenBGI_t* o)
 {
 	const uint32_t* k;
-	gSkipFlushed = 1;
-	for(k = gSkipKeys; *k; k++)
-		GetKeyTrigger((int)*k);
+	o->input.skipFlushed = 1;
+	for(k = o->input.skipKeys; *k; k++)
+		GetKeyTrigger(o, (int)*k);
 }
 
 /*
@@ -477,33 +417,33 @@ void Input_Flush(void)
  * key has been released.  Requires the skip-key switch ("80 14") and
  * input to be enabled ("80 10").
  */
-int Input_CheckSkip(void)
+int Input_CheckSkip(OpenBGI_t* o)
 {
-	int latched = gSkipLatch;
+	int latched = o->input.skipLatch;
 	int anyHeld = 0;
 	const uint32_t* k;
 
-	if(Window_IsActive() && gInputEnable && gSkipKeys[0])
+	if(Window_IsActive(o) && o->input.inputEnable && o->input.skipKeys[0])
 	{
-		for(k = gSkipKeys; *k; k++)
+		for(k = o->input.skipKeys; *k; k++)
 		{
-			int down = GetKeyStateEx((int)*k) & 0x8000;
+			int down = GetKeyStateEx(o, (int)*k) & 0x8000;
 			if(down)
 				anyHeld = 1;
-			if(gSkipFlushed)
+			if(o->input.skipFlushed)
 			{
-				if(GetKeyTrigger((int)*k) && Window_IsRestored())
+				if(GetKeyTrigger(o, (int)*k) && Window_IsRestored(o))
 					latched = 1;
 			}
-			else if(down && Window_IsRestored())
+			else if(down && Window_IsRestored(o))
 			{
-				return gSkipKeyEnable ? 1 : 0;
+				return o->input.skipKeyEnable ? 1 : 0;
 			}
 		}
 	}
-	if(gSkipFlushed && !anyHeld)
-		gSkipFlushed = 0;
-	if(latched && gSkipKeyEnable)
+	if(o->input.skipFlushed && !anyHeld)
+		o->input.skipFlushed = 0;
+	if(latched && o->input.skipKeyEnable)
 		return 1;
 	return 0;
 }
@@ -514,13 +454,10 @@ int Input_CheckSkip(void)
 typedef struct InputLayer
 {
 	uint32_t key;            // priority key
-	int32_t l, t, r, b;      // rectangle (mouse layers), inclusive
-	DispObj_t* sprite;       // sprite that owns the rectangle, or NULL
+	int32_t l, t, r, b;      // rectangle (mouse layers without a sprite), inclusive
+	DispObj_t* sprite;       // sprite whose screen rectangle the layer is, or NULL
 	struct InputLayer* next; // lower keys follow
 } InputLayer_t;
-
-static InputLayer_t* gMouseLayers; // highest key first
-static InputLayer_t* gKeyLayers;   // highest key first
 
 // the default mouse layer covers every coordinate
 static const int32_t gFullRect[4] = {INT32_MIN, INT32_MIN, INT32_MAX, INT32_MAX};
@@ -586,96 +523,122 @@ static int Layer_PopSprite(InputLayer_t** head, DispObj_t* s)
 }
 
 // a mouse layer covering every coordinate
-void MouseLayer_Push(uint32_t key)
+void MouseLayer_Push(OpenBGI_t* o, uint32_t key)
 {
-	Layer_Push(&gMouseLayers, key, gFullRect, NULL);
+	Layer_Push(&o->input.mouseLayers, key, gFullRect, NULL);
 }
 
 // a key layer (its rectangle is unused)
-void KeyLayer_Push(uint32_t key)
+void KeyLayer_Push(OpenBGI_t* o, uint32_t key)
 {
 	static const int32_t zero[4] = {0, 0, 0, 0};
-	Layer_Push(&gKeyLayers, key, zero, NULL);
+	Layer_Push(&o->input.keyLayers, key, zero, NULL);
 }
 
 /* a mouse layer that follows a sprite (its key is the sprite's input
  * priority, its rectangle is refreshed on every hit test) */
-void MouseLayer_PushSprite(DispObj_t* s)
+void MouseLayer_PushSprite(OpenBGI_t* o, DispObj_t* s)
 {
 	static const int32_t zero[4] = {0, 0, 0, 0};
-	Layer_Push(&gMouseLayers, s->vt->sortKey(s), zero, s);
+	Layer_Push(&o->input.mouseLayers, s->vt->sortKey(o, s), zero, s);
 }
 
-void MouseLayer_Pop(uint32_t key)
+void MouseLayer_Pop(OpenBGI_t* o, uint32_t key)
 {
-	Layer_PopKey(&gMouseLayers, key);
+	Layer_PopKey(&o->input.mouseLayers, key);
 }
 
-void KeyLayer_Pop(uint32_t key)
+void KeyLayer_Pop(OpenBGI_t* o, uint32_t key)
 {
-	Layer_PopKey(&gKeyLayers, key);
+	Layer_PopKey(&o->input.keyLayers, key);
 }
 
-void MouseLayer_PopSprite(DispObj_t* s)
+void MouseLayer_PopSprite(OpenBGI_t* o, DispObj_t* s)
 {
-	Layer_PopSprite(&gMouseLayers, s);
+	Layer_PopSprite(&o->input.mouseLayers, s);
 }
 
 // Clear both lists and push the base layer (key 1) on each (the engine's reset and shutdown).
-void Input_ResetLayers(void)
+void Input_ResetLayers(OpenBGI_t* o)
 {
-	Layers_Clear(&gMouseLayers);
-	Layers_Clear(&gKeyLayers);
-	MouseLayer_Push(1);
-	KeyLayer_Push(1);
+	Layers_Clear(&o->input.mouseLayers);
+	Layers_Clear(&o->input.keyLayers);
+	MouseLayer_Push(o, 1);
+	KeyLayer_Push(o, 1);
 }
 
 // whether a key layer receives keys: its key is at least the top one's, and input is enabled
-int KeyLayer_IsTop(uint32_t key)
+int KeyLayer_IsTop(OpenBGI_t* o, uint32_t key)
 {
-	if(!gInputEnable || !gKeyLayers)
+	if(!o->input.inputEnable || !o->input.keyLayers)
 		return 0;
-	return key >= gKeyLayers->key;
+	return key >= o->input.keyLayers->key;
 }
 
 /*
- * Does the cursor hit the mouse layer `key`?  Layers are visited from
- * the highest key down.  A higher layer that contains the cursor (and,
- * for sprite layers, whose sprite is visible and opaque there) hides the
- * requested layer; the first layer with a lower key ends the search.
- * 0 while input is disabled.
+ * Would the cursor at back-buffer position (x, y) hit the mouse layer
+ * `key`?  Layers are visited from the highest key down.  A higher layer
+ * that contains the point (and, for sprite layers, whose sprite is
+ * visible and opaque there) hides the requested layer; the first layer
+ * with a lower key ends the search.  Whether input is enabled is not
+ * asked; nothing changes.
  */
-int MouseLayer_Hit(uint32_t key)
+int MouseLayer_HitAt(OpenBGI_t* o, uint32_t key, int x, int y)
 {
-	InputLayer_t* l;
-	int pos[2];
-	if(!gInputEnable)
-		return 0;
-	GetMouseClientPos(pos);
-	for(l = gMouseLayers; l; l = l->next)
+	const InputLayer_t* l;
+	for(l = o->input.mouseLayers; l; l = l->next)
 	{
-		int inside;
+		Rect_t r;
 		if(l->sprite)
 		{
-			Rect_t r;
-			if(!l->sprite->vt->isVisible(l->sprite))
+			if(!l->sprite->vt->isVisible(o, l->sprite))
 				continue;
-			l->sprite->vt->screenRect(l->sprite, &r); // the layer follows the sprite
-			l->l = r.l;
-			l->t = r.t;
-			l->r = r.r;
-			l->b = r.b;
+			l->sprite->vt->screenRect(o, l->sprite, &r); // the layer follows the sprite
+		}
+		else
+		{
+			r.l = l->l;
+			r.t = l->t;
+			r.r = l->r;
+			r.b = l->b;
 		}
 		if(l->key < key)
 			return 0;
-		inside = pos[0] >= l->l && pos[0] <= l->r && pos[1] >= l->t && pos[1] <= l->b;
-		if(!inside)
+		if(x < r.l || x > r.r || y < r.t || y > r.b)
 			continue;
-		if(l->sprite && !l->sprite->vt->hitTest(l->sprite, pos[0] - l->l, pos[1] - l->t))
+		if(l->sprite && !l->sprite->vt->hitTest(o, l->sprite, x - r.l, y - r.t))
 			continue;
 		return l->key == key;
 	}
 	return 0;
+}
+
+// Does the cursor hit the mouse layer `key` (MouseLayer_HitAt where it is)?  0 while input is disabled.
+int MouseLayer_Hit(OpenBGI_t* o, uint32_t key)
+{
+	int pos[2];
+	if(!o->input.inputEnable)
+		return 0;
+	GetMouseClientPos(o, pos);
+	return MouseLayer_HitAt(o, key, pos[0], pos[1]);
+}
+
+/* The keys of the mouse layers that cover every coordinate (pushed
+ * without a sprite), highest first, one per layer: up to `max` into
+ * `out`; returns how many there are. */
+int MouseLayer_Unbounded(OpenBGI_t* o, uint32_t* out, int max)
+{
+	const InputLayer_t* l;
+	int n = 0;
+	for(l = o->input.mouseLayers; l; l = l->next)
+	{
+		if(l->sprite || l->l != gFullRect[0] || l->t != gFullRect[1] || l->r != gFullRect[2] || l->b != gFullRect[3])
+			continue;
+		if(n < max)
+			out[n] = l->key;
+		n++;
+	}
+	return n;
 }
 
 /* "80 1A": the input pending for a pair of layers, as a mask: bit 31
@@ -683,46 +646,46 @@ int MouseLayer_Hit(uint32_t key)
  * top), bits 0, 1, 2, 4, 5 the mouse buttons (when the mouse layer is
  * hit).  The pending input is consumed; "80 18" / "80 19" and the wait
  * objects call it to swallow what is pending for a layer. */
-uint32_t Input_Poll(uint32_t keyLayer, uint32_t mouseLayer)
+uint32_t Input_Poll(OpenBGI_t* o, uint32_t keyLayer, uint32_t mouseLayer)
 {
 	uint32_t mask = 0;
-	if(KeyLayer_IsTop(keyLayer))
+	if(KeyLayer_IsTop(o, keyLayer))
 	{
-		mask = StdKeys_PollTriggers();
-		if(Input_CheckSkip())
+		mask = StdKeys_PollTriggers(o);
+		if(Input_CheckSkip(o))
 			mask |= 0x80000000u;
 	}
-	if(MouseLayer_Hit(mouseLayer))
+	if(MouseLayer_Hit(o, mouseLayer))
 	{
-		if(GetKeyTrigger(1))
+		if(GetKeyTrigger(o, 1))
 			mask |= 0x1;
-		if(GetKeyTrigger(2))
+		if(GetKeyTrigger(o, 2))
 			mask |= 0x2;
-		if(GetKeyTrigger(4))
+		if(GetKeyTrigger(o, 4))
 			mask |= 0x4;
-		if(GetKeyTrigger(5))
+		if(GetKeyTrigger(o, 5))
 			mask |= 0x10;
-		if(GetKeyTrigger(6))
+		if(GetKeyTrigger(o, 6))
 			mask |= 0x20;
 	}
 	return mask;
 }
 
 // the mouse buttons held past the repeat delay (the same bits as Input_Poll), for the wait classes
-uint32_t Input_PollHeld(uint32_t mouseLayer)
+uint32_t Input_PollHeld(OpenBGI_t* o, uint32_t mouseLayer)
 {
 	uint32_t mask = 0;
-	if(MouseLayer_Hit(mouseLayer))
+	if(MouseLayer_Hit(o, mouseLayer))
 	{
-		if(Key_IsRepeating(1))
+		if(Key_IsRepeating(o, 1))
 			mask |= 0x1;
-		if(Key_IsRepeating(2))
+		if(Key_IsRepeating(o, 2))
 			mask |= 0x2;
-		if(Key_IsRepeating(4))
+		if(Key_IsRepeating(o, 4))
 			mask |= 0x4;
-		if(Key_IsRepeating(5))
+		if(Key_IsRepeating(o, 5))
 			mask |= 0x10;
-		if(Key_IsRepeating(6))
+		if(Key_IsRepeating(o, 6))
 			mask |= 0x20;
 	}
 	return mask;
@@ -737,13 +700,12 @@ typedef struct FocusNode
 	uint32_t key;           // its layer key
 	struct FocusNode* next; // lower or equal keys follow
 } FocusNode_t;
-static FocusNode_t* gFocusList; // highest key first
 
 /* Register a wait object (the menu and icon waits) with its layer key;
  * the node is inserted after every node with a key >= the new one. */
-void InputFocus_Add(uint32_t waitSerial, uint32_t key)
+void InputFocus_Add(OpenBGI_t* o, uint32_t waitSerial, uint32_t key)
 {
-	FocusNode_t **link = &gFocusList, *n;
+	FocusNode_t **link = &o->input.focusList, *n;
 	while(*link && (*link)->key >= key)
 		link = &(*link)->next;
 	n = (FocusNode_t*)BGI_Alloc(sizeof(FocusNode_t));
@@ -754,10 +716,10 @@ void InputFocus_Add(uint32_t waitSerial, uint32_t key)
 }
 
 // Unregister a wait object by its serial.
-void InputFocus_Remove(uint32_t waitSerial)
+void InputFocus_Remove(OpenBGI_t* o, uint32_t waitSerial)
 {
 	FocusNode_t** link;
-	for(link = &gFocusList; *link; link = &(*link)->next)
+	for(link = &o->input.focusList; *link; link = &(*link)->next)
 	{
 		if((*link)->serial == waitSerial)
 		{
@@ -769,10 +731,23 @@ void InputFocus_Remove(uint32_t waitSerial)
 	}
 }
 
-// whether a layer key has the focus among the registered waits (1 when none is registered)
-int InputFocus_IsTop(uint32_t key)
+// Free both lists, the base layers too, and the waits registered for the focus (OpenBGI_Delete).
+void Input_FreeLayers(OpenBGI_t* o)
 {
-	if(!gFocusList)
+	Layers_Clear(&o->input.mouseLayers);
+	Layers_Clear(&o->input.keyLayers);
+	while(o->input.focusList)
+	{
+		FocusNode_t* n = o->input.focusList;
+		o->input.focusList = n->next;
+		BGI_Free(n);
+	}
+}
+
+// whether a layer key has the focus among the registered waits (1 when none is registered)
+int InputFocus_IsTop(OpenBGI_t* o, uint32_t key)
+{
+	if(!o->input.focusList)
 		return 1;
-	return key >= gFocusList->key;
+	return key >= o->input.focusList->key;
 }

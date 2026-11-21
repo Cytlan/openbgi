@@ -32,6 +32,7 @@
 #include "bgi/wait.h"
 #include "bgi/waitobj.h"
 #include "bgi/input.h"
+#include "bgi/inputmap.h"
 #include "bgi/display.h"
 #include "bgi/sysobj.h"
 #include "bgi/sys.h"
@@ -40,6 +41,7 @@
 #include "bgi/gfx/window.h"
 #include "bgi/gfx/gfxmgr.h"
 #include "bgi/gfx/bmpmgr.h"
+#include "bgi/core.h"
 
 #define MENU_MAX 16 // entries (and columns) at most
 
@@ -59,7 +61,7 @@ typedef struct WaitMenuSelect // 0x194 bytes
 	uint32_t colour;        // text colour (unless the window has a colour table)
 	int allowCancel;        // the cancel keys (bits 1 and 9) end the wait
 	int shown;              // the cursor has been drawn since the last change
-	int phase;              // blink phase: index into gMenuCursorColour
+	int phase;              // blink phase: index into o->wait.menuCursorColour
 	int active;             // the window has the input focus
 } WaitMenuSelect_t;
 
@@ -80,79 +82,70 @@ typedef struct WaitMenuBmp2 // 0x1b0 bytes
 typedef struct MenuVtbl // the base table plus the menu's own slots
 {
 	WaitVtbl_t base;
-	uint32_t (*filterInput)(WaitMenuSelect_t* w, uint32_t mask); // the input bits the class reacts to
-	int (*onMouseMove)(WaitMenuSelect_t* w);                     // 1 when the selection changed
-	uint32_t (*blinkInterval)(WaitMenuSelect_t* w);              // ms
-	void (*highlight)(WaitMenuSelect_t* w);                      // (re)draw the cursor at the selection
-	int (*update)(WaitMenuSelect_t* w);                          // 1 when the wait is over
+	uint32_t (*filterInput)(OpenBGI_t* o, WaitMenuSelect_t* w, uint32_t mask); // the input bits the class reacts to
+	int (*onMouseMove)(OpenBGI_t* o, WaitMenuSelect_t* w);                     // 1 when the selection changed
+	uint32_t (*blinkInterval)(OpenBGI_t* o, WaitMenuSelect_t* w);              // ms
+	void (*highlight)(OpenBGI_t* o, WaitMenuSelect_t* w);                      // (re)draw the cursor at the selection
+	int (*update)(OpenBGI_t* o, WaitMenuSelect_t* w);                          // 1 when the wait is over
 } MenuVtbl_t;
-#define MENU_VT(m) ((const MenuVtbl_t*)(m)->w.vt)
+#define MENU_VT(m)    ((const MenuVtbl_t*)(m)->w.vt)
 
 // the window's sort key: the menu's input layer key and the key of its dirty rectangles
-#define WIN_KEY(w) ((w)->win->obj.vt->sortKey(&(w)->win->obj))
+#define WIN_KEY(o, w) ((w)->win->obj.vt->sortKey(o, &(w)->win->obj))
 
 // ---- the global settings ---------------------------------------------------
 
-static int gMenuRequireActive;           // "90 AF": the menu takes input only while the engine window is active
-static uint32_t gMenuBlinkMs = 600;      // "90 A5": the blink interval in ms
-static uint32_t gMenuCursorColour[2] = { // "90 A4": the cursor text colour per blink
-	0x00ff0000, 0x00ffff00};             //          phase; 0 hides the cursor in that phase
-static int gMenuWheelOn;                 // "90 A6": the wheel moves the pointer
-static int gMenuWheelCurve;              // to the next entry with this
-static int gMenuWheelDuration;           // MouseMove_Start curve, duration
-static int gMenuWheelFps;                // and rate
-
 // "90 AF" (through Select_RequireActive)
-void MenuSelect_SetRequireActive(int on)
+void MenuSelect_SetRequireActive(OpenBGI_t* o, int on)
 {
-	gMenuRequireActive = on;
+	o->wait.menuRequireActive = on;
 }
 
 // may a menu react to input right now?
-static int MenuAllowed(void)
+static int MenuAllowed(OpenBGI_t* o)
 {
-	return gMenuRequireActive ? Window_IsActive() : 1;
+	return o->wait.menuRequireActive ? Window_IsActive(o) : 1;
 }
 
 // "90 A5"
-void Menu_SetBlinkInterval(uint32_t ms)
+void Menu_SetBlinkInterval(OpenBGI_t* o, uint32_t ms)
 {
-	gMenuBlinkMs = ms;
+	o->wait.menuBlinkMs = ms;
 }
 
 // "90 A4": the colours of the two blink phases, 0 hides the cursor in that phase
-void Menu_SetCursorColours(uint32_t c0, uint32_t c1)
+void Menu_SetCursorColours(OpenBGI_t* o, uint32_t c0, uint32_t c1)
 {
-	gMenuCursorColour[0] = c0;
-	gMenuCursorColour[1] = c1;
+	o->wait.menuCursorColour[0] = c0;
+	o->wait.menuCursorColour[1] = c1;
 }
 
 // "90 A6": whether the wheel glides the pointer to the next entry, and how (MouseMove_Start)
-void Menu_SetWheelMove(int on, int curve, int duration, int fps)
+void Menu_SetWheelMove(OpenBGI_t* o, int on, int curve, int duration, int fps)
 {
-	gMenuWheelOn = on;
-	gMenuWheelCurve = curve;
-	gMenuWheelDuration = duration;
-	gMenuWheelFps = fps;
+	o->wait.menuWheelOn = on;
+	o->wait.menuWheelCurve = curve;
+	o->wait.menuWheelDuration = duration;
+	o->wait.menuWheelFps = fps;
 }
 
 // ---- vtables -------------------------------------------------------------------
 
-static void WaitMenuSelect_Destroy(Wait_t* w);
-static int WaitMenuSelect_Poll(Wait_t* w);
-static uint32_t WaitMenuSelect_FilterInput(WaitMenuSelect_t* w, uint32_t mask);
-static int WaitMenuSelect_OnMouseMove(WaitMenuSelect_t* w);
-static uint32_t WaitMenuSelect_BlinkInterval(WaitMenuSelect_t* w);
-static void WaitMenuSelect_Highlight(WaitMenuSelect_t* w);
-static int WaitMenuSelect_Update(WaitMenuSelect_t* w);
-static void WaitMenuBmp_Destroy(Wait_t* w);
-static uint32_t WaitMenuBmp_FilterInput(WaitMenuSelect_t* w, uint32_t mask);
-static int WaitMenuBmp_OnMouseMove(WaitMenuSelect_t* w);
-static void WaitMenuBmp_Highlight(WaitMenuSelect_t* w);
-static int WaitMenuBmp_Update(WaitMenuSelect_t* w);
-static void WaitMenuBmp2_Destroy(Wait_t* w);
-static uint32_t WaitMenuBmp2_BlinkInterval(WaitMenuSelect_t* w);
-static int WaitMenuBmp2_Update(WaitMenuSelect_t* w);
+static void WaitMenuSelect_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitMenuSelect_Poll(OpenBGI_t* o, Wait_t* w);
+static uint32_t WaitMenuSelect_FilterInput(OpenBGI_t* o, WaitMenuSelect_t* w, uint32_t mask);
+static int WaitMenuSelect_OnMouseMove(OpenBGI_t* o, WaitMenuSelect_t* w);
+static uint32_t WaitMenuSelect_BlinkInterval(OpenBGI_t* o, WaitMenuSelect_t* w);
+static void WaitMenuSelect_Highlight(OpenBGI_t* o, WaitMenuSelect_t* w);
+static int WaitMenuSelect_Update(OpenBGI_t* o, WaitMenuSelect_t* w);
+static void WaitMenuBmp_Destroy(OpenBGI_t* o, Wait_t* w);
+static uint32_t WaitMenuBmp_FilterInput(OpenBGI_t* o, WaitMenuSelect_t* w, uint32_t mask);
+static int WaitMenuBmp_OnMouseMove(OpenBGI_t* o, WaitMenuSelect_t* w);
+static void WaitMenuBmp_Highlight(OpenBGI_t* o, WaitMenuSelect_t* w);
+static int WaitMenuBmp_Update(OpenBGI_t* o, WaitMenuSelect_t* w);
+static void WaitMenuBmp2_Destroy(OpenBGI_t* o, Wait_t* w);
+static uint32_t WaitMenuBmp2_BlinkInterval(OpenBGI_t* o, WaitMenuSelect_t* w);
+static int WaitMenuBmp2_Update(OpenBGI_t* o, WaitMenuSelect_t* w);
 
 // isDirty is WaitTextOut's: the window field sits at the same offset in both classes
 static const MenuVtbl_t WaitMenuSelect_Vtbl = {
@@ -186,9 +179,9 @@ static void WaitMenuSelect_SetAllowCancel(WaitMenuSelect_t* w, int on)
  * and the item layers switched off; the menu owns the window's layer key
  * on both input stacks, a subscription to window message 0x200 (mouse
  * moves) and a place on the input-focus list for its lifetime */
-static void WaitMenuSelect_Ctor(WaitMenuSelect_t* w, Thread_t* t, Window_t* win)
+static void WaitMenuSelect_Ctor(OpenBGI_t* o, WaitMenuSelect_t* w, Thread_t* t, Window_t* win)
 {
-	Wait_Ctor(&w->w, t);
+	Wait_Ctor(o, &w->w, t);
 	w->w.vt = &WaitMenuSelect_Vtbl.base;
 	w->win = win;
 	w->count = 0;
@@ -199,32 +192,32 @@ static void WaitMenuSelect_Ctor(WaitMenuSelect_t* w, Thread_t* t, Window_t* win)
 	w->phase = 0;
 	Window_SetTextLevel(win, 0);
 	Window_ShowText(win, 1);
-	Window_RecompositeAll(win);
-	Window_ItemsDisableAll(win);
-	WinMsgWait_Register(t, 0x200);
-	MouseLayer_Push(WIN_KEY(w));
-	KeyLayer_Push(WIN_KEY(w));
-	Input_Poll(WIN_KEY(w), WIN_KEY(w)); // swallow what is pending
-	InputFocus_Add(w->w.serial, WIN_KEY(w));
+	Window_RecompositeAll(o, win);
+	Window_ItemsDisableAll(o, win);
+	WinMsgWait_Register(o, t, 0x200);
+	MouseLayer_Push(o, WIN_KEY(o, w));
+	KeyLayer_Push(o, WIN_KEY(o, w));
+	Input_Poll(o, WIN_KEY(o, w), WIN_KEY(o, w)); // swallow what is pending
+	InputFocus_Add(o, w->w.serial, WIN_KEY(o, w));
 	w->active = 0;
 }
 
 // gives the layers and the subscription back and frees the string copies
-static void WaitMenuSelect_Dtor(WaitMenuSelect_t* w)
+static void WaitMenuSelect_Dtor(OpenBGI_t* o, WaitMenuSelect_t* w)
 {
 	int i;
 	w->w.vt = &WaitMenuSelect_Vtbl.base;
-	MouseLayer_Pop(WIN_KEY(w));
-	KeyLayer_Pop(WIN_KEY(w));
-	WinMsgWait_Unregister(w->w.thread, 0x200);
+	MouseLayer_Pop(o, WIN_KEY(o, w));
+	KeyLayer_Pop(o, WIN_KEY(o, w));
+	WinMsgWait_Unregister(o, w->w.thread, 0x200);
 	for(i = 0; i < w->count; i++)
 		BGI_Free(w->items[i]);
-	Wait_Dtor(&w->w);
+	Wait_Dtor(o, &w->w);
 }
 
-static void WaitMenuSelect_Destroy(Wait_t* w)
+static void WaitMenuSelect_Destroy(OpenBGI_t* o, Wait_t* w)
 {
-	WaitMenuSelect_Dtor((WaitMenuSelect_t*)w);
+	WaitMenuSelect_Dtor(o, (WaitMenuSelect_t*)w);
 	BGI_Free(w);
 }
 
@@ -235,7 +228,7 @@ static void WaitMenuSelect_Destroy(Wait_t* w)
  * width is known; the resulting rectangles (window relative, into `rects`)
  * are what the hit test and the cursor use.  A window colour table
  * ("90 A7") overrides `colour` per entry. */
-static void Menu_Layout(Window_t* win, Rect_t* rects, int n, const char* const* items, int cols, int centre,
+static void Menu_Layout(OpenBGI_t* o, Window_t* win, Rect_t* rects, int n, const char* const* items, int cols, int centre,
 	uint32_t colour)
 {
 	Rect_t area, r;
@@ -255,16 +248,16 @@ static void Menu_Layout(Window_t* win, Rect_t* rects, int n, const char* const* 
 	advance = Window_LineAdvance(win);
 	prop = Window_GetProportional(win);
 	hasTable = Window_GetTable(win, table);
-	Window_ClearText(win);
+	Window_ClearText(o, win);
 	col = 0;
 	for(i = 0; i < n; i++)
 	{
 		Bmp_t cell;
 		int textW, x, y;
 		// generous scratch width: two font sizes per byte of the string
-		Bmp_AllocScreen(&cell, (int)strlen(items[i]) * size * 2, size, 1);
+		Bmp_AllocScreen(o, &cell, (int)strlen(items[i]) * size * 2, size, 1);
 		Bmp_Clear(&cell, 0);
-		BmpMgr_DrawText(gTextBmpMgr, &cell, &textW, 0, 0, items[i], font, hasTable ? (uint32_t)table[i] : colour,
+		BmpMgr_DrawText(o, o->text.textBmpMgr, &cell, &textW, 0, 0, items[i], font, hasTable ? (uint32_t)table[i] : colour,
 			0x80, 0, prop);
 		x = centre ? colMid[col] - (int)((uint32_t)textW >> 1) : colX[col];
 		y = (i / cols) * advance + area.t;
@@ -272,16 +265,16 @@ static void Menu_Layout(Window_t* win, Rect_t* rects, int n, const char* const* 
 		rects[i].t = y;
 		rects[i].r = x + textW - 1;
 		rects[i].b = y + size - 1;
-		Window_DrawBmpToText(win, &r, x, y, &cell, 0x80, 0);
+		Window_DrawBmpToText(o, win, &r, x, y, &cell, 0x80, 0);
 		Bmp_Free(&cell);
 		col = (i + 1) % cols;
 	}
-	Window_TextScreenRect(win, &r);
-	Gfx_AddDirty(gTextGfx, win->obj.vt->sortKey(&win->obj), &r);
+	Window_TextScreenRect(o, win, &r);
+	Gfx_AddDirty(o->text.textGfx, win->obj.vt->sortKey(o, &win->obj), &r);
 }
 
 // keep copies of the strings and lay them out
-static void WaitMenuSelect_Setup(WaitMenuSelect_t* w, int n, const char* const* items, int cols, int centre,
+static void WaitMenuSelect_Setup(OpenBGI_t* o, WaitMenuSelect_t* w, int n, const char* const* items, int cols, int centre,
 	uint32_t colour)
 {
 	int i;
@@ -294,18 +287,17 @@ static void WaitMenuSelect_Setup(WaitMenuSelect_t* w, int n, const char* const* 
 	}
 	w->centre = centre;
 	w->colour = colour;
-	Menu_Layout(w->win, w->rects, n, (const char* const*)w->items, cols, centre, colour);
+	Menu_Layout(o, w->win, w->rects, n, (const char* const*)w->items, cols, centre, colour);
 	Wait_MarkDirty(&w->w);
 }
 
-// the entry under the pointer (inclusive rectangles), -1 for none
-static int WaitMenuSelect_HitTest(WaitMenuSelect_t* w)
+// the entry at back-buffer position (mx, my) (inclusive rectangles), -1 for none; nothing changes
+static int WaitMenuSelect_HitAt(OpenBGI_t* o, const WaitMenuSelect_t* w, int mx, int my)
 {
-	int mouse[2], pos[2], x, y, i;
-	GetMouseClientPos(mouse);
-	w->win->obj.vt->getPos(&w->win->obj, pos);
-	x = mouse[0] - pos[0];
-	y = mouse[1] - pos[1];
+	int pos[2], x, y, i;
+	w->win->obj.vt->getPos(o, &w->win->obj, pos);
+	x = mx - pos[0];
+	y = my - pos[1];
 	for(i = 0; i < w->count; i++)
 	{
 		const Rect_t* r = &w->rects[i];
@@ -315,6 +307,14 @@ static int WaitMenuSelect_HitTest(WaitMenuSelect_t* w)
 	return -1;
 }
 
+// the entry under the pointer, -1 for none
+static int WaitMenuSelect_HitTest(OpenBGI_t* o, WaitMenuSelect_t* w)
+{
+	int mouse[2];
+	GetMouseClientPos(o, mouse);
+	return WaitMenuSelect_HitAt(o, w, mouse[0], mouse[1]);
+}
+
 // does grid cell (col, row) hold an entry?
 static int WaitMenuSelect_IsValidCell(WaitMenuSelect_t* w, int col, int row)
 {
@@ -322,13 +322,13 @@ static int WaitMenuSelect_IsValidCell(WaitMenuSelect_t* w, int col, int row)
 }
 
 // glide the pointer to the centre of an entry (the wheel's way of selecting)
-static void WaitMenuSelect_MoveMouseToItem(WaitMenuSelect_t* w, int idx)
+static void WaitMenuSelect_MoveMouseToItem(OpenBGI_t* o, WaitMenuSelect_t* w, int idx)
 {
 	const Rect_t* r = &w->rects[idx];
 	int pos[2];
-	w->win->obj.vt->getPos(&w->win->obj, pos);
-	MouseMove_Start(pos[0] + r->l + ((r->r - r->l + 1) >> 1), pos[1] + r->t + ((r->b - r->t + 1) >> 1),
-		gMenuWheelCurve, gMenuWheelDuration, gMenuWheelFps, 0);
+	w->win->obj.vt->getPos(o, &w->win->obj, pos);
+	MouseMove_Start(o, pos[0] + r->l + ((r->r - r->l + 1) >> 1), pos[1] + r->t + ((r->b - r->t + 1) >> 1),
+		o->wait.menuWheelCurve, o->wait.menuWheelDuration, o->wait.menuWheelFps, 0);
 }
 
 /* react to the input bits of the pass.  0 nothing happened, 1 the wait is
@@ -338,7 +338,7 @@ static void WaitMenuSelect_MoveMouseToItem(WaitMenuSelect_t* w, int idx)
  * wrapping and skipping the empty cells of the last row; the wheel (when
  * "90 A6" enabled it) moves the pointer instead of the cursor so the mouse
  * tracking selects the entry. */
-static int WaitMenuSelect_ProcessInput(WaitMenuSelect_t* w)
+static int WaitMenuSelect_ProcessInput(OpenBGI_t* o, WaitMenuSelect_t* w)
 {
 	static const uint32_t kNumberKeys[] = {0x10000, 0x20000, 0x40000, 0x80000, 0x100000, 0x200000, 0x400000,
 		0x800000, 0x1000000, 0x2000000, 0};
@@ -368,7 +368,7 @@ static int WaitMenuSelect_ProcessInput(WaitMenuSelect_t* w)
 		}
 		if(mask & 1) // a click selects what is under the pointer; the decide key the cursor entry
 		{
-			int hit = WaitMenuSelect_HitTest(w);
+			int hit = WaitMenuSelect_HitTest(o, w);
 			if(hit < 0)
 				return 0;
 			WaitMenuSelect_SetSelected(w, hit);
@@ -377,7 +377,7 @@ static int WaitMenuSelect_ProcessInput(WaitMenuSelect_t* w)
 	}
 	if(!(mask & 0xf0c0))
 		return 0;
-	keys = gMenuWheelOn ? kArrowWheelKeys : kArrowKeys;
+	keys = o->wait.menuWheelOn ? kArrowWheelKeys : kArrowKeys;
 	for(i = 0; keys[i]; i++)
 	{
 		if(mask & keys[i])
@@ -401,7 +401,7 @@ static int WaitMenuSelect_ProcessInput(WaitMenuSelect_t* w)
 				{
 					if(key == 0x40)
 					{
-						WaitMenuSelect_MoveMouseToItem(w, row * w->cols + col);
+						WaitMenuSelect_MoveMouseToItem(o, w, row * w->cols + col);
 						return 2;
 					}
 					WaitMenuSelect_SetSelected(w, row * w->cols + col);
@@ -419,7 +419,7 @@ static int WaitMenuSelect_ProcessInput(WaitMenuSelect_t* w)
 				{
 					if(key == 0x80)
 					{
-						WaitMenuSelect_MoveMouseToItem(w, row * w->cols + col);
+						WaitMenuSelect_MoveMouseToItem(o, w, row * w->cols + col);
 						return 2;
 					}
 					WaitMenuSelect_SetSelected(w, row * w->cols + col);
@@ -457,7 +457,7 @@ static int WaitMenuSelect_ProcessInput(WaitMenuSelect_t* w)
 }
 
 // the input bits the full menu reacts to
-static uint32_t WaitMenuSelect_FilterInput(WaitMenuSelect_t* w, uint32_t mask)
+static uint32_t WaitMenuSelect_FilterInput(OpenBGI_t* o, WaitMenuSelect_t* w, uint32_t mask)
 {
 	return mask & 0x3fff3c3; // left / right button, wheel, decide / cancel, directions, numbers
 }
@@ -466,12 +466,12 @@ static uint32_t WaitMenuSelect_FilterInput(WaitMenuSelect_t* w, uint32_t mask)
  * happens while the menu is inactive).  A change of the entry under the
  * pointer (also to none) is reported as message 0x10000002.  1 when the
  * selection changed. */
-static int WaitMenuSelect_OnMouseMove(WaitMenuSelect_t* w)
+static int WaitMenuSelect_OnMouseMove(OpenBGI_t* o, WaitMenuSelect_t* w)
 {
 	int changed = 0, hit;
 	if(!w->active)
 		return 0;
-	hit = WaitMenuSelect_HitTest(w);
+	hit = WaitMenuSelect_HitTest(o, w);
 	if(hit >= 0 && hit != w->selected)
 	{
 		WaitMenuSelect_SetSelected(w, hit);
@@ -479,74 +479,74 @@ static int WaitMenuSelect_OnMouseMove(WaitMenuSelect_t* w)
 	}
 	if(hit != w->hover)
 	{
-		MsgQueue_Post(0x10000002, Thread_GetId(w->w.thread), (uint32_t)hit);
+		MsgQueue_Post(o, 0x10000002, Thread_GetId(w->w.thread), (uint32_t)hit);
 		w->hover = hit;
 	}
 	return changed;
 }
 
 // the blink interval of the full menu: the "90 A5" setting
-static uint32_t WaitMenuSelect_BlinkInterval(WaitMenuSelect_t* w)
+static uint32_t WaitMenuSelect_BlinkInterval(OpenBGI_t* o, WaitMenuSelect_t* w)
 {
-	return gMenuBlinkMs;
+	return o->wait.menuBlinkMs;
 }
 
 /* the cursor is the selected entry's text redrawn in the cursor colour into
  * window item 0.  A colour of 0 draws nothing (the blink's "off" phase);
  * returns whether the item is to be shown. */
-static int Menu_DrawCursor(WaitMenuSelect_t* w, uint32_t colour)
+static int Menu_DrawCursor(OpenBGI_t* o, WaitMenuSelect_t* w, uint32_t colour)
 {
 	const Rect_t* r = &w->rects[w->selected];
 	Bmp_t cell;
 	int textW;
 	if(colour == 0)
 		return 0;
-	Bmp_AllocScreen(&cell, r->r - r->l + 1, Window_GetFontSize(w->win), 1);
+	Bmp_AllocScreen(o, &cell, r->r - r->l + 1, Window_GetFontSize(w->win), 1);
 	Bmp_Clear(&cell, 0);
-	BmpMgr_DrawText(gTextBmpMgr, &cell, &textW, 0, 0, w->items[w->selected], Window_GetFont(w->win), colour, 0x80,
+	BmpMgr_DrawText(o, o->text.textBmpMgr, &cell, &textW, 0, 0, w->items[w->selected], Window_GetFont(w->win), colour, 0x80,
 		0, Window_GetProportional(w->win));
-	Window_ItemSetBitmap(w->win, 0, &cell);
+	Window_ItemSetBitmap(o, w->win, 0, &cell);
 	Bmp_Free(&cell);
 	return 1;
 }
 
 // a window item's screen rectangle becomes dirty (when it has one)
-static void Menu_DirtyItem(WaitMenuSelect_t* w, int item)
+static void Menu_DirtyItem(OpenBGI_t* o, WaitMenuSelect_t* w, int item)
 {
 	Rect_t r;
-	if(Window_ItemRect(w->win, &r, item))
-		Gfx_AddDirty(gTextGfx, WIN_KEY(w), &r);
+	if(Window_ItemRect(o, w->win, &r, item))
+		Gfx_AddDirty(o->text.textGfx, WIN_KEY(o, w), &r);
 }
 
 // move the cursor to the selection (or hide it when there is none) and restart the blink in phase 0
-static void WaitMenuSelect_Highlight(WaitMenuSelect_t* w)
+static void WaitMenuSelect_Highlight(OpenBGI_t* o, WaitMenuSelect_t* w)
 {
 	int on;
-	Menu_DirtyItem(w, 0); // where the cursor was
+	Menu_DirtyItem(o, w, 0); // where the cursor was
 	if(w->selected == -1)
 	{
-		w->w.vt->setTimer(&w->w, 0);
-		Window_ItemEnable(w->win, 0, 0);
+		w->w.vt->setTimer(o, &w->w, 0);
+		Window_ItemEnable(o, w->win, 0, 0);
 		Wait_MarkDirty(&w->w);
 		return;
 	}
-	w->w.vt->setTimer(&w->w, MENU_VT(w)->blinkInterval(w));
-	on = Menu_DrawCursor(w, gMenuCursorColour[0]);
-	Window_ItemSet(w->win, 0, w->rects[w->selected].l, w->rects[w->selected].t, 0);
-	Window_ItemEnable(w->win, 0, on);
-	Menu_DirtyItem(w, 0);
+	w->w.vt->setTimer(o, &w->w, MENU_VT(w)->blinkInterval(o, w));
+	on = Menu_DrawCursor(o, w, o->wait.menuCursorColour[0]);
+	Window_ItemSet(o, w->win, 0, w->rects[w->selected].l, w->rects[w->selected].t, 0);
+	Window_ItemEnable(o, w->win, 0, on);
+	Menu_DirtyItem(o, w, 0);
 	w->phase = 0;
 	Wait_MarkDirty(&w->w);
 }
 
 // the blink timer fired: the other phase's colour
-static void WaitMenuSelect_Blink(WaitMenuSelect_t* w)
+static void WaitMenuSelect_Blink(OpenBGI_t* o, WaitMenuSelect_t* w)
 {
-	w->w.vt->setTimer(&w->w, MENU_VT(w)->blinkInterval(w));
-	Menu_DirtyItem(w, 0);
+	w->w.vt->setTimer(o, &w->w, MENU_VT(w)->blinkInterval(o, w));
+	Menu_DirtyItem(o, w, 0);
 	w->phase ^= 1;
-	Window_ItemEnable(w->win, 0, Menu_DrawCursor(w, gMenuCursorColour[w->phase])); // the item keeps its position
-	Menu_DirtyItem(w, 0);
+	Window_ItemEnable(o, w->win, 0, Menu_DrawCursor(o, w, o->wait.menuCursorColour[w->phase])); // the item keeps its position
+	Menu_DirtyItem(o, w, 0);
 	Wait_MarkDirty(&w->w);
 }
 
@@ -555,17 +555,17 @@ static void WaitMenuSelect_Blink(WaitMenuSelect_t* w)
  * the class's onMouseMove.  A cursor move redraws the cursor and reports
  * message 0x10000001; otherwise the blink timer is served.  1 when the wait
  * is over. */
-static int WaitMenuSelect_Update(WaitMenuSelect_t* w)
+static int WaitMenuSelect_Update(OpenBGI_t* o, WaitMenuSelect_t* w)
 {
 	int done = 0, moved;
 	if(!w->shown)
 	{
-		MENU_VT(w)->highlight(w);
+		MENU_VT(w)->highlight(o, w);
 		w->shown++;
 	}
 	if(w->input)
 	{
-		switch(WaitMenuSelect_ProcessInput(w))
+		switch(WaitMenuSelect_ProcessInput(o, w))
 		{
 			case 1:
 				done = 1;
@@ -577,17 +577,17 @@ static int WaitMenuSelect_Update(WaitMenuSelect_t* w)
 		}
 	}
 	else
-		moved = w->msgArrived && MENU_VT(w)->onMouseMove(w);
+		moved = w->msgArrived && MENU_VT(w)->onMouseMove(o, w);
 	if(!moved)
 	{
-		if(Wait_TimerExpired(&w->w))
-			WaitMenuSelect_Blink(w);
+		if(Wait_TimerExpired(o, &w->w))
+			WaitMenuSelect_Blink(o, w);
 		return 0;
 	}
-	MENU_VT(w)->highlight(w);
+	MENU_VT(w)->highlight(o, w);
 	if(done)
 		return 1;
-	MsgQueue_Post(0x10000001, Thread_GetId(w->w.thread), (uint32_t)w->selected);
+	MsgQueue_Post(o, 0x10000001, Thread_GetId(w->w.thread), (uint32_t)w->selected);
 	return 0;
 }
 
@@ -595,26 +595,26 @@ static int WaitMenuSelect_Update(WaitMenuSelect_t* w)
  * keys only with allowCancel), the mouse-move message and the focus state,
  * run the class's update when any of them or the timer calls for it, and
  * push the results when it is over or waits stopped blocking */
-static int WaitMenuSelect_Poll(Wait_t* base)
+static int WaitMenuSelect_Poll(OpenBGI_t* o, Wait_t* base)
 {
 	WaitMenuSelect_t* w = (WaitMenuSelect_t*)base;
 	WinMsgRec_t rec;
 	int done = 0, wasActive;
-	Wait_Tick(base);
-	w->input = MENU_VT(w)->filterInput(w, Input_Poll(WIN_KEY(w), WIN_KEY(w)));
+	Wait_Tick(o, base);
+	w->input = MENU_VT(w)->filterInput(o, w, Input_Poll(o, WIN_KEY(o, w), WIN_KEY(o, w)));
 	if(!w->allowCancel)
 		w->input &= ~0x202u;
-	WinMsgWait_Poll(&rec, base->thread, 0x200);
+	WinMsgWait_Poll(o, &rec, base->thread, 0x200);
 	w->msgArrived = rec.arrived;
 	wasActive = w->active;
-	w->active = InputFocus_IsTop(WIN_KEY(w)) && MenuAllowed();
-	if(Wait_TimerExpired(base) || w->input || w->msgArrived || w->active != wasActive)
-		done = MENU_VT(w)->update(w);
-	Wait_Flush(base);
-	if(!done && Wait_IsBlocking(base))
+	w->active = InputFocus_IsTop(o, WIN_KEY(o, w)) && MenuAllowed(o);
+	if(Wait_TimerExpired(o, base) || w->input || w->msgArrived || w->active != wasActive)
+		done = MENU_VT(w)->update(o, w);
+	Wait_Flush(o, base);
+	if(!done && Wait_IsBlocking(o, base))
 		return 0;
 	Thread_Push(base->thread, (uint32_t)w->selected);
-	Thread_Push(base->thread, Wait_IsBlocking(base) ? (uint32_t)w->selected : 0xffffffffu);
+	Thread_Push(base->thread, Wait_IsBlocking(o, base) ? (uint32_t)w->selected : 0xffffffffu);
 	return 1;
 }
 
@@ -622,39 +622,39 @@ static int WaitMenuSelect_Poll(Wait_t* base)
 // WaitMenuBmp: decoration bitmaps beside the selection, mouse only
 // ========================================================================
 
-static void WaitMenuBmp_Ctor(WaitMenuBmp_t* w, Thread_t* t, Window_t* win)
+static void WaitMenuBmp_Ctor(OpenBGI_t* o, WaitMenuBmp_t* w, Thread_t* t, Window_t* win)
 {
-	WaitMenuSelect_Ctor(&w->m, t, win);
+	WaitMenuSelect_Ctor(o, &w->m, t, win);
 	w->m.w.vt = &WaitMenuBmp_Vtbl.base;
 	w->hasBmp[0] = 0;
 	w->hasBmp[1] = 0;
 }
 
-static void WaitMenuBmp_Dtor(WaitMenuBmp_t* w)
+static void WaitMenuBmp_Dtor(OpenBGI_t* o, WaitMenuBmp_t* w)
 {
 	w->m.w.vt = &WaitMenuBmp_Vtbl.base;
-	WaitMenuSelect_Dtor(&w->m);
+	WaitMenuSelect_Dtor(o, &w->m);
 }
 
-static void WaitMenuBmp_Destroy(Wait_t* w)
+static void WaitMenuBmp_Destroy(OpenBGI_t* o, Wait_t* w)
 {
-	WaitMenuBmp_Dtor((WaitMenuBmp_t*)w);
+	WaitMenuBmp_Dtor(o, (WaitMenuBmp_t*)w);
 	BGI_Free(w);
 }
 
 // the input bits the bitmap menu reacts to
-static uint32_t WaitMenuBmp_FilterInput(WaitMenuSelect_t* w, uint32_t mask)
+static uint32_t WaitMenuBmp_FilterInput(OpenBGI_t* o, WaitMenuSelect_t* w, uint32_t mask)
 {
 	return mask & 0x3ff0203; // left / right button, cancel key, numbers: no keyboard navigation
 }
 
 // the entry under the pointer (none while inactive) becomes the selection; 1 when it changed
-static int WaitMenuBmp_OnMouseMove(WaitMenuSelect_t* w)
+static int WaitMenuBmp_OnMouseMove(OpenBGI_t* o, WaitMenuSelect_t* w)
 {
-	int hit = w->active ? WaitMenuSelect_HitTest(w) : -1;
+	int hit = w->active ? WaitMenuSelect_HitTest(o, w) : -1;
 	if(hit == w->selected)
 		return 0;
-	MsgQueue_Post(0x10000002, Thread_GetId(w->w.thread), (uint32_t)hit);
+	MsgQueue_Post(o, 0x10000002, Thread_GetId(w->w.thread), (uint32_t)hit);
 	WaitMenuSelect_SetSelected(w, hit);
 	return 1;
 }
@@ -663,24 +663,24 @@ static int WaitMenuBmp_OnMouseMove(WaitMenuSelect_t* w)
  * from the selected entry.  -1 skips one.  0 ok, 0x8001 / 0x8003 unknown
  * bitmap, 0x8002 / 0x8004 not usable in the window (the starter maps these
  * to 0x80000005 .. 8). */
-static int WaitMenuBmp_SetBitmaps(WaitMenuBmp_t* w, int bmp1, int dx1, int dy1, int bmp2, int dx2, int dy2)
+static int WaitMenuBmp_SetBitmaps(OpenBGI_t* o, WaitMenuBmp_t* w, int bmp1, int dx1, int dy1, int bmp2, int dx2, int dy2)
 {
 	Bmp_t bmp;
 	w->hasBmp[0] = 0;
 	if(bmp1 != -1)
 	{
-		if(!BmpMgr_GetInfo(gTextBmpMgr, &bmp, bmp1))
+		if(!BmpMgr_GetInfo(o->text.textBmpMgr, &bmp, bmp1))
 			return 0x8001;
-		if(Window_ItemSetBitmap(w->m.win, 1, &bmp))
+		if(Window_ItemSetBitmap(o, w->m.win, 1, &bmp))
 			return 0x8002;
 		w->hasBmp[0] = 1;
 	}
 	w->hasBmp[1] = 0;
 	if(bmp2 != -1)
 	{
-		if(!BmpMgr_GetInfo(gTextBmpMgr, &bmp, bmp2))
+		if(!BmpMgr_GetInfo(o->text.textBmpMgr, &bmp, bmp2))
 			return 0x8003;
-		if(Window_ItemSetBitmap(w->m.win, 2, &bmp))
+		if(Window_ItemSetBitmap(o, w->m.win, 2, &bmp))
 			return 0x8004;
 		w->hasBmp[1] = 1;
 	}
@@ -695,54 +695,54 @@ static int WaitMenuBmp_SetBitmaps(WaitMenuBmp_t* w, int bmp1, int dx1, int dy1, 
  * the entry's top-left, the second additionally past the entry's right
  * edge.  Both are keyed on the first bitmap's presence (the original tests
  * hasBmp[0] for either item, so a second bitmap alone is never shown). */
-static void WaitMenuBmp_Highlight(WaitMenuSelect_t* base)
+static void WaitMenuBmp_Highlight(OpenBGI_t* o, WaitMenuSelect_t* base)
 {
 	WaitMenuBmp_t* w = (WaitMenuBmp_t*)base;
 	const Rect_t* r = &base->rects[base->selected];
 	int xoff[2], k;
 	Rect_t dirty;
-	WaitMenuSelect_Highlight(base);
+	WaitMenuSelect_Highlight(o, base);
 	xoff[0] = 0;
 	xoff[1] = r->r - r->l + 1;
 	for(k = 0; k < 2; k++)
 	{
 		int item = k + 1;
-		Menu_DirtyItem(base, item); // where it was
+		Menu_DirtyItem(o, base, item); // where it was
 		if(base->selected == -1)
 		{
-			Window_ItemEnable(base->win, item, 0);
+			Window_ItemEnable(o, base->win, item, 0);
 			continue;
 		}
 		if(!w->hasBmp[0])
 			continue;
-		Window_ItemSet(base->win, item, r->l + w->off[k][0] + xoff[k], r->t + w->off[k][1], 0);
-		Window_ItemEnable(base->win, item, 1);
-		Window_ItemRect(base->win, &dirty, item); // (added even when the item has no pixels)
-		Gfx_AddDirty(gTextGfx, WIN_KEY(base), &dirty);
+		Window_ItemSet(o, base->win, item, r->l + w->off[k][0] + xoff[k], r->t + w->off[k][1], 0);
+		Window_ItemEnable(o, base->win, item, 1);
+		Window_ItemRect(o, base->win, &dirty, item); // (added even when the item has no pixels)
+		Gfx_AddDirty(o->text.textGfx, WIN_KEY(o, base), &dirty);
 	}
 }
 
 // like the base's update without the blink timer; 1 when the wait is over
-static int WaitMenuBmp_Update(WaitMenuSelect_t* w)
+static int WaitMenuBmp_Update(OpenBGI_t* o, WaitMenuSelect_t* w)
 {
 	if(!w->shown)
 	{
-		MENU_VT(w)->highlight(w);
+		MENU_VT(w)->highlight(o, w);
 		w->shown++;
 	}
 	if(w->input)
 	{
-		switch(WaitMenuSelect_ProcessInput(w))
+		switch(WaitMenuSelect_ProcessInput(o, w))
 		{
 			case 1: return 1;
 			case 2: break;
 			default: return 0;
 		}
 	}
-	else if(!MENU_VT(w)->onMouseMove(w))
+	else if(!MENU_VT(w)->onMouseMove(o, w))
 		return 0;
-	MENU_VT(w)->highlight(w);
-	MsgQueue_Post(0x10000001, Thread_GetId(w->w.thread), (uint32_t)w->selected);
+	MENU_VT(w)->highlight(o, w);
+	MsgQueue_Post(o, 0x10000001, Thread_GetId(w->w.thread), (uint32_t)w->selected);
 	return 0;
 }
 
@@ -750,38 +750,38 @@ static int WaitMenuBmp_Update(WaitMenuSelect_t* w)
 // WaitMenuBmp2: flash the preselected entry and finish
 // ========================================================================
 
-static void WaitMenuBmp2_Ctor(WaitMenuBmp2_t* w, Thread_t* t, Window_t* win)
+static void WaitMenuBmp2_Ctor(OpenBGI_t* o, WaitMenuBmp2_t* w, Thread_t* t, Window_t* win)
 {
-	WaitMenuBmp_Ctor(&w->b, t, win);
+	WaitMenuBmp_Ctor(o, &w->b, t, win);
 	w->b.m.w.vt = &WaitMenuBmp2_Vtbl.base;
 	w->flashes = 0;
 }
 
-static void WaitMenuBmp2_Destroy(Wait_t* w)
+static void WaitMenuBmp2_Destroy(OpenBGI_t* o, Wait_t* w)
 {
 	w->vt = &WaitMenuBmp2_Vtbl.base;
-	WaitMenuBmp_Dtor((WaitMenuBmp_t*)w);
+	WaitMenuBmp_Dtor(o, (WaitMenuBmp_t*)w);
 	BGI_Free(w);
 }
 
 // 50 ms: the twenty flashes take a second
-static uint32_t WaitMenuBmp2_BlinkInterval(WaitMenuSelect_t* w)
+static uint32_t WaitMenuBmp2_BlinkInterval(OpenBGI_t* o, WaitMenuSelect_t* w)
 {
 	return 50;
 }
 
 // twenty blink steps (one second) on the selection, then done; input is ignored
-static int WaitMenuBmp2_Update(WaitMenuSelect_t* base)
+static int WaitMenuBmp2_Update(OpenBGI_t* o, WaitMenuSelect_t* base)
 {
 	WaitMenuBmp2_t* w = (WaitMenuBmp2_t*)base;
 	if(w->flashes >= 20 || base->selected == -1)
 		return 1;
-	if(Wait_TimerExpired(&base->w))
+	if(Wait_TimerExpired(o, &base->w))
 	{
 		if(w->flashes == 0)
-			MENU_VT(base)->highlight(base);
+			MENU_VT(base)->highlight(o, base);
 		else
-			WaitMenuSelect_Blink(base);
+			WaitMenuSelect_Blink(o, base);
 		w->flashes++;
 	}
 	return 0;
@@ -809,7 +809,7 @@ static int Menu_CheckArgs(int n, int cols, int init)
 /* "90 A0": the full menu.  `items` is the script's array of n tagged
  * string pointers, resolved through t.  0 ok, the Menu_CheckArgs codes,
  * -1 no such window, 0x80000004 no font. */
-int StartMenuSelect(Thread_t* t, uint32_t h, int n, const void* items, int cols, int centre, uint32_t colour,
+int StartMenuSelect(OpenBGI_t* o, Thread_t* t, uint32_t h, int n, const void* items, int cols, int centre, uint32_t colour,
 	int init, int allowCancel)
 {
 	const char* strs[MENU_MAX];
@@ -818,25 +818,25 @@ int StartMenuSelect(Thread_t* t, uint32_t h, int n, const void* items, int cols,
 	int err = Menu_CheckArgs(n, cols, init);
 	if(err)
 		return err;
-	ResolvePtrArray((void**)strs, t, (const uint32_t*)items, n);
-	win = (Window_t*)Gfx_FindWindow(gGfx, h);
+	ResolvePtrArray(o, (void**)strs, t, (const uint32_t*)items, n);
+	win = (Window_t*)Gfx_FindWindow(o->gfx.gfx, h);
 	if(!win)
 		return -1;
 	if(!Window_GetFont(win))
 		return (int)0x80000004;
 	w = (WaitMenuSelect_t*)BGI_Alloc(sizeof *w);
-	WaitMenuSelect_Ctor(w, t, win);
-	WaitMenuSelect_Setup(w, n, strs, cols, centre, colour);
+	WaitMenuSelect_Ctor(o, w, t, win);
+	WaitMenuSelect_Setup(o, w, n, strs, cols, centre, colour);
 	WaitMenuSelect_SetSelected(w, init);
 	WaitMenuSelect_SetAllowCancel(w, allowCancel);
-	Thread_SetWait(t, &w->w);
+	Thread_SetWait(o, t, &w->w);
 	return 0;
 }
 
 /* "90 A1": lay the entries out as a menu would and leave them on the text
  * layer (opaque, visible, items off) without waiting.  0 ok, 0x80000001 /
  * 0x80000003 bad counts, -1 no such window. */
-int Menu_Draw(uint32_t h, int n, const void* items, Thread_t* t, int cols, int centre, uint32_t colour)
+int Menu_Draw(OpenBGI_t* o, uint32_t h, int n, const void* items, Thread_t* t, int cols, int centre, uint32_t colour)
 {
 	const char* strs[MENU_MAX];
 	Rect_t rects[MENU_MAX];
@@ -844,15 +844,15 @@ int Menu_Draw(uint32_t h, int n, const void* items, Thread_t* t, int cols, int c
 	int err = Menu_CheckArgs(n, cols, 0);
 	if(err)
 		return err;
-	ResolvePtrArray((void**)strs, t, (const uint32_t*)items, n);
-	win = (Window_t*)Gfx_FindWindow(gGfx, h);
+	ResolvePtrArray(o, (void**)strs, t, (const uint32_t*)items, n);
+	win = (Window_t*)Gfx_FindWindow(o->gfx.gfx, h);
 	if(!win)
 		return -1;
-	Menu_Layout(win, rects, n, strs, cols, centre, colour);
+	Menu_Layout(o, win, rects, n, strs, cols, centre, colour);
 	Window_SetTextLevel(win, 0);
 	Window_ShowText(win, 1);
-	Window_RecompositeAll(win);
-	Window_ItemsDisableAll(win);
+	Window_RecompositeAll(o, win);
+	Window_ItemsDisableAll(o, win);
 	return 0;
 }
 
@@ -860,7 +860,7 @@ int Menu_Draw(uint32_t h, int n, const void* items, Thread_t* t, int cols, int c
  * menu with decoration bitmaps.  Codes as StartMenuSelect, plus
  * 0x80000005 / 7 an unknown bitmap and 0x80000006 / 8 one the window
  * cannot hold, for bmp1 / bmp2. */
-int StartMenuSelectBmp(Thread_t* t, uint32_t h, int n, const void* items, int cols, int centre, uint32_t colour,
+int StartMenuSelectBmp(OpenBGI_t* o, Thread_t* t, uint32_t h, int n, const void* items, int cols, int centre, uint32_t colour,
 	int init, int allowCancel, int bmp1, int dx1, int dy1, int bmp2, int dx2, int dy2, int mode)
 {
 	const char* strs[MENU_MAX];
@@ -869,8 +869,8 @@ int StartMenuSelectBmp(Thread_t* t, uint32_t h, int n, const void* items, int co
 	int err = Menu_CheckArgs(n, cols, init);
 	if(err)
 		return err;
-	ResolvePtrArray((void**)strs, t, (const uint32_t*)items, n);
-	win = (Window_t*)Gfx_FindWindow(gGfx, h);
+	ResolvePtrArray(o, (void**)strs, t, (const uint32_t*)items, n);
+	win = (Window_t*)Gfx_FindWindow(o->gfx.gfx, h);
 	if(!win)
 		return -1;
 	if(!Window_GetFont(win))
@@ -878,21 +878,21 @@ int StartMenuSelectBmp(Thread_t* t, uint32_t h, int n, const void* items, int co
 	if(mode)
 	{
 		w = (WaitMenuBmp_t*)BGI_Alloc(sizeof *w);
-		WaitMenuBmp_Ctor(w, t, win);
+		WaitMenuBmp_Ctor(o, w, t, win);
 	}
 	else
 	{
 		WaitMenuBmp2_t* w2 = (WaitMenuBmp2_t*)BGI_Alloc(sizeof *w2);
-		WaitMenuBmp2_Ctor(w2, t, win);
+		WaitMenuBmp2_Ctor(o, w2, t, win);
 		w = &w2->b;
 	}
-	WaitMenuSelect_Setup(&w->m, n, strs, cols, centre, colour);
+	WaitMenuSelect_Setup(o, &w->m, n, strs, cols, centre, colour);
 	WaitMenuSelect_SetSelected(&w->m, init);
 	WaitMenuSelect_SetAllowCancel(&w->m, allowCancel);
-	err = WaitMenuBmp_SetBitmaps(w, bmp1, dx1, dy1, bmp2, dx2, dy2);
+	err = WaitMenuBmp_SetBitmaps(o, w, bmp1, dx1, dy1, bmp2, dx2, dy2);
 	if(err)
 	{
-		Wait_Release(&w->m.w);
+		Wait_Release(o, &w->m.w);
 		switch(err)
 		{
 			case 0x8001: return (int)0x80000005;
@@ -902,11 +902,51 @@ int StartMenuSelectBmp(Thread_t* t, uint32_t h, int n, const void* items, int co
 			default: return 0; // unreachable; the original would hand the freed object to the thread
 		}
 	}
-	Thread_SetWait(t, &w->m.w);
+	Thread_SetWait(o, t, &w->m.w);
 	return 0;
 }
 
 // the name of a wait class of this file, for the debugger (NULL: not one of these)
+// a click at (x, y) is on entry d->part: through the menu's layer, inside the entry's rectangle
+static int ReachItem(OpenBGI_t* o, const TargetDesc_t* d, int x, int y)
+{
+	const WaitMenuSelect_t* w = (const WaitMenuSelect_t*)d->ctx;
+	return MouseLayer_HitAt(o, WIN_KEY(o, w), x, y) && WaitMenuSelect_HitAt(o, w, x, y) == d->part;
+}
+
+/* The targets of the menus (bgi/inputmap.h): the entries of a menu that
+ * takes clicks ("90 A0", "90 A2"; "90 A3" takes no input), which claims
+ * its window's layer.  1 when `w` is a menu. */
+int WaitMenu_Targets(OpenBGI_t* o, Wait_t* base, TargetSink_t* s)
+{
+	const WaitMenuSelect_t* w = (const WaitMenuSelect_t*)base;
+	int pos[2], i;
+	if(WaitMenu_ClassName(base->vt) == NULL)
+		return 0;
+	TargetSink_Claim(s, WIN_KEY(o, w));
+	if(base->vt == &WaitMenuBmp2_Vtbl.base || !w->win->obj.vt->isVisible(o, &w->win->obj))
+		return 1;
+	w->win->obj.vt->getPos(o, &w->win->obj, pos);
+	for(i = 0; i < w->count; i++)
+	{
+		TargetDesc_t d;
+		TargetDesc_Init(&d, OPENBGI_TARGET_ITEM, WIN_KEY(o, w));
+		d.rect = w->rects[i];
+		d.rect.l += pos[0];
+		d.rect.r += pos[0];
+		d.rect.t += pos[1];
+		d.rect.b += pos[1];
+		d.flags = i == w->selected ? OPENBGI_TARGET_SELECTED : 0;
+		d.owner = Thread_GetId(base->thread);
+		d.index = i;
+		d.reach = ReachItem;
+		d.ctx = w;
+		d.part = i;
+		TargetSink_Add(s, &d);
+	}
+	return 1;
+}
+
 const char* WaitMenu_ClassName(const WaitVtbl_t* vt)
 {
 	if(vt == &WaitMenuSelect_Vtbl.base)

@@ -2,7 +2,7 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * locks.c - named counting locks (inc/bgi/sysobj/locks.h)
+ * locks.c - named counting locks (src/include/bgi/sysobj/locks.h)
  *
  * The manager is a singly linked list of locks behind a nameless sentinel
  * (so that creation appends and deletion unlinks without a special case
@@ -40,8 +40,6 @@ struct SemMgr
 {
 	Sem_t* head; // the nameless sentinel; the locks follow it
 };
-
-SemMgr_t* gSemMgr;
 
 // a lock with no holders or waiters; NULL names the sentinel
 static Sem_t* Sem_New(const char* name, uint32_t max)

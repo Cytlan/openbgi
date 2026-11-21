@@ -28,8 +28,9 @@
  * data.  Strings are written in UTF-8 when the conversion to and from
  * Shift-JIS is exact, else with \xNN escapes.
  */
-#include "bgi/asm.h"
-#include "bgi/os.h"
+#include "bgi/asmout.h"
+#include "bgi/core.h"
+#include "bgi/sjis.h"
 
 // the kind of a byte of the area (Dis_t.kind)
 #define K_UNKNOWN 0 // not reached yet; becomes K_DATA once the analysis is done
@@ -54,8 +55,9 @@ typedef struct Dis
 	uint32_t* work;                 // the offsets still to follow
 	uint32_t workCount, workCap;    // its fill and capacity
 	int problems;                   // the "; problem:" lines written so far (the result of Dis_Program)
-	FILE* out;                      // the listing
+	AsmOut_t* out;                  // the listing (NULL: nowhere)
 	const DisOptions_t* opt;        // the caller's options
+	int textUtf8;                   // the engine's text is UTF-8 ("81 00"): the previews keep UTF-8 as it is
 } Dis_t;
 
 // queue an offset for Follow (one outside the area is dropped)
@@ -113,26 +115,26 @@ static void Follow(Dis_t* d, uint32_t off)
 		if(d->kind[off] != K_UNKNOWN)
 		{
 			if(d->out)
-				fprintf(d->out, "; problem: the flow at 0x%04x runs into the middle of an instruction or into data\n", (unsigned)off);
+				AsmOut_Printf(d->out, "; problem: the flow at 0x%04x runs into the middle of an instruction or into data\n", (unsigned)off);
 			d->problems++;
 			return;
 		}
 		if(!Asm_Decode(d->area, d->size, off, d->gen, &in))
 		{
 			if(d->out)
-				fprintf(d->out, "; problem: undefined opcode 0x%02x at 0x%04x (the bytes from there are listed as data)\n",
+				AsmOut_Printf(d->out, "; problem: undefined opcode 0x%02x at 0x%04x (the bytes from there are listed as data)\n",
 					d->area[off], (unsigned)off);
 			d->problems++;
 			return;
 		}
 		if(in.foreign && d->out)
-			fprintf(d->out, "; note: instruction %02x %02x at 0x%04x is not defined in this build (another build's)\n", in.fam, in.op,
+			AsmOut_Printf(d->out, "; note: instruction %02x %02x at 0x%04x is not defined in this build (another build's)\n", in.fam, in.op,
 				(unsigned)off);
 		for(i = off; i < off + in.len; i++)
 			if(d->kind[i] != K_UNKNOWN)
 			{
 				if(d->out)
-					fprintf(d->out, "; problem: the instruction at 0x%04x overlaps another\n", (unsigned)off);
+					AsmOut_Printf(d->out, "; problem: the instruction at 0x%04x overlaps another\n", (unsigned)off);
 				d->problems++;
 				return;
 			}
@@ -283,18 +285,19 @@ static uint32_t StringLen(const Dis_t* d, uint32_t off, uint32_t limit)
 	return 0; // no terminator before the limit
 }
 
-/* write the first 48 characters of `n` bytes of Shift-JIS, quoted, as the
- * comment after an instruction that refers to the string; control
- * characters become spaces and a cut is marked with "..." */
-static void Preview(FILE* out, const uint8_t* s, uint32_t n)
+/* write the first 48 characters of `n` bytes of Shift-JIS (UTF-8 passing
+ * through with `utf8`), quoted, as the comment after an instruction that
+ * refers to the string; control characters become spaces and a cut is
+ * marked with "..." */
+static void Preview(AsmOut_t* out, const uint8_t* s, uint32_t n, int utf8)
 {
 	char* sjis = (char*)malloc(n + 1);
 	char* utf = (char*)malloc(n * 3 + 1);
 	uint32_t i, shown = 0;
 	memcpy(sjis, s, n);
 	sjis[n] = 0;
-	OS_SjisToUtf8(sjis, utf, n * 3 + 1);
-	fputc('"', out);
+	Sjis_ToUtf8(sjis, utf, n * 3 + 1, utf8);
+	AsmOut_Putc(out, '"');
 	for(i = 0; utf[i]; i++)
 	{
 		uint8_t c = (uint8_t)utf[i];
@@ -305,13 +308,13 @@ static void Preview(FILE* out, const uint8_t* s, uint32_t n)
 			shown++;
 		}
 		if(c < 0x20)
-			fputc(' ', out);
+			AsmOut_Putc(out, ' ');
 		else
-			fputc((int)c, out);
+			AsmOut_Putc(out, (int)c);
 	}
 	if(utf[i])
-		fputs("...", out);
-	fputc('"', out);
+		AsmOut_Puts(out, "...");
+	AsmOut_Putc(out, '"');
 	free(sjis);
 	free(utf);
 }
@@ -342,13 +345,13 @@ static void Bytes(Dis_t* d, uint32_t off, uint32_t len)
 {
 	uint32_t i;
 	char col[40];
-	size_t o = 0;
+	size_t ofs = 0;
 	col[0] = 0;
 	for(i = 0; i < len && i < 6; i++)
-		o += (size_t)snprintf(col + o, sizeof col - o, "%02x ", d->area[off + i]);
+		ofs += (size_t)snprintf(col + ofs, sizeof col - ofs, "%02x ", d->area[off + i]);
 	if(len > 6)
-		snprintf(col + o, sizeof col - o, "..");
-	fprintf(d->out, "%-20s", col);
+		snprintf(col + ofs, sizeof col - ofs, "..");
+	AsmOut_Printf(d->out, "%-20s", col);
 }
 
 /* the optional offset and byte columns of a line (DisOptions showOffsets /
@@ -359,10 +362,10 @@ static void LinePrefix(Dis_t* d, uint32_t off, uint32_t len)
 	if(!d->opt || (!d->opt->showOffsets && !d->opt->showBytes))
 		return;
 	if(d->opt->showOffsets)
-		fprintf(d->out, "%04x  ", (unsigned)off);
+		AsmOut_Printf(d->out, "%04x  ", (unsigned)off);
 	if(d->opt->showBytes)
 		Bytes(d, off, len);
-	fputs("|", d->out);
+	AsmOut_Puts(d->out, "|");
 }
 
 /* the mnemonic of an instruction alone (Asm_Format of a copy without
@@ -370,11 +373,11 @@ static void LinePrefix(Dis_t* d, uint32_t off, uint32_t len)
 static const char* Mnemonic(const Dis_t* d, const AsmInsn_t* in, char* buf, size_t n)
 {
 	AsmInsn_t bare = *in;
-	size_t o;
+	size_t off;
 	bare.count = 0;
 	bare.targetKind = 0;
-	o = Asm_Format(&bare, d->gen, buf, n);
-	(void)o;
+	off = Asm_Format(&bare, d->gen, buf, n);
+	(void)off;
 	return buf;
 }
 
@@ -419,22 +422,22 @@ static void WriteCode(Dis_t* d, uint32_t off, const AsmInsn_t* in)
 		comment = "inline";
 	if(comment)
 	{
-		fprintf(d->out, "\t%-36s ; ", text);
+		AsmOut_Printf(d->out, "\t%-36s ; ", text);
 		if(comment[0] == 's')
-			Preview(d->out, d->area + in->target, StringLen(d, in->target, d->size));
+			Preview(d->out, d->area + in->target, StringLen(d, in->target, d->size), d->textUtf8);
 		else
-			Preview(d->out, in->bytes, (uint32_t)in->v[0] - 1);
-		fputc('\n', d->out);
+			Preview(d->out, in->bytes, (uint32_t)in->v[0] - 1, d->textUtf8);
+		AsmOut_Putc(d->out, '\n');
 	}
 	else
-		fprintf(d->out, "\t%s\n", text);
+		AsmOut_Printf(d->out, "\t%s\n", text);
 }
 
 /* write a run of data bytes [off, end) that has no label inside: a `.str`
  * line for each string (any string at a referenced offset, elsewhere one
  * of at least three characters), `.db` lines of up to 16 bytes for the
  * rest */
-static void WriteData(Dis_t* d, uint32_t off, uint32_t end)
+static void WriteData(OpenBGI_t* o, Dis_t* d, uint32_t off, uint32_t end)
 {
 	while(off < end)
 	{
@@ -442,9 +445,9 @@ static void WriteData(Dis_t* d, uint32_t off, uint32_t end)
 		if(n && (d->label[off] & L_DATA || n >= 3))
 		{
 			LinePrefix(d, off, n + 1);
-			fputs("\t.str ", d->out);
-			Asm_WriteStringLiteral(d->out, d->area + off, n);
-			fputc('\n', d->out);
+			AsmOut_Puts(d->out, "\t.str ");
+			AsmOut_StringLiteral(o, d->out, d->area + off, n);
+			AsmOut_Putc(d->out, '\n');
 			off += n + 1;
 			continue;
 		}
@@ -456,10 +459,10 @@ static void WriteData(Dis_t* d, uint32_t off, uint32_t end)
 			{
 				uint32_t take = stop - off > 16 ? 16 : stop - off;
 				LinePrefix(d, off, take);
-				fputs("\t.db ", d->out);
+				AsmOut_Puts(d->out, "\t.db ");
 				for(i = 0; i < take; i++)
-					fprintf(d->out, "%s0x%02x", i ? ", " : "", d->area[off + i]);
-				fputc('\n', d->out);
+					AsmOut_Printf(d->out, "%s0x%02x", i ? ", " : "", d->area[off + i]);
+				AsmOut_Putc(d->out, '\n');
 				off += take;
 			}
 		}
@@ -474,7 +477,7 @@ static void WriteData(Dis_t* d, uint32_t off, uint32_t end)
  * code found, every byte classified; the maps go to *out (Dis_FreeMap).
  * Problems are reported to `log` (NULL: not at all) and counted in
  * out->problems.  0 when the header is unusable (nothing is allocated). */
-static int Analyze(Dis_t* d, const uint8_t* file, uint32_t size, EngineGen_t gen, FILE* log, uint32_t* codeOffsetOut)
+static int Analyze(Dis_t* d, const uint8_t* file, uint32_t size, EngineGen_t gen, AsmOut_t* log, uint32_t* codeOffsetOut)
 {
 	uint32_t codeOffset, codeSize, i;
 	d->out = log;
@@ -484,7 +487,7 @@ static int Analyze(Dis_t* d, const uint8_t* file, uint32_t size, EngineGen_t gen
 	if(size < 16)
 	{
 		if(log)
-			fprintf(log, "; problem: the file is shorter than its header\n");
+			AsmOut_Printf(log, "; problem: the file is shorter than its header\n");
 		d->problems++;
 		return 0;
 	}
@@ -494,7 +497,7 @@ static int Analyze(Dis_t* d, const uint8_t* file, uint32_t size, EngineGen_t gen
 	if(codeOffset != 16 || codeOffset + codeSize > size)
 	{
 		if(log)
-			fprintf(log, "; problem: header: code at 0x%x, size 0x%x in a file of 0x%x bytes\n", (unsigned)codeOffset,
+			AsmOut_Printf(log, "; problem: header: code at 0x%x, size 0x%x in a file of 0x%x bytes\n", (unsigned)codeOffset,
 				(unsigned)codeSize, (unsigned)size);
 		d->problems++;
 		if(codeOffset > size)
@@ -504,7 +507,7 @@ static int Analyze(Dis_t* d, const uint8_t* file, uint32_t size, EngineGen_t gen
 	}
 	if(codeOffset + codeSize < size && log)
 	{
-		fprintf(log, "; note: %u bytes follow the code area in the file and are not part of it\n",
+		AsmOut_Printf(log, "; note: %u bytes follow the code area in the file and are not part of it\n",
 			(unsigned)(size - codeOffset - codeSize));
 	}
 	*codeOffsetOut = codeOffset;
@@ -525,7 +528,7 @@ static int Analyze(Dis_t* d, const uint8_t* file, uint32_t size, EngineGen_t gen
 	return 1;
 }
 
-int Dis_Analyze(const uint8_t* file, uint32_t size, EngineGen_t gen, FILE* log, DisMap_t* out)
+static int AnalyzeTo(const uint8_t* file, uint32_t size, EngineGen_t gen, AsmOut_t* log, DisMap_t* out)
 {
 	Dis_t d;
 	uint32_t codeOffset = 16;
@@ -544,6 +547,14 @@ int Dis_Analyze(const uint8_t* file, uint32_t size, EngineGen_t gen, FILE* log, 
 	return 1;
 }
 
+int Dis_Analyze(const uint8_t* file, uint32_t size, EngineGen_t gen, FILE* log, DisMap_t* out)
+{
+	AsmOut_t w;
+	memset(&w, 0, sizeof w);
+	w.fp = log;
+	return AnalyzeTo(file, size, gen, log ? &w : NULL, out);
+}
+
 void Dis_FreeMap(DisMap_t* m)
 {
 	free(m->kind);
@@ -552,7 +563,7 @@ void Dis_FreeMap(DisMap_t* m)
 }
 
 // a Dis_t over an analysed map, for the writers
-static void FromMap(Dis_t* d, const DisMap_t* m, EngineGen_t gen, const DisOptions_t* opt, FILE* out)
+static void FromMap(Dis_t* d, const DisMap_t* m, EngineGen_t gen, const DisOptions_t* opt, AsmOut_t* out)
 {
 	memset(d, 0, sizeof *d);
 	d->area = m->area;
@@ -565,12 +576,13 @@ static void FromMap(Dis_t* d, const DisMap_t* m, EngineGen_t gen, const DisOptio
 	d->out = out;
 }
 
-void Dis_WriteRange(const DisMap_t* m, uint32_t start, uint32_t end, EngineGen_t gen, const DisOptions_t* opt, FILE* out)
+static void WriteRange(OpenBGI_t* o, const DisMap_t* m, uint32_t start, uint32_t end, EngineGen_t gen, const DisOptions_t* opt, AsmOut_t* out)
 {
 	Dis_t d;
 	uint32_t off = start;
 	char lbl[32];
 	FromMap(&d, m, gen, opt, out);
+	d.textUtf8 = o->enc.textUtf8;
 	if(end > d.size)
 		end = d.size;
 	while(off < end)
@@ -578,7 +590,7 @@ void Dis_WriteRange(const DisMap_t* m, uint32_t start, uint32_t end, EngineGen_t
 		if(d.label[off])
 		{
 			Label(&d, off, lbl, sizeof lbl);
-			fprintf(out, "%s:%s\n", lbl, (d.label[off] & L_DEAD) ? " ; unreferenced" : "");
+			AsmOut_Printf(out, "%s:%s\n", lbl, (d.label[off] & L_DEAD) ? " ; unreferenced" : "");
 		}
 		if(d.kind[off] == K_CODE)
 		{
@@ -592,10 +604,18 @@ void Dis_WriteRange(const DisMap_t* m, uint32_t start, uint32_t end, EngineGen_t
 			uint32_t stop = off + 1;
 			while(stop < end && d.kind[stop] == K_DATA && !d.label[stop])
 				stop++;
-			WriteData(&d, off, stop);
+			WriteData(o, &d, off, stop);
 			off = stop;
 		}
 	}
+}
+
+void Dis_WriteRange(OpenBGI_t* o, const DisMap_t* m, uint32_t start, uint32_t end, EngineGen_t gen, const DisOptions_t* opt, FILE* out)
+{
+	AsmOut_t w;
+	memset(&w, 0, sizeof w);
+	w.fp = out;
+	WriteRange(o, m, start, end, gen, opt, &w);
 }
 
 void Dis_LabelName(const DisMap_t* m, uint32_t off, char* buf, size_t n)
@@ -615,15 +635,42 @@ uint32_t Dis_StringLength(const DisMap_t* m, uint32_t off)
 	return StringLen(&d, off, limit);
 }
 
-int Dis_Program(const uint8_t* file, uint32_t size, const DisOptions_t* opt, FILE* out)
+// Dis_Program into either
+static int Program(OpenBGI_t* o, const uint8_t* file, uint32_t size, const DisOptions_t* opt, AsmOut_t* out)
 {
 	DisMap_t m;
-	fprintf(out, "; openbgi disassembly%s%s\n", opt->name ? " of " : "", opt->name ? opt->name : "");
-	if(!Dis_Analyze(file, size, opt->gen, out, &m))
+	int problems;
+	AsmOut_Printf(out, "; openbgi disassembly%s%s\n", opt->name ? " of " : "", opt->name ? opt->name : "");
+	if(!AnalyzeTo(file, size, opt->gen, out, &m))
 		return m.problems;
-	fprintf(out, ".engine %s\n", opt->gen == GEN_COUNT ? "any" : kGenNames[opt->gen]);
-	fprintf(out, "; %u bytes of code area; the entry is offset 0\n\n", (unsigned)m.size);
-	Dis_WriteRange(&m, 0, m.size, opt->gen, opt, out);
+	AsmOut_Printf(out, ".engine %s\n", opt->gen == GEN_COUNT ? "any" : kGenNames[opt->gen]);
+	AsmOut_Printf(out, "; %u bytes of code area; the entry is offset 0\n\n", (unsigned)m.size);
+	WriteRange(o, &m, 0, m.size, opt->gen, opt, out);
+	problems = m.problems;
 	Dis_FreeMap(&m);
-	return m.problems;
+	return problems;
+}
+
+int Dis_Program(OpenBGI_t* o, const uint8_t* file, uint32_t size, const DisOptions_t* opt, FILE* out)
+{
+	AsmOut_t w;
+	memset(&w, 0, sizeof w);
+	w.fp = out;
+	return Program(o, file, size, opt, &w);
+}
+
+char* Dis_ProgramText(OpenBGI_t* o, const uint8_t* file, uint32_t size, const DisOptions_t* opt, int* problems)
+{
+	AsmOut_t w;
+	int n;
+	memset(&w, 0, sizeof w);
+	n = Program(o, file, size, opt, &w);
+	if(problems)
+		*problems = n;
+	if(w.failed || !w.text)
+	{
+		free(w.text);
+		return NULL;
+	}
+	return w.text;
 }

@@ -4,7 +4,7 @@
  *
  * rain.c - the rain generator behind the rain screens ("C0 4x") and the
  *          per-pass driver that redraws them at the effect frame rate.
- *          Interface: inc/bgi/gfx/screens.h (RainGen_*, Fx_SetEffectFps)
+ *          Interface: src/include/bgi/gfx/screens.h (RainGen_*, Fx_SetEffectFps)
  *          and bgi/gfx.h (Rain_UpdateAll, Rain_FrameTick).
  *
  * A raindrop is a 3-D segment that falls along a direction vector; every
@@ -14,13 +14,14 @@
  * and draws a 2-D line (LineRenderer, a small rasteriser with its own
  * clipping) whose alpha fades with the depth of the tail.  World
  * coordinates are plain integers, y up; `fall` and `length` are 24.8 and
- * only their integer parts are used.  See docs/particle_rain.md.
+ * only their integer parts are used.  See docs/dev/particle_rain.md.
  */
 #include "bgi/gfx.h"
 #include "bgi/gfx/screens.h"
 #include "bgi/gfx/gfxmgr.h"
 #include "bgi/display.h"
 #include "bgi/sys.h"
+#include "bgi/core.h"
 #include <math.h>
 
 //  --- the line rasteriser -----------------------------
@@ -393,18 +394,18 @@ void RainGen_SetView(RainGen_t* g, RainView_t* old, const RainView_t* v)
 }
 
 // the clock: the original picks timeGetTime or GetTickCount by `hiResTimer`; both are GetTicks here
-static uint32_t RainGen_Now(const RainGen_t* g)
+static uint32_t RainGen_Now(OpenBGI_t* o, const RainGen_t* g)
 {
 	(void)g;
-	return GetTicks();
+	return GetTicks(o);
 }
 
 /* "C0 42": drop every drop and put the clock `prerollMs` into the past,
  * so that the next update runs that many milliseconds of stages at once.
  * A preroll of 500 ms or more only resynchronises (see RainGen_Update). */
-void RainGen_Start(RainGen_t* g, uint32_t prerollMs)
+void RainGen_Start(OpenBGI_t* o, RainGen_t* g, uint32_t prerollMs)
 {
-	g->lastTime = RainGen_Now(g) - prerollMs;
+	g->lastTime = RainGen_Now(o, g) - prerollMs;
 	RainGen_Clear(g);
 }
 
@@ -453,7 +454,7 @@ static void RainGen_Advance(RainGen_t* g)
  * box, staggered down by up to 99 units; the tail trails the head by
  * `streak`.  The original divides by zero for a zero-width x or z range;
  * here such a range puts every drop at its minimum. */
-static void RainGen_Spawn(RainGen_t* g)
+static void RainGen_Spawn(OpenBGI_t* o, RainGen_t* g)
 {
 	uint32_t xRange = (uint32_t)(g->p.xMax - g->p.xMin);
 	uint32_t zRange = (uint32_t)(g->p.zMax - g->p.zMin);
@@ -463,9 +464,9 @@ static void RainGen_Spawn(RainGen_t* g)
 		Drop_t* d = (Drop_t*)BGI_Alloc(sizeof *d);
 		DropNode_t* n = (DropNode_t*)BGI_Alloc(sizeof *n);
 		d->tag = 1;
-		d->head[0] = g->p.xMin + (int32_t)(xRange ? (uint32_t)BGI_Rand() % xRange : 0);
-		d->head[1] = g->p.yTop - BGI_Rand() % 100;
-		d->head[2] = g->p.zMin + (int32_t)(zRange ? (uint32_t)BGI_Rand() % zRange : 0);
+		d->head[0] = g->p.xMin + (int32_t)(xRange ? (uint32_t)BGI_Rand(o) % xRange : 0);
+		d->head[1] = g->p.yTop - BGI_Rand(o) % 100;
+		d->head[2] = g->p.zMin + (int32_t)(zRange ? (uint32_t)BGI_Rand(o) % zRange : 0);
 		for(k = 0; k < 3; k++)
 			d->tail[k] = d->head[k] - g->streak[k];
 		n->drop = d;
@@ -481,28 +482,28 @@ static void RainGen_Spawn(RainGen_t* g)
 }
 
 // one stage: move and cull, then spawn
-static void RainGen_Stage(RainGen_t* g)
+static void RainGen_Stage(OpenBGI_t* o, RainGen_t* g)
 {
 	RainGen_Advance(g);
-	RainGen_Spawn(g);
+	RainGen_Spawn(o, g);
 }
 
 /* once per scheduler pass: turn the time elapsed since the last update
  * into stages.  500 ms or more (a stall, or a preroll that long) only
  * resynchronises the clock; less than a stage leaves everything as is. */
-void RainGen_Update(RainGen_t* g)
+void RainGen_Update(OpenBGI_t* o, RainGen_t* g)
 {
-	uint32_t now = RainGen_Now(g), elapsed = now - g->lastTime;
+	uint32_t now = RainGen_Now(o, g), elapsed = now - g->lastTime;
 	if(elapsed >= 500)
 	{
-		g->lastTime = RainGen_Now(g);
+		g->lastTime = RainGen_Now(o, g);
 		return;
 	}
 	if(elapsed < g->p.stageMs)
 		return;
 	do
 	{
-		RainGen_Stage(g);
+		RainGen_Stage(o, g);
 		elapsed -= g->p.stageMs;
 	} while(elapsed >= g->p.stageMs);
 	g->lastTime = now - elapsed;
@@ -596,42 +597,39 @@ int RainGen_Render(RainGen_t* g, uint8_t* pixels, int w, int h, int pitch, int b
 
 //  --- the per-pass driver -----------------------------------------------
 
-static uint32_t gEffectFrameMs = 50; // milliseconds between effect frames (20 fps by default)
-static uint32_t gEffectNext;         // when the next frame is due
-
 // once per scheduler pass: run the stages of every rain screen
-void Rain_UpdateAll(void)
+void Rain_UpdateAll(OpenBGI_t* o)
 {
-	Gfx_UpdateRains(gGfx);
+	Gfx_UpdateRains(o, o->gfx.gfx);
 }
 
 /* once per scheduler pass: when an effect frame is due, redraw the rain
  * screens and request a dirty present; the next frame is the first grid
  * point after now.  Nothing happens while the effects are switched off. */
-void Rain_FrameTick(void)
+void Rain_FrameTick(OpenBGI_t* o)
 {
 	uint32_t now;
-	if(!Fx_GetEffectsEnabled())
+	if(!Fx_GetEffectsEnabled(o))
 		return;
-	now = GetTicks();
-	if(gEffectNext > now)
+	now = GetTicks(o);
+	if(o->rain.effectNext > now)
 		return;
-	if(Gfx_RedrawRains(gGfx))
-		Present_RequestDirty();
-	gEffectNext += ((now - gEffectNext) / gEffectFrameMs + 1) * gEffectFrameMs;
+	if(Gfx_RedrawRains(o, o->gfx.gfx))
+		Present_RequestDirty(o);
+	o->rain.effectNext += ((now - o->rain.effectNext) / o->rain.effectFrameMs + 1) * o->rain.effectFrameMs;
 }
 
 /* "C0 4F": switch the effects (the rain screens' visibility and redraw)
  * on or off and set their frame rate, 1 .. 1000 frames per second; the
  * next frame is due at once and the whole picture is presented.  1 ok, 0
  * for a rate outside that range (nothing changes). */
-int Fx_SetEffectFps(int enable, uint32_t fps)
+int Fx_SetEffectFps(OpenBGI_t* o, int enable, uint32_t fps)
 {
 	if(fps < 1 || fps > 1000)
 		return 0;
-	gEffectFrameMs = 1000 / fps;
-	gEffectNext = 0;
-	Fx_SetEffectsEnabled(enable);
-	Present_RequestFull();
+	o->rain.effectFrameMs = 1000 / fps;
+	o->rain.effectNext = 0;
+	Fx_SetEffectsEnabled(o, enable);
+	Present_RequestFull(o);
 	return 1;
 }

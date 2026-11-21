@@ -438,7 +438,7 @@ MSG_BAD_OBJ_PATTERN	無効なオブジェクトパターン [ %d ] が指定さ�
 MSG_PTCL_NO_ALT_IMAGE	パーティクルタイプ [ %d ] のオブジェクトパターン [ %d ] には別イメージが設定されていません	Object pattern [ %d ] of particle type [ %d ] has no alternate image set
 MSG_BMP_RANGE_NOT_CONFORM	指定されたビットマップ [ %d ～%d ] の中に適合しないものが含まれています	Among the specified bitmaps [ %d to %d ] there is one that does not conform
 MSG_BAD_GETPARAM_ARG	取得対象パラメータ [ 0x%.8X ] に渡された引数 [ %d ( 0x%.8X ) ] に誤りがあります	For the queried parameter [ 0x%.8X ] the argument passed [ %d ( 0x%.8X ) ] is wrong
-# The scenario tool (tools/bgiscn.c, src/scn/): text the game scripts contain, never translated
+# The scenario tool (src/tools/bgiscn.c, src/scn/): text the game scripts contain, never translated
 MSG_SCN_LABEL_NOT_FOUND	指定されたラベルは見つかりませんでした。	The specified label was not found (the message every scenario's label dispatcher shows)	fixed
 MSG_SCN_PARAM_TEXT_SPEED	テキスト表示速度	text display speed: the first parameter name of the command named set_text_speed	fixed
 MSG_SCN_PARAM_FONT_NUMBER	フォント番号	font number: set_font / set_font_ex	fixed
@@ -459,6 +459,7 @@ MSG_LAUNCH_PROFILE	プロファイル:	Profile:
 MSG_LAUNCH_OPTIONS	オプション:	Options:
 MSG_LAUNCH_GAME_FOUND	%s（プロファイル %s）	%s (profile %s)
 MSG_LAUNCH_UNKNOWN	不明なゲーム	Unknown game
+MSG_LAUNCH_UNKNOWN_FIT	%s（命令から推定したプロファイル %s）	%s (profile %s, judged from its opcodes)
 MSG_LAUNCH_NO_GAME	ここにゲームはありません（system.arc も ipl._bp もありません）	No game here (no system.arc or ipl._bp)
 MSG_LAUNCH_NO_DIRECTORY	ディレクトリを選択してください	Choose a directory
 MSG_LAUNCH_REFUSED	ゲームのあるディレクトリを選択してください	Select a directory that holds a game first
@@ -467,3 +468,29 @@ MSG_BROWSE_OPEN	開く	Open
 MSG_BROWSE_SELECT	選択	Select
 MSG_BROWSE_CANCEL	キャンセル	Cancel
 MSG_BROWSE_UP	上のフォルダへ	Up one level
+MSG_OSK_HIRA_1	あかさたなはまやらわがざだばぱぁっ	the on-screen keyboard's hiragana table, row 1 of 5 (17 keys a row)	fixed
+MSG_OSK_HIRA_2	いきしちにひみ、りをぎじぢびぴぃゃ	row 2	fixed
+MSG_OSK_HIRA_3	うくすつぬふむゆるんぐずづぶぷぅゅ	row 3	fixed
+MSG_OSK_HIRA_4	えけせてねへめ。れーげぜでべぺぇょ	row 4	fixed
+MSG_OSK_HIRA_5	おこそとのほもよろ～ごぞどぼぽぉゎ	row 5	fixed
+MSG_OSK_KATA_1	アカサタナハマヤラワガザダバパァッ	its katakana table, row 1	fixed
+MSG_OSK_KATA_2	イキシチニヒミ、リヲギジヂビピィャ	row 2	fixed
+MSG_OSK_KATA_3	ウクスツヌフムユルングズヅブプゥュ	row 3	fixed
+MSG_OSK_KATA_4	エケセテネヘメ。レーゲゼデベペェョ	row 4	fixed
+MSG_OSK_KATA_5	オコソトノホモヨロヴゴゾドボポォヮ	row 5	fixed
+MSG_OSK_WIDE_1	ＡＢＣＤＥＦＧＨＩＪＫＬＭ０１２３	its full-width letters, digits and signs, row 1	fixed
+MSG_OSK_WIDE_2	ＮＯＰＱＲＳＴＵＶＷＸＹＺ４５６７	row 2	fixed
+MSG_OSK_WIDE_3	ａｂｃｄｅｆｇｈｉｊｋｌｍ８９＋－	row 3	fixed
+MSG_OSK_WIDE_4	ｎｏｐｑｒｓｔｕｖｗｘｙｚ．，！？	row 4	fixed
+MSG_OSK_WIDE_5	＠＃＄％＆＊（）＿／：；＝・「」　	row 5 (the last key is the full-width space)	fixed
+MSG_OSK_KEY_HIRA	かな	hira
+MSG_OSK_KEY_KATA	カナ	kata
+MSG_OSK_KEY_WIDE	全角	wide
+MSG_OSK_KEY_HALF	半角	abc
+MSG_OSK_KEY_SPACE	空白	space
+MSG_OSK_KEY_LEFT	←	<
+MSG_OSK_KEY_RIGHT	→	>
+MSG_OSK_KEY_DELETE	削除	del
+MSG_OSK_KEY_DONE	完了	done
+MSG_LAUNCHER_NEWER	このOpenBGIにはランチャーの新しいソースファイルが付属していますが、\n\n%s\n\nにあるファイルは変更されています。\n\n新しいファイルに置き換えますか？\n現在のファイルは同じ場所のフォルダ「%s」に保存されます。\n\n「はい」：置き換える\n「いいえ」：今のファイルをそのまま使う	This OpenBGI comes with newer source files for its launcher, but the files in\n\n%s\n\nhave been changed.\n\nReplace them with the new ones?\nThe files that are there now would be kept in the folder "%s" beside them.\n\nYes: replace them\nNo: keep them as they are
+MSG_LAUNCHER_BROKEN	ランチャーのソースファイル\n\n%s\n\nをコンパイルできませんでした。\n\n%s\n代わりにOpenBGI内蔵のランチャーを実行します。	The source files of the launcher in\n\n%s\n\ndo not compile:\n\n%s\nThe launcher built into OpenBGI runs instead.

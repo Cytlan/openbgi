@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * tests/picture.c - unit test of the picture files of "90 C4" / "90 C5"
- *                   (src/core/picture.c, src/core/jpeg.c, declared in
- *                   inc/bgi/picture.h, and their use in src/gfx/bmpload.c);
- *                   built as bin/test_picture by `make test`
+ *                   (src/base/picture.c, src/base/jpeg.c, declared in
+ *                   src/include/bgi/picture.h, and their use in src/gfx/bmpload.c);
+ *                   built as test_picture by `make test`
  *
  * The embedded files were made by another library (the IJG codec through
  * Pillow) from one 16 x 16 gradient: the same picture baseline, with a
@@ -31,26 +31,17 @@
  * project root (as `make test` does).
  */
 #include "bgi/picture.h"
+#include "bgi/core.h"
 #include "bgi/gfx/bitmap.h"
 #include "bgi/gfx/bmpmgr.h"
 #include "bgi/gfx/bmpops.h"
-#include "bgi/os.h"
+#include "host/os.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static int gFails; // the number of failed checks so far
-// evaluate a condition; print it with its location and count a failure when it is false
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 // ---- the embedded files -----------------------------------------------------------
 
@@ -112,11 +103,11 @@ static void TestJpeg(void)
 	for(y = 0; y < 29; y++)
 		for(x = 0; x < 37; x++)
 		{
-			uint8_t* o = src + (y * 37 + x) * 4;
-			o[0] = (uint8_t)(x * 6);
-			o[1] = (uint8_t)(y * 8);
-			o[2] = (uint8_t)(200 - x * 2 - y * 2);
-			o[3] = 0x12; // ignored
+			uint8_t* dst = src + (y * 37 + x) * 4;
+			dst[0] = (uint8_t)(x * 6);
+			dst[1] = (uint8_t)(y * 8);
+			dst[2] = (uint8_t)(200 - x * 2 - y * 2);
+			dst[3] = 0x12; // ignored
 		}
 	file = Jpeg_Encode(src, 37, 29, 37 * 4, 90, &size);
 	CHECK(file && size > 600 && file[0] == 0xFF && file[1] == 0xD8 && memcmp(file + 6, "JFIF", 5) == 0);
@@ -204,9 +195,9 @@ static void TestGif(void)
 	CHECK(p.index && memcmp(p.index, want, 12) == 0);
 	for(i = 0; p.bgra && i < 12; i++)
 	{
-		const uint8_t* o = p.bgra + i * 4;
+		const uint8_t* dst = p.bgra + i * 4;
 		int k = want[i];
-		if(o[2] != (k == 1 ? 255 : 0) || o[1] != (k == 2 ? 255 : 0) || o[0] != (k == 3 ? 255 : 0) || o[3] != (k == 2 ? 0 : 255))
+		if(dst[2] != (k == 1 ? 255 : 0) || dst[1] != (k == 2 ? 255 : 0) || dst[0] != (k == 3 ? 255 : 0) || dst[3] != (k == 2 ? 0 : 255))
 			bad++;
 	}
 	CHECK(bad == 0);
@@ -247,31 +238,31 @@ static void Spit(const char* path, const void* data, size_t n)
  * picture as GRAY8; the embedded GIF as GRAY8 with mode 3 and by mode -1,
  * its 4-pixel rows unchanged; a 5-pixel-wide 8-bit BMP as GRAY8 takes
  * its indices out of 8-byte rows as if they were packed. */
-static void TestOpcodes(void)
+static void TestOpcodes(OpenBGI_t* o)
 {
 	static const char* path = "bin/test_picture_tmp";
 	Bmp_t b, l;
 	int x, y, ok;
 	printf("opcodes\n");
-	gBmpOption = 0;
-	gBmpMgr = BmpMgr_New(4);
-	CHECK(BmpMgr_Create(gBmpMgr, 0, 7, 5, PM_ARGB32));
-	BmpMgr_GetInfo(gBmpMgr, &b, 0);
+	o->gfx.bmpOption = 0;
+	o->gfx.bmpMgr = BmpMgr_New(4);
+	CHECK(BmpMgr_Create(o->gfx.bmpMgr, 0, 7, 5, PM_ARGB32));
+	BmpMgr_GetInfo(o->gfx.bmpMgr, &b, 0);
 	for(y = 0; y < 5; y++)
 		for(x = 0; x < 7; x++)
 		{
 			uint8_t* p = b.pixels + y * b.pitch + x * 4;
 			p[0] = (uint8_t)(x * 30), p[1] = (uint8_t)(y * 50), p[2] = (uint8_t)(x * y * 5), p[3] = (uint8_t)(x * 20);
 		}
-	CHECK(BmpOp_SavePicture(3, path, 4, 0) == (int)0x80000003u);
-	CHECK(BmpOp_SavePicture(0, path, 5, 0) == (int)0x80000004u);
-	CHECK(BmpOp_SavePicture(0, path, 2, 0) == (int)0x80000005u);
-	CHECK(BmpOp_SavePicture(0, path, 3, 0) == (int)0x80000005u);
-	CHECK(BmpOp_SavePicture(0, path, 1, 101) == (int)0x80000005u);
+	CHECK(BmpOp_SavePicture(o, 3, path, 4, 0) == (int)0x80000003u);
+	CHECK(BmpOp_SavePicture(o, 0, path, 5, 0) == (int)0x80000004u);
+	CHECK(BmpOp_SavePicture(o, 0, path, 2, 0) == (int)0x80000005u);
+	CHECK(BmpOp_SavePicture(o, 0, path, 3, 0) == (int)0x80000005u);
+	CHECK(BmpOp_SavePicture(o, 0, path, 1, 101) == (int)0x80000005u);
 	for(x = 0; x < 2; x++)
 	{
-		CHECK(BmpOp_SavePicture(0, path, x ? 0u : 4u, 0) == 0);
-		CHECK(BmpOp_LoadPicture(1, path, 2) == 0 && BmpMgr_GetInfo(gBmpMgr, &l, 1) && l.mode == PM_ARGB32 && l.w == 7 && l.h == 5);
+		CHECK(BmpOp_SavePicture(o, 0, path, x ? 0u : 4u, 0) == 0);
+		CHECK(BmpOp_LoadPicture(o, 1, path, 2) == 0 && BmpMgr_GetInfo(o->gfx.bmpMgr, &l, 1) && l.mode == PM_ARGB32 && l.w == 7 && l.h == 5);
 		for(y = 0, ok = 1; y < 5 * 7; y++)
 		{
 			const uint8_t* s = b.pixels + (y / 7) * b.pitch + (y % 7) * 4;
@@ -280,23 +271,23 @@ static void TestOpcodes(void)
 				ok = 0;
 		}
 		CHECK(ok);
-		CHECK(BmpOp_LoadPicture(1, path, 1) == 0 && BmpMgr_GetInfo(gBmpMgr, &l, 1) && l.mode == PM_RGB32);
-		CHECK(BmpOp_LoadPicture(2, path, -1) == 0 && BmpMgr_GetInfo(gBmpMgr, &l, 2) && l.mode == PM_RGB32);
-		CHECK(BmpOp_LoadPicture(2, path, 3) == -1); // colour as indices
-		CHECK(BmpOp_LoadPicture(2, path, 0) == -1);
+		CHECK(BmpOp_LoadPicture(o, 1, path, 1) == 0 && BmpMgr_GetInfo(o->gfx.bmpMgr, &l, 1) && l.mode == PM_RGB32);
+		CHECK(BmpOp_LoadPicture(o, 2, path, -1) == 0 && BmpMgr_GetInfo(o->gfx.bmpMgr, &l, 2) && l.mode == PM_RGB32);
+		CHECK(BmpOp_LoadPicture(o, 2, path, 3) == -1); // colour as indices
+		CHECK(BmpOp_LoadPicture(o, 2, path, 0) == -1);
 	}
-	CHECK(BmpOp_SavePicture(0, path, 1, 90) == 0);
-	CHECK(BmpOp_LoadPicture(1, path, 2) == 0 && BmpMgr_GetInfo(gBmpMgr, &l, 1) && l.w == 7 && l.h == 5);
+	CHECK(BmpOp_SavePicture(o, 0, path, 1, 90) == 0);
+	CHECK(BmpOp_LoadPicture(o, 1, path, 2) == 0 && BmpMgr_GetInfo(o->gfx.bmpMgr, &l, 1) && l.w == 7 && l.h == 5);
 	remove(path);
-	CHECK(BmpOp_LoadPicture(1, path, 2) == -1);
-	CHECK(BmpOp_LoadPicture(1, path, -1) == (int)0x80000001u);
+	CHECK(BmpOp_LoadPicture(o, 1, path, 2) == -1);
+	CHECK(BmpOp_LoadPicture(o, 1, path, -1) == (int)0x80000001u);
 	Spit(path, "garbage", 7);
-	CHECK(BmpOp_LoadPicture(1, path, -1) == (int)0x80000002u);
-	CHECK(BmpOp_LoadPicture(1, path, 2) == -1);
+	CHECK(BmpOp_LoadPicture(o, 1, path, -1) == (int)0x80000002u);
+	CHECK(BmpOp_LoadPicture(o, 1, path, 2) == -1);
 	Spit(path, kGif, sizeof kGif);
-	CHECK(BmpOp_LoadPicture(1, path, 3) == 0 && BmpMgr_GetInfo(gBmpMgr, &l, 1) && l.mode == PM_GRAY8 && l.w == 4);
+	CHECK(BmpOp_LoadPicture(o, 1, path, 3) == 0 && BmpMgr_GetInfo(o->gfx.bmpMgr, &l, 1) && l.mode == PM_GRAY8 && l.w == 4);
 	CHECK(l.pixels && l.pixels[0] == 0 && l.pixels[3] == 3 && l.pixels[l.pitch] == 3 && l.pixels[2 * l.pitch + 3] == 2);
-	CHECK(BmpOp_LoadPicture(2, path, -1) == 0 && BmpMgr_GetInfo(gBmpMgr, &l, 2) && l.mode == PM_GRAY8);
+	CHECK(BmpOp_LoadPicture(o, 2, path, -1) == 0 && BmpMgr_GetInfo(o->gfx.bmpMgr, &l, 2) && l.mode == PM_GRAY8);
 	{ // 5 x 2, 8 bpp uncompressed: indices row 0 = 10 .. 14, row 1 = 20 .. 24
 		uint8_t f[54 + 256 * 4 + 16];
 		int i;
@@ -309,24 +300,27 @@ static void TestOpcodes(void)
 			f[54 + 1024 + 8 + i] = (uint8_t)(10 + i); // (rows of 8 bytes)
 		}
 		Spit(path, f, sizeof f);
-		CHECK(BmpOp_LoadPicture(1, path, 3) == 0 && BmpMgr_GetInfo(gBmpMgr, &l, 1) && l.w == 5 && l.h == 2);
+		CHECK(BmpOp_LoadPicture(o, 1, path, 3) == 0 && BmpMgr_GetInfo(o->gfx.bmpMgr, &l, 1) && l.w == 5 && l.h == 2);
 		// the rows were taken out of rows of 8 bytes as if packed: the second row starts at the first row's padding
 		CHECK(l.pixels && l.pixels[0] == 10 && l.pixels[4] == 14 && l.pixels[l.pitch] == 0 && l.pixels[l.pitch + 3] == 20);
 	}
 	remove(path);
-	BmpMgr_Delete(gBmpMgr);
-	gBmpMgr = NULL;
+	BmpMgr_Delete(o->gfx.bmpMgr);
+	o->gfx.bmpMgr = NULL;
 }
 
 // run every group; exit status 1 when any check failed
 int main(void)
 {
+	OpenBGI_t* o = OpenBGI_New(OS_Host()); // the engine whose code the test runs
+	if(!o)
+		return 1;
 	OS_Init();
 	TestJpeg();
 	TestBmpPng();
 	TestGif();
 	TestReject();
-	TestOpcodes();
+	TestOpcodes(o);
 	OS_Shutdown();
 	if(gFails)
 	{

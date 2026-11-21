@@ -2,7 +2,7 @@
 # This file is part of OpenBGI (https://openbgi.net).
 # SPDX-License-Identifier: GPL-2.0-only
 """
-gen.py - syntax-check src/os/win32/*.c against the stub Win32 headers.
+gen.py - syntax-check src/host/win32/*.c against the stub Win32 headers.
 
 Runs GCC with -fsyntax-only on every Win32 back-end file using
 tools/win32stub/ in place of the SDK.  Identifiers GCC reports as
@@ -23,15 +23,15 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STUB = os.path.join(ROOT, "tools", "win32stub")
 AUTOGEN = os.path.join(STUB, "autogen.h")
-# the back end, and the entry point's Windows half
-FILES = sorted(glob.glob(os.path.join(ROOT, "src", "os", "win32", "*.c"))) + [os.path.join(ROOT, "src", "sys", "main.c")]
+# the back end (its entry point main.c included)
+FILES = sorted(glob.glob(os.path.join(ROOT, "src", "host", "win32", "*.c")))
 # -fshort-wchar: L"" literals in 16-bit units, as on Windows; a string of the
 # wrong width (or any other mismatched pointer) given to one of the
 # functions the stub declares is an error, as it is with the SDK
 CMD = ["gcc", "-std=c99", "-fsyntax-only", "-Wall", "-Wextra", "-Wno-unused-parameter",
        "-Wno-implicit-function-declaration", "-Wno-int-conversion", "-Wno-int-to-pointer-cast",
        "-Wno-pointer-to-int-cast", "-Werror=incompatible-pointer-types", "-Wno-missing-braces",
-       "-fshort-wchar", "-DBGI_WIN32", "-I" + os.path.join(ROOT, "inc"), "-I" + STUB]
+       "-fshort-wchar", "-DBGI_WIN32", "-DBGI_LAUNCHER", "-DBGI_TOOLS", "-DBGI_GL", "-DBGI_SHADERS", "-I" + os.path.join(ROOT, "include"), "-I" + os.path.join(ROOT, "src", "include"), "-I" + os.path.join(ROOT, "src"), "-I" + STUB]
 
 UNDECL = re.compile(r"error: [‘']([A-Za-z_][A-Za-z0-9_]*)[’'] undeclared")
 UNKNOWN_TYPE = re.compile(r"error: unknown type name [‘']([A-Za-z_][A-Za-z0-9_]*)[’']")

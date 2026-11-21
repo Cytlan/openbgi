@@ -4,9 +4,9 @@
  *
  * window_doc.c - the text document of a message window: the glyphs of its
  *                text layer kept as a list, so that text which does not
- *                fit the text area can be scrolled (inc/bgi/gfx/window.h)
+ *                fit the text area can be scrolled (src/include/bgi/gfx/window.h)
  *
- * An OpenBGI extension ("EF 08", docs/obgi.md).  The original draws
+ * An OpenBGI extension ("EF 08", docs/modding/obgi.md).  The original draws
  * glyphs into the text layer and forgets them: a message longer than the
  * text area is cut off at its bottom.  With scrolling on, the rich text
  * outputs (the paced one of src/wait/wait_text.c and the immediate
@@ -18,23 +18,22 @@
  * (src/wait/wait_text_scroll.c).
  */
 #include "window_internal.h"
-
-static uint32_t gDocSerial; // a number per document ever created: tells a wait that its document was replaced
+#include "bgi/core.h"
 
 // scrolling is on ("EF 08") and the window writes horizontally: its text goes through a document
-int Window_DocActive(Window_t* w)
+int Window_DocActive(OpenBGI_t* o, Window_t* w)
 {
-	return gTextScroll && Window_GetDrawStyle(w) == 0;
+	return o->text.textScroll && Window_GetDrawStyle(w) == 0;
 }
 
 // the window's document, created empty (view at the top) when it has none
-TextDoc_t* Window_Doc(Window_t* w)
+TextDoc_t* Window_Doc(OpenBGI_t* o, Window_t* w)
 {
 	if(!w->doc)
 	{
 		w->doc = (TextDoc_t*)BGI_Calloc(sizeof(TextDoc_t));
 		w->doc->tail = &w->doc->head;
-		w->doc->serial = ++gDocSerial;
+		w->doc->serial = ++o->gfx.docSerial;
 	}
 	return w->doc;
 }
@@ -68,9 +67,9 @@ int Window_DocScroll(Window_t* w)
 /* move the nodes of a finished layout (in document coordinates) to the end
  * of the document; `rich` is left empty.  The result is the link the first
  * of them hangs on. */
-RichChar_t** Window_DocAppend(Window_t* w, RichState_t* rich)
+RichChar_t** Window_DocAppend(OpenBGI_t* o, Window_t* w, RichState_t* rich)
 {
-	TextDoc_t* d = Window_Doc(w);
+	TextDoc_t* d = Window_Doc(o, w);
 	RichChar_t** link = d->tail;
 	*link = rich->head;
 	rich->head = NULL;
@@ -115,7 +114,7 @@ int Window_DocMaxScroll(Window_t* w)
 
 /* move the view to `y` pixels (not above the top) and repaint; the cursor,
  * which is kept in layer coordinates, moves with the text */
-void Window_DocSetScroll(Window_t* w, int y)
+void Window_DocSetScroll(OpenBGI_t* o, Window_t* w, int y)
 {
 	TextDoc_t* d = w->doc;
 	if(!d)
@@ -126,13 +125,13 @@ void Window_DocSetScroll(Window_t* w, int y)
 		return;
 	w->curY -= y - d->scrollY;
 	d->scrollY = y;
-	Window_DocRedraw(w);
+	Window_DocRedraw(o, w);
 }
 
 /* paint the text area from the document: cleared, then every node that has
  * been shown, in the order drawn and the way the paced output draws a
  * glyph (its shape cut out of what is there, then blended in) */
-void Window_DocRedraw(Window_t* w)
+void Window_DocRedraw(OpenBGI_t* o, Window_t* w)
 {
 	Rect_t area;
 	Bmp_t t;
@@ -154,7 +153,7 @@ void Window_DocRedraw(Window_t* w)
 		Bmp_Blit(&t, x, y, &c->glyph, 0x40, 1);
 		Bmp_Blit(&t, x, y, &c->glyph, 1, 0);
 	}
-	Window_Recomposite(w, &area);
+	Window_Recomposite(o, w, &area);
 }
 
 // 1 when the glyph's line ends inside the text area with the view at `scrollY` (0: it reaches below the bottom)
@@ -169,7 +168,7 @@ int Window_DocFits(Window_t* w, const RichChar_t* c, int scrollY)
 /* draw one node at its place in the view (Window_DrawBmpToText: clipped to
  * the usable text area, recomposited).  1 and the touched screen rectangle
  * in *outScreen, 0 when the node is outside the area or the blit failed. */
-int Window_DocDrawNode(Window_t* w, Rect_t* outScreen, const RichChar_t* c, int effect, int level)
+int Window_DocDrawNode(OpenBGI_t* o, Window_t* w, Rect_t* outScreen, const RichChar_t* c, int effect, int level)
 {
 	Rect_t area, r;
 	int y = c->y - Window_DocScroll(w);
@@ -179,7 +178,7 @@ int Window_DocDrawNode(Window_t* w, Rect_t* outScreen, const RichChar_t* c, int 
 	Rect_Offset(&r, c->x, y);
 	if(!Rect_Intersects(&r, &area))
 		return 0;
-	return Window_DrawBmpToText(w, outScreen, c->x, y, &c->glyph, effect, level) == 0;
+	return Window_DrawBmpToText(o, w, outScreen, c->x, y, &c->glyph, effect, level) == 0;
 }
 
 /* Window_DrawText for a window with a document: the string is laid out
@@ -187,10 +186,10 @@ int Window_DocDrawNode(Window_t* w, Rect_t* outScreen, const RichChar_t* c, int 
  * shown ones and are drawn; when the text ends below the text area the
  * view follows it to the end.  The layout's result: 1 drawn, 0 when the
  * font is unknown. */
-int Window_DocDrawText(Window_t* w, const char* str, int parseTags, const char* tags, int hang, uint32_t colour,
+int Window_DocDrawText(OpenBGI_t* o, Window_t* w, const char* str, int parseTags, const char* tags, int hang, uint32_t colour,
 	uint32_t rubyColour, const int32_t style[5])
 {
-	TextDoc_t* d = Window_Doc(w);
+	TextDoc_t* d = Window_Doc(o, w);
 	RichState_t rich;
 	RichChar_t** link;
 	RichChar_t* c;
@@ -202,22 +201,22 @@ int Window_DocDrawText(Window_t* w, const char* str, int parseTags, const char* 
 	Window_GetCursor(w, cur);
 	Window_GetTextArea(w, &area);
 	cur[1] += d->scrollY;
-	if(!Text_LayoutNodes(&rich, &lines, cur, &area, str, parseTags, tags, Window_GetFont(w), Window_GetProportional(w),
+	if(!Text_LayoutNodes(o, &rich, &lines, cur, &area, str, parseTags, tags, Window_GetFont(w), Window_GetProportional(w),
 		   hang, Window_GetSwingStyle(w), Window_GetSpacing(w), colour, rubyColour, style))
 		return 0;
 	Window_SetCursor(w, cur[0], cur[1] - d->scrollY);
-	link = Window_DocAppend(w, &rich);
+	link = Window_DocAppend(o, w, &rich);
 	for(c = *link; c; c = c->next)
 		c->shown = 1;
 	max = Window_DocMaxScroll(w);
 	if(max > d->scrollY)
-		Window_DocSetScroll(w, max); // repaints everything, the new nodes included
+		Window_DocSetScroll(o, w, max); // repaints everything, the new nodes included
 	else
 	{
 		for(c = *link; c; c = c->next)
 		{
-			Window_DocDrawNode(w, &r, c, 0x40, 1);
-			Window_DocDrawNode(w, &r, c, 1, 0);
+			Window_DocDrawNode(o, w, &r, c, 0x40, 1);
+			Window_DocDrawNode(o, w, &r, c, 1, 0);
 		}
 	}
 	return 1;

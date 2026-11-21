@@ -1,8 +1,8 @@
 # build outputs
 obj/
 bin/
-# third-party drop-in (see the Makefile's VORBIS setting)
-src/snd/stb_vorbis.c
+# ffmpeg's source and the libraries `make ffmpeg` builds from it
+deps/
 # the engine's error report, written next to the game
 BGIError.txt
 # working files, tools and notes that are not part of the project

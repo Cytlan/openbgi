@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * tests/codec.c - unit test of the hash generator, the DSC and CBG decoders
- *                 (src/core/hash.c, dsc.c, cbg.c, declared in
- *                 inc/bgi/codec.h) and the PackFile archive reader
- *                 (src/core/arc.c, inc/bgi/file.h); built as bin/test_codec
+ *                 (src/base/hash.c, dsc.c, cbg.c, declared in
+ *                 src/include/bgi/codec.h) and the PackFile archive reader
+ *                 (src/fs/arc.c, src/include/bgi/file.h); built as test_codec
  *                 by `make test`
  *
  * The decoders are exercised with encoders written here from the inverse
@@ -39,23 +39,14 @@
  * project root (as `make test` does).
  */
 #include "bgi/codec.h"
+#include "bgi/core.h"
 #include "bgi/file.h"
 #include "bgi/strutil.h"
-#include "bgi/os.h"
+#include "host/os.h"
 
 #include <stdio.h>
 
-static int gFails; // the number of failed checks so far
-// evaluate a condition; print it with its location and count a failure when it is false
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 /* a small deterministic generator for test data (a linear congruential generator; the
  * same sequence every run) */
@@ -104,14 +95,14 @@ static void BwFlush(BitWriter_t* w)
  * and the state changes on every step.  A failure means every obfuscated
  * format (DSC code lengths, CBG weight tables, the save files) decodes to
  * garbage. */
-static void TestHash(void)
+static void TestHash(OpenBGI_t* o)
 {
 	uint32_t key = 0x12345678, i;
 	printf("hash\n");
 	// the global generator and the explicit one are the same arithmetic
-	BGI_HashSeed(key);
+	BGI_HashSeed(o, key);
 	for(i = 0; i < 1000; i++)
-		CHECK(BGI_HashNext() == BGI_HashUpdate(&key));
+		CHECK(BGI_HashNext(o) == BGI_HashUpdate(&key));
 	// the output is 15 bits wide and the state moves on every step
 	key = 1;
 	for(i = 0; i < 100; i++)
@@ -158,7 +149,7 @@ static void DscCodeFor(uint32_t sym, uint32_t* code, int* len)
  * back-reference symbol followed by the 12-bit distance - 2, anything
  * shorter a literal.  Returns the encoded size and the number of symbols
  * in `*decCount` (also stored in the header). */
-static size_t DscEncode(uint8_t* out, const uint8_t* in, uint32_t n, uint32_t key, uint32_t* decCount)
+static size_t DscEncode(OpenBGI_t* o, uint8_t* out, const uint8_t* in, uint32_t n, uint32_t key, uint32_t* decCount)
 {
 	DscHeader_t* h = (DscHeader_t*)out;
 	BitWriter_t w;
@@ -171,13 +162,13 @@ static size_t DscEncode(uint8_t* out, const uint8_t* in, uint32_t n, uint32_t ke
 
 	// the obfuscated code lengths: each length plus the generator's next value (the
 	// decoder subtracts it)
-	BGI_HashSeed(key);
+	BGI_HashSeed(o, key);
 	for(i = 0; i < 512; i++)
 	{
 		uint32_t code;
 		int len;
 		DscCodeFor(i, &code, &len);
-		out[0x20 + i] = (uint8_t)(len + (uint8_t)BGI_HashNext());
+		out[0x20 + i] = (uint8_t)(len + (uint8_t)BGI_HashNext(o));
 	}
 
 	w.buf = out + 0x220;
@@ -227,7 +218,7 @@ static size_t DscEncode(uint8_t* out, const uint8_t* in, uint32_t n, uint32_t ke
  * bytes), 600 bytes without a single match, and a run that needs the
  * longest back reference (257 bytes) at the farthest distance (4097).
  * Each has to decode to exactly the input. */
-static void TestDsc(void)
+static void TestDsc(OpenBGI_t* o)
 {
 	enum
 	{
@@ -248,20 +239,20 @@ static void TestDsc(void)
 		else
 			in[i] = (uint8_t)("the quick brown fox 日本語"[Rnd() % 25]); // "Japanese"
 	}
-	size = (uint32_t)DscEncode(enc, in, N, 0x8f3a, &count);
+	size = (uint32_t)DscEncode(o, enc, in, N, 0x8f3a, &count);
 	CHECK(BGI_IsDsc(enc));
 	CHECK(BGI_DscOutSize(enc) == N);
 	CHECK(count < N); // the back references did something
 	memset(dec, 0xaa, N);
-	CHECK(BGI_DscDecode(enc, dec) == N);
+	CHECK(BGI_DscDecode(o, enc, dec) == N);
 	CHECK(memcmp(dec, in, N) == 0);
 	BGI_UNUSED(size);
 
 	// a stream without any match: every symbol a literal
 	for(i = 0; i < 600; i++)
 		in[i] = (uint8_t)(i * 7 + (i >> 3));
-	size = (uint32_t)DscEncode(enc, in, 600, 1, &count);
-	CHECK(BGI_DscDecode(enc, dec) == 600);
+	size = (uint32_t)DscEncode(o, enc, in, 600, 1, &count);
+	CHECK(BGI_DscDecode(o, enc, dec) == 600);
 	CHECK(memcmp(dec, in, 600) == 0);
 
 	// the longest back reference (257 bytes) and the farthest distance (4097)
@@ -269,8 +260,8 @@ static void TestDsc(void)
 	for(i = 4097; i < 4097 + 257; i++)
 		in[i] = 0x5a;
 	in[4097 + 257] = 1;
-	size = (uint32_t)DscEncode(enc, in, 4097 + 258, 77, &count);
-	CHECK(BGI_DscDecode(enc, dec) == 4097 + 258);
+	size = (uint32_t)DscEncode(o, enc, in, 4097 + 258, 77, &count);
+	CHECK(BGI_DscDecode(o, enc, dec) == 4097 + 258);
 	CHECK(memcmp(dec, in, 4097 + 258) == 0);
 
 	free(in);
@@ -402,15 +393,15 @@ static size_t CbgEncode(uint8_t* out, const uint8_t* pix, uint32_t w, uint32_t h
 		for(x = 0; x < w; x++)
 			for(c = 0; c < bytesPP; c++)
 			{
-				uint32_t o = y * stride + x * bytesPP + c;
-				int up = y ? pix[o - stride] : -1;
-				int left = x ? pix[o - bytesPP] : -1;
+				uint32_t off = y * stride + x * bytesPP + c;
+				int up = y ? pix[off - stride] : -1;
+				int left = x ? pix[off - bytesPP] : -1;
 				int pred;
 				if(up >= 0)
 					pred = left >= 0 ? (left + up) >> 1 : up;
 				else
 					pred = left >= 0 ? left : 0;
-				filtered[o] = (uint8_t)(pix[o] - pred);
+				filtered[off] = (uint8_t)(pix[off] - pred);
 			}
 
 	// the RLE: literal run, zero run, literal run, ...; a literal run ends where two
@@ -575,7 +566,7 @@ static void TestCbg(void)
  * exist (ARC_ERR_OPEN), after which the first archive still answers.  A
  * failure means the index parsing, the case folding or the chain of
  * nodes changed. */
-static void TestArc(void)
+static void TestArc(OpenBGI_t* o)
 {
 	static const char* path = "bin/test_codec_tmp.arc";
 	static const char* names[3] = {"First.dat", "second", "ThIrD.bin"};
@@ -597,7 +588,7 @@ static void TestArc(void)
 	// "PackFile    " + count, 32-byte entries (offsets from the end of the index), then
 	// the data
 	File_Ctor(&f);
-	CHECK(File_Create(&f, path));
+	CHECK(File_Create(o, &f, path));
 	memcpy(hdr, PACKFILE_MAGIC, 12);
 	i = 3;
 	memcpy(hdr + 12, &i, 4);
@@ -617,29 +608,29 @@ static void TestArc(void)
 	File_Dtor(&f);
 
 	mgr = FileSet_New();
-	CHECK(ArcMgr_Exists(mgr, path, "first.dat"));
-	CHECK(ArcMgr_Exists(mgr, path, "FIRST.DAT")); // names are compared lower-cased
-	CHECK(!ArcMgr_Exists(mgr, path, "fourth"));
-	CHECK(ArcMgr_SizeOf(mgr, path, "third.bin") == 3000);
-	CHECK(ArcMgr_SizeOf(mgr, path, "nope") == ARC_ERR_NOT_FOUND);
-	CHECK(ArcMgr_ArcNameFor(mgr, arcName, path, "second") == 1);
+	CHECK(ArcMgr_Exists(o, mgr, path, "first.dat"));
+	CHECK(ArcMgr_Exists(o, mgr, path, "FIRST.DAT")); // names are compared lower-cased
+	CHECK(!ArcMgr_Exists(o, mgr, path, "fourth"));
+	CHECK(ArcMgr_SizeOf(o, mgr, path, "third.bin") == 3000);
+	CHECK(ArcMgr_SizeOf(o, mgr, path, "nope") == ARC_ERR_NOT_FOUND);
+	CHECK(ArcMgr_ArcNameFor(o, mgr, arcName, path, "second") == 1);
 	CHECK(strcmp(arcName, path) == 0);
 	{
 		uint8_t buf[3000];
-		r = ArcMgr_Read(mgr, buf, path, "second");
+		r = ArcMgr_Read(o, mgr, buf, path, "second");
 		CHECK(r == 1 && buf[0] == data[100]); // the second entry starts after the 100 bytes of the first
-		r = ArcMgr_Read(mgr, buf, path, "third.bin");
+		r = ArcMgr_Read(o, mgr, buf, path, "third.bin");
 		CHECK(r == 3000 && memcmp(buf, data + 101, 3000) == 0);
-		r = ArcMgr_ReadRange(mgr, buf, path, "third.bin", 10, 20);
+		r = ArcMgr_ReadRange(o, mgr, buf, path, "third.bin", 10, 20);
 		CHECK(r == 20 && memcmp(buf, data + 111, 20) == 0);
-		CHECK(ArcMgr_ReadRange(mgr, buf, path, "third.bin", 0, 3001) == ARC_ERR_OFFSET); // a size larger than the entry
-		CHECK(ArcMgr_ReadRange(mgr, buf, path, "third.bin", 2990, 20) == ARC_ERR_RANGE); // offset + size beyond the entry
-		CHECK(ArcMgr_Read(mgr, buf, path, "missing") == ARC_ERR_NOT_FOUND);
+		CHECK(ArcMgr_ReadRange(o, mgr, buf, path, "third.bin", 0, 3001) == ARC_ERR_OFFSET); // a size larger than the entry
+		CHECK(ArcMgr_ReadRange(o, mgr, buf, path, "third.bin", 2990, 20) == ARC_ERR_RANGE); // offset + size beyond the entry
+		CHECK(ArcMgr_Read(o, mgr, buf, path, "missing") == ARC_ERR_NOT_FOUND);
 	}
 	// a second archive name opens a new node in the chain; a missing file is ARC_ERR_OPEN
-	CHECK(ArcMgr_Read(mgr, NULL, "bin/does_not_exist.arc", "x") == ARC_ERR_OPEN);
-	CHECK(ArcMgr_Exists(mgr, path, "first.dat")); // the first node still answers
-	FileSet_Delete(mgr);
+	CHECK(ArcMgr_Read(o, mgr, NULL, "bin/does_not_exist.arc", "x") == ARC_ERR_OPEN);
+	CHECK(ArcMgr_Exists(o, mgr, path, "first.dat")); // the first node still answers
+	FileSet_Delete(o, mgr);
 	free(data);
 	remove(path);
 }
@@ -651,29 +642,29 @@ static void TestArc(void)
  * error; other entries are only read.  Prints a count of scripts (DSC
  * entries that decode to a program with the 16-byte header), images and
  * others, or "not found" when the archive is not there. */
-static void SmokeArchive(const char* dir, const char* arc)
+static void SmokeArchive(OpenBGI_t* o, const char* dir, const char* arc)
 {
 	char path[0x200];
 	FileSet_t* mgr = FileSet_New();
 	int i, dsc = 0, cbg = 0, other = 0;
 	snprintf(path, sizeof path, "%s/%s", dir, arc);
-	if(!mgr->vt->matches(mgr, path)) // an unloaded node adopts the path: this loads the index
+	if(!mgr->vt->matches(o, mgr, path)) // an unloaded node adopts the path: this loads the index
 	{
 		printf("  %s: not found\n", arc);
-		FileSet_Delete(mgr);
+		FileSet_Delete(o, mgr);
 		return;
 	}
 	for(i = 0; i < mgr->count; i++)
 	{
 		const ArcEntry_t* e = &mgr->entries[i];
 		uint8_t* raw = (uint8_t*)malloc(e->size + 16);
-		uint32_t r = ArcMgr_Read(mgr, raw, path, e->name);
+		uint32_t r = ArcMgr_Read(o, mgr, raw, path, e->name);
 		CHECK(r == e->size);
 		if(e->size >= 0x220 && BGI_IsDsc(raw))
 		{
 			uint32_t outSize = BGI_DscOutSize(raw);
 			uint8_t* out = (uint8_t*)malloc(outSize + 16);
-			CHECK(BGI_DscDecode(raw, out) == outSize);
+			CHECK(BGI_DscDecode(o, raw, out) == outSize);
 			// a program of this engine version starts with its 16-byte header (u32 header
 			// size = 0x10)
 			if(outSize >= 16 && out[0] == 0x10 && out[1] == 0 && out[2] == 0 && out[3] == 0)
@@ -695,38 +686,41 @@ static void SmokeArchive(const char* dir, const char* arc)
 		free(raw);
 	}
 	printf("  %s: %d entries, %d scripts, %d images, %d other\n", arc, mgr->count, dsc, cbg, other);
-	FileSet_Delete(mgr);
+	FileSet_Delete(o, mgr);
 }
 
 // the smoke test over the game's archives; does nothing without BGI_GAME_DIR
-static void TestGameData(void)
+static void TestGameData(OpenBGI_t* o)
 {
 	const char* dir = getenv("BGI_GAME_DIR");
 	const char* arcs = getenv("BGI_GAME_ARCS");
 	if(!dir)
 		return;
 	printf("game data in %s\n", dir);
-	SmokeArchive(dir, "system.arc");
-	SmokeArchive(dir, "sysprg.arc");
+	SmokeArchive(o, dir, "system.arc");
+	SmokeArchive(o, dir, "sysprg.arc");
 	if(arcs)
 	{
 		char list[0x400];
 		char* tok;
 		snprintf(list, sizeof list, "%s", arcs);
 		for(tok = strtok(list, " "); tok; tok = strtok(NULL, " "))
-			SmokeArchive(dir, tok);
+			SmokeArchive(o, dir, tok);
 	}
 }
 
 // run every group; exit status 1 when any check failed
 int main(void)
 {
+	OpenBGI_t* o = OpenBGI_New(OS_Host()); // the engine whose code the test runs
+	if(!o)
+		return 1;
 	OS_Init();
-	TestHash();
-	TestDsc();
+	TestHash(o);
+	TestDsc(o);
 	TestCbg();
-	TestArc();
-	TestGameData();
+	TestArc(o);
+	TestGameData(o);
 	OS_Shutdown();
 	if(gFails)
 	{

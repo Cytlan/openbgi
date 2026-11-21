@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * window_layers.c - the frame layer, the items and the sub-sprites of a
- *                   message window (inc/bgi/gfx/window.h)
+ *                   message window (src/include/bgi/gfx/window.h)
  *
  * The frame is the window's background bitmap ("90 86", "92 88" .. "92 8A");
  * items are small bitmaps the engine's own waits place over the text (the
@@ -14,13 +14,14 @@
  * Window_Recomposite in window.c).
  */
 #include "window_internal.h"
+#include "bgi/core.h"
 
 // ---- frame layer -------------------------------------------------------------------------------
 
 /* "90 86": copy script bitmap `bmp` into the frame layer and show the
  * frame; -1 clears the frame and hides it.  0 ok, 1 not ready, 2 no such
  * bitmap. */
-int Window_SetFrame(Window_t* w, int bmp)
+int Window_SetFrame(OpenBGI_t* o, Window_t* w, int bmp)
 {
 	Bmp_t info;
 
@@ -28,7 +29,7 @@ int Window_SetFrame(Window_t* w, int bmp)
 		return 1;
 	if(bmp != -1)
 	{
-		if(!BmpMgr_GetInfo(gDispBmpMgr, &info, bmp))
+		if(!BmpMgr_GetInfo(o->gfx.dispBmpMgr, &info, bmp))
 			return 2;
 		Bmp_Clear(&w->frame, NULL);
 		Bmp_Blit(&w->frame, 0, 0, &info, 0x80, 0);
@@ -37,41 +38,41 @@ int Window_SetFrame(Window_t* w, int bmp)
 	{
 		Bmp_Clear(&w->frame, NULL);
 	}
-	Window_ShowFrame(w, bmp != -1);
-	Window_RecompositeAll(w);
+	Window_ShowFrame(o, w, bmp != -1);
+	Window_RecompositeAll(o, w);
 	return 0;
 }
 
 /* "90 85": position, effect, level and priority of the display object.
  * Six arguments; the fifth is not used at this level. */
-void Window_Set(Window_t* w, int x, int y, int effect, int level, int unused, int prio)
+void Window_Set(OpenBGI_t* o, Window_t* w, int x, int y, int effect, int level, int unused, int prio)
 {
 	(void)unused;
-	w->obj.vt->setPos(&w->obj, x, y);
+	w->obj.vt->setPos(o, &w->obj, x, y);
 	DispObj_SetEffect(&w->obj, effect);
-	w->obj.vt->setLevel(&w->obj, level);
+	w->obj.vt->setLevel(o, &w->obj, level);
 	DispObj_SetPriority(&w->obj, (uint32_t)prio);
 }
 
-void Window_SetPunch(Window_t* w, int f) // "90 87": cut the item shapes out of the text layer
+void Window_SetPunch(OpenBGI_t* o, Window_t* w, int f) // "90 87": cut the item shapes out of the text layer
 {
 	w->punchItems = f;
-	Window_RecompositeAll(w);
+	Window_RecompositeAll(o, w);
 }
 
-void Window_ShowFrame(Window_t* w, int f) // "92 88"
+void Window_ShowFrame(OpenBGI_t* o, Window_t* w, int f) // "92 88"
 {
 	w->frameVisible = f;
-	Window_RecompositeAll(w);
+	Window_RecompositeAll(o, w);
 }
 
 // "92 8A": fill the frame layer with `colour`; returns the colour, or 1 when not ready
-uint32_t Window_FillFrame(Window_t* w, uint32_t colour)
+uint32_t Window_FillFrame(OpenBGI_t* o, Window_t* w, uint32_t colour)
 {
 	if(!w->ready)
 		return 1;
 	Bmp_Fill(&w->frame, NULL, colour);
-	Window_RecompositeAll(w);
+	Window_RecompositeAll(o, w);
 	return colour;
 }
 
@@ -91,18 +92,21 @@ int Window_BlitResult(int r, int fallback)
 
 /* "92 89": blit script bitmap `bmp` into the frame layer at (x, y) with
  * `effect` / `level` and recomposite the touched rectangle; *outScreen
- * receives that rectangle in screen coordinates.  0 ok, 1 not ready, 2
- * bitmap missing, 4..7 the blit failed (Window_BlitResult). */
-int Window_DrawToFrame(Window_t* w, Rect_t* outScreen, int x, int y, int bmp, int effect, int level)
+ * receives that rectangle in screen coordinates (empty when nothing was
+ * drawn).  0 ok, 1 not ready, 2 bitmap missing, 4..7 the blit failed
+ * (Window_BlitResult). */
+int Window_DrawToFrame(OpenBGI_t* o, Window_t* w, Rect_t* outScreen, int x, int y, int bmp, int effect, int level)
 {
 	Bmp_t info;
 	Rect_t r2;
 	int32_t pos[2];
 	int r;
 
+	outScreen->l = outScreen->t = 0;
+	outScreen->r = outScreen->b = -1;
 	if(!w->ready)
 		return 1;
-	if(!BmpMgr_GetInfo(gDispBmpMgr, &info, bmp))
+	if(!BmpMgr_GetInfo(o->gfx.dispBmpMgr, &info, bmp))
 		return 2;
 	r = Bmp_Blit(&w->frame, x, y, &info, effect, level);
 	if(r == 0)
@@ -111,9 +115,9 @@ int Window_DrawToFrame(Window_t* w, Rect_t* outScreen, int x, int y, int bmp, in
 		Rect_FromBmp(&r2, &info);
 		Rect_Offset(&r2, x, y);
 		Rect_Clip(outScreen, &r2);
-		w->obj.vt->getPos(&w->obj, pos);
+		w->obj.vt->getPos(o, &w->obj, pos);
 		Rect_Offset(outScreen, pos[0], pos[1]);
-		Window_RecompositeAt(w, x, y, &info);
+		Window_RecompositeAt(o, w, x, y, &info);
 		return 0;
 	}
 	return Window_BlitResult(r, bmp);
@@ -127,59 +131,59 @@ int Window_DrawToFrame(Window_t* w, Rect_t* outScreen, int x, int y, int bmp, in
  * that true here: an index of 8 or more does nothing.) */
 
 // switch item `i` on or off; both its old and its new footprint are recomposited
-void Window_ItemEnable(Window_t* w, int i, int f)
+void Window_ItemEnable(OpenBGI_t* o, Window_t* w, int i, int f)
 {
-	if(!Window_ItemRefresh(w, i, 0))
+	if(!Window_ItemRefresh(o, w, i, 0))
 		return;
 	w->item[i].enabled = f;
-	Window_ItemRefresh(w, i, 1);
+	Window_ItemRefresh(o, w, i, 1);
 }
 
 // place item `i` at (x, y) in the window with the compositing transparency `level`
-void Window_ItemSet(Window_t* w, int i, int x, int y, int level)
+void Window_ItemSet(OpenBGI_t* o, Window_t* w, int i, int x, int y, int level)
 {
-	if(!Window_ItemRefresh(w, i, 0))
+	if(!Window_ItemRefresh(o, w, i, 0))
 		return;
 	w->item[i].x = x;
 	w->item[i].y = y;
 	w->item[i].level = level;
-	Window_ItemRefresh(w, i, 1);
+	Window_ItemRefresh(o, w, i, 1);
 }
 
 /* give item `i` a private copy of `src` (which must be in a
  * screen-compatible pixel mode; 4 otherwise).  0 ok, also for an index out
  * of range (nothing is copied then). */
-int Window_ItemSetBitmap(Window_t* w, int i, const Bmp_t* src)
+int Window_ItemSetBitmap(OpenBGI_t* o, Window_t* w, int i, const Bmp_t* src)
 {
 	WinItem_t* it = &w->item[i];
 
-	if(!Bmp_ScreenCompatible(src))
+	if(!Bmp_ScreenCompatible(o, src))
 		return 4;
-	if(!Window_ItemRefresh(w, i, 0))
+	if(!Window_ItemRefresh(o, w, i, 0))
 		return 0;
-	DispObj_AllocLike(&w->obj, &it->bmp, it->buf, src->w, src->h, src);
+	DispObj_AllocLike(o, &w->obj, &it->bmp, it->buf, src->w, src->h, src);
 	Bmp_BlitEffect(&it->bmp, src, 0x80, 0);
-	Window_ItemRefresh(w, i, 1);
+	Window_ItemRefresh(o, w, i, 1);
 	return 0;
 }
 
-void Window_ItemsDisableAll(Window_t* w)
+void Window_ItemsDisableAll(OpenBGI_t* o, Window_t* w)
 {
 	int i;
 
 	for(i = 0; i < WIN_ITEMS; i++)
-		Window_ItemEnable(w, i, 0);
+		Window_ItemEnable(o, w, i, 0);
 }
 
 // screen rectangle of an enabled item with pixels; 0 otherwise
-int Window_ItemRect(Window_t* w, Rect_t* out, int i)
+int Window_ItemRect(OpenBGI_t* o, Window_t* w, Rect_t* out, int i)
 {
 	WinItem_t* it = &w->item[i];
 	int32_t pos[2];
 
 	if(!it->enabled || !it->bmp.pixels)
 		return 0;
-	w->obj.vt->getPos(&w->obj, pos);
+	w->obj.vt->getPos(o, &w->obj, pos);
 	Rect_FromBmp(out, &it->bmp);
 	Rect_Offset(out, it->x + pos[0], it->y + pos[1]);
 	return 1;
@@ -189,7 +193,7 @@ int Window_ItemRect(Window_t* w, Rect_t* out, int i)
  * forced to `forcedEnabled`.  The setters call it with 0 before and 1
  * after a change so both the old and the new footprint are rebuilt.  Only
  * an item that is enabled and has pixels does anything; returns i < 8. */
-int Window_ItemRefresh(Window_t* w, int i, int forcedEnabled)
+int Window_ItemRefresh(OpenBGI_t* o, Window_t* w, int i, int forcedEnabled)
 {
 	WinItem_t* it;
 	int saved, ok = i < WIN_ITEMS;
@@ -201,7 +205,7 @@ int Window_ItemRefresh(Window_t* w, int i, int forcedEnabled)
 		return ok;
 	saved = it->enabled;
 	it->enabled = forcedEnabled;
-	Window_RecompositeAt(w, it->x, it->y, &it->bmp);
+	Window_RecompositeAt(o, w, it->x, it->y, &it->bmp);
 	it->enabled = saved;
 	return ok;
 }
@@ -212,7 +216,7 @@ int Window_ItemRefresh(Window_t* w, int i, int forcedEnabled)
  * compositor rendering into the composite bitmap; n == 0 leaves the
  * window without sub-sprites.  The projection offsets are taken from the
  * back buffer's size: the sprites' world origin is the screen centre. */
-void Window_SubAlloc(Window_t* w, int n)
+void Window_SubAlloc(OpenBGI_t* o, Window_t* w, int n)
 {
 	Bmp_t back;
 	uint32_t i;
@@ -223,7 +227,7 @@ void Window_SubAlloc(Window_t* w, int n)
 		{
 			Compositor_Remove(w->subComp, w->sub[i]);
 			if(w->sub[i])
-				w->sub[i]->vt->destroy(w->sub[i], 1);
+				w->sub[i]->vt->destroy(o, w->sub[i], 1);
 		}
 		BGI_Free(w->sub);
 	}
@@ -248,7 +252,7 @@ void Window_SubAlloc(Window_t* w, int n)
 	w->subComp = (Compositor_t*)BGI_Alloc(sizeof(Compositor_t));
 	Compositor_Ctor(w->subComp, n, &w->subSurface, 0xffffffffu, NULL);
 	Compositor_ClearDirty(w->subComp);
-	Gfx_CopyBackBmp(gDispGfx, &back);
+	Gfx_CopyBackBmp(o->gfx.dispGfx, &back);
 	w->subOffX = -(int32_t)((uint32_t)back.w >> 1);
 	w->subOffY = -(int32_t)((uint32_t)back.h >> 1);
 	w->subDist = (int32_t)((uint32_t)back.w >> 1);
@@ -261,7 +265,7 @@ void Window_SubAlloc(Window_t* w, int n)
  * back when it projects, so (x, y) end up as window coordinates.  (ox, oy)
  * is the pivot, `angle` the rotation, `prio` the sort priority.  0 ok, 9
  * bad index, 2 the sprite rejected the bitmap (the slot is empty then). */
-int Window_SubCreate(Window_t* w, int i, int bmp, int x, int y, int z, int ox, int oy, int32_t angle, int prio)
+int Window_SubCreate(OpenBGI_t* o, Window_t* w, int i, int bmp, int x, int y, int z, int ox, int oy, int32_t angle, int prio)
 {
 	Sprite_t* s;
 	int r;
@@ -272,66 +276,81 @@ int Window_SubCreate(Window_t* w, int i, int bmp, int x, int y, int z, int ox, i
 	{
 		Compositor_Remove(w->subComp, w->sub[i]);
 		if(w->sub[i])
-			w->sub[i]->vt->destroy(w->sub[i], 1);
+			w->sub[i]->vt->destroy(o, w->sub[i], 1);
 	}
 	s = (Sprite_t*)BGI_Calloc(sizeof(Sprite_t));
-	Sprite_Ctor(s, i);
+	Sprite_Ctor(o, s, i);
 	w->sub[i] = &s->obj;
-	r = Sprite_SetProjectedEx(s, (int32_t)((uint32_t)(x + w->subOffX) << 16),
+	r = Sprite_SetProjectedEx(o, s, (int32_t)((uint32_t)(x + w->subOffX) << 16),
 		(int32_t)((uint32_t)(y + w->subOffY) << 16),
 		(int32_t)((uint32_t)z << 16),
 		bmp, -1, 0, -1, ox, oy, angle, w->subDist, 1, 1, 0x20, 0, prio);
 	if(r != 0)
 	{
 		if(w->sub[i])
-			w->sub[i]->vt->destroy(w->sub[i], 1);
+			w->sub[i]->vt->destroy(o, w->sub[i], 1);
 		w->sub[i] = NULL;
 		return 2;
 	}
-	w->sub[i]->vt->setVisible(w->sub[i], 1);
-	Compositor_Add(w->subComp, w->sub[i]);
+	w->sub[i]->vt->setVisible(o, w->sub[i], 1);
+	Compositor_Add(o, w->subComp, w->sub[i]);
 	return 0;
 }
 
 // change the bitmap of sub-sprite `i`; 0 ok, 9 bad index or empty slot, 2 the sprite rejected it
-int Window_SubSetBitmap(Window_t* w, int i, int bmp)
+int Window_SubSetBitmap(OpenBGI_t* o, Window_t* w, int i, int bmp)
 {
 	if((uint32_t)i >= (uint32_t)w->subCount || w->sub[i] == NULL)
 		return 9;
-	return Sprite_ChangeBitmap((Sprite_t*)w->sub[i], bmp) != 0 ? 2 : 0;
+	return Sprite_ChangeBitmap(o, (Sprite_t*)w->sub[i], bmp) != 0 ? 2 : 0;
 }
 
 // rotate sub-sprite `i` to `angle`; 0 ok, 9 bad index or empty slot
-int Window_SubSetAngle(Window_t* w, int i, int32_t angle)
+int Window_SubSetAngle(OpenBGI_t* o, Window_t* w, int i, int32_t angle)
 {
 	if((uint32_t)i >= (uint32_t)w->subCount || w->sub[i] == NULL)
 		return 9;
-	Sprite_SetAngle((Sprite_t*)w->sub[i], angle);
+	Sprite_SetAngle(o, (Sprite_t*)w->sub[i], angle);
+	return 0;
+}
+
+// give sub-sprite `i` another sort priority among the window's sub-sprites; 0 ok, 9 bad index or empty slot
+int Window_SubSetPriority(OpenBGI_t* o, Window_t* w, int i, int prio)
+{
+	if((uint32_t)i >= (uint32_t)w->subCount || w->sub[i] == NULL)
+		return 9;
+	DispObj_SetPriority(w->sub[i], (uint32_t)prio);
+	Compositor_Resort(o, w->subComp, w->sub[i]);
 	return 0;
 }
 
 /* recomposite the sub-sprite's rectangle; *outScreen receives
- * it in screen coordinates.  1 ok, 0 for a bad index or empty slot. */
-int Window_SubRefresh(Window_t* w, Rect_t* outScreen, int i)
+ * it in screen coordinates.  1 ok, 0 for a bad index or empty slot (an
+ * empty rectangle then). */
+int Window_SubRefresh(OpenBGI_t* o, Window_t* w, Rect_t* outScreen, int i)
 {
 	int32_t pos[2];
 
 	if((uint32_t)i >= (uint32_t)w->subCount || w->sub[i] == NULL)
+	{
+		outScreen->l = outScreen->t = 0;
+		outScreen->r = outScreen->b = -1;
 		return 0;
-	w->sub[i]->vt->screenRect(w->sub[i], outScreen);
-	Window_Recomposite(w, outScreen);
-	w->obj.vt->getPos(&w->obj, pos);
+	}
+	w->sub[i]->vt->screenRect(o, w->sub[i], outScreen);
+	Window_Recomposite(o, w, outScreen);
+	w->obj.vt->getPos(o, &w->obj, pos);
 	Rect_Offset(outScreen, pos[0], pos[1]);
 	return 1;
 }
 
 // the same with the sprite hidden while recompositing (erase); 1 ok, 0 bad index or empty slot
-int Window_SubErase(Window_t* w, Rect_t* outScreen, int i)
+int Window_SubErase(OpenBGI_t* o, Window_t* w, Rect_t* outScreen, int i)
 {
 	if((uint32_t)i >= (uint32_t)w->subCount || w->sub[i] == NULL)
 		return 0;
-	w->sub[i]->vt->setVisible(w->sub[i], 0);
-	Window_SubRefresh(w, outScreen, i);
-	w->sub[i]->vt->setVisible(w->sub[i], 1);
+	w->sub[i]->vt->setVisible(o, w->sub[i], 0);
+	Window_SubRefresh(o, w, outScreen, i);
+	w->sub[i]->vt->setVisible(o, w->sub[i], 1);
 	return 1;
 }

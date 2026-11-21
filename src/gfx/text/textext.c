@@ -4,18 +4,18 @@
  *
  * textext.c - the OpenBGI extensions of the text engine: their settings
  *             and the helpers the "EF xx" instructions call
- *             (inc/bgi/gfx/text.h, docs/obgi.md)
+ *             (src/include/bgi/gfx/text.h, docs/modding/obgi.md)
  *
- * No original build has any of this.  The settings are globals like the
- * engine's own (text.c) and start out off, so a game that never issues an
- * "EF" instruction is laid out exactly as before:
+ * No original build has any of this.  The settings sit in o->text beside
+ * the engine's own (text.c) and start out off, so a game that never issues
+ * an "EF" instruction is laid out exactly as before:
  *
- *   gTextDirection  right-to-left and mixed-direction text (layout_bidi.c)
- *   gTextWordWrap   line breaks between words for the generations whose
- *                   layout breaks anywhere (layout_h.c)
- *   gTextScroll     message text longer than its window scrolls
- *                   (src/gfx/window/window_doc.c, src/wait/wait_text_scroll.c)
- *   gTextArrows     the pictures of the two scroll arrows
+ *   textDirection  right-to-left and mixed-direction text (layout_bidi.c)
+ *   textWordWrap   line breaks between words for the generations whose
+ *                  layout breaks anywhere (layout_h.c)
+ *   textScroll     message text longer than its window scrolls
+ *                  (src/gfx/window/window_doc.c, src/wait/wait_text_scroll.c)
+ *   textArrows     the pictures of the two scroll arrows
  *
  * The helpers measure text with the same layout the message output uses:
  * Text_Fit tells how much of a string fills a number of lines (a script
@@ -23,37 +23,32 @@
  * wide a string is (to centre it).
  */
 #include "text_internal.h"
+#include "bgi/core.h"
 
-int32_t gTextDirection;
-int32_t gTextWordWrap;
-int32_t gTextScroll;
-int32_t gTextScrollMs = 120;
-TextArrow_t gTextArrows[2] = {{{0}, -1, -1}, {{0}, -1, -1}};
-
-void Text_SetDirection(int mode) // "EF 01"
+void Text_SetDirection(OpenBGI_t* o, int mode) // "EF 01"
 {
-	gTextDirection = (mode == 1 || mode == 2) ? mode : 0;
+	o->text.textDirection = (mode == 1 || mode == 2) ? mode : 0;
 }
 
-void Text_SetWordWrap(int on) // "EF 03"
+void Text_SetWordWrap(OpenBGI_t* o, int on) // "EF 03"
 {
-	gTextWordWrap = on != 0;
+	o->text.textWordWrap = on != 0;
 }
 
-void Text_SetScrolling(int on, int msPerLine) // "EF 08"
+void Text_SetScrolling(OpenBGI_t* o, int on, int msPerLine) // "EF 08"
 {
-	gTextScroll = on != 0;
+	o->text.textScroll = on != 0;
 	if(msPerLine > 0)
-		gTextScrollMs = msPerLine;
+		o->text.textScrollMs = msPerLine;
 }
 
 /* "EF 09" (one arrow of the two): take a private copy of script bitmap
  * `bmp` as the picture of arrow `which` (0 up, 1 down), or go back to the
  * built-in triangle for -1, and remember where the arrow goes.  1 ok, 0
  * when the bitmap does not exist (the position is stored anyway). */
-int Text_SetArrow(int which, int bmp, int x, int y)
+int Text_SetArrow(OpenBGI_t* o, int which, int bmp, int x, int y)
 {
-	TextArrow_t* a = &gTextArrows[which & 1];
+	TextArrow_t* a = &o->text.textArrows[which & 1];
 	Bmp_t src;
 
 	a->x = x;
@@ -62,9 +57,9 @@ int Text_SetArrow(int which, int bmp, int x, int y)
 	memset(&a->bmp, 0, sizeof a->bmp);
 	if(bmp < 0)
 		return 1;
-	if(!BmpMgr_GetInfo(gTextBmpMgr, &src, bmp))
+	if(!BmpMgr_GetInfo(o->text.textBmpMgr, &src, bmp))
 		return 0;
-	Bmp_AllocScreen(&a->bmp, src.w, src.h, 1);
+	Bmp_AllocScreen(o, &a->bmp, src.w, src.h, 1);
 	Bmp_Fill(&a->bmp, NULL, 0);
 	Bmp_Blit(&a->bmp, 0, 0, &src, 0x80, 0);
 	return 1;
@@ -74,18 +69,18 @@ int Text_SetArrow(int which, int bmp, int x, int y)
  * a filled triangle two thirds of the font size wide is painted into
  * *tmp in `colour`, row by row, with the two pixels at the ends of a row
  * half transparent to soften the edge; the caller frees tmp->pixels. */
-const Bmp_t* Text_ArrowBitmap(int which, int size, uint32_t colour, Bmp_t* tmp)
+const Bmp_t* Text_ArrowBitmap(OpenBGI_t* o, int which, int size, uint32_t colour, Bmp_t* tmp)
 {
 	int w, h, row;
 
 	memset(tmp, 0, sizeof *tmp);
-	if(gTextArrows[which & 1].bmp.pixels)
-		return &gTextArrows[which & 1].bmp;
+	if(o->text.textArrows[which & 1].bmp.pixels)
+		return &o->text.textArrows[which & 1].bmp;
 	w = (size * 2 / 3) | 1; // odd, so that the tip is one pixel
 	if(w < 7)
 		w = 7;
 	h = (w + 1) / 2;
-	Bmp_AllocScreen(tmp, w, h, 1);
+	Bmp_AllocScreen(o, tmp, w, h, 1);
 	Bmp_Fill(tmp, NULL, 0);
 	colour &= 0xffffffu;
 	for(row = 0; row < h; row++)
@@ -107,9 +102,9 @@ const Bmp_t* Text_ArrowBitmap(int which, int size, uint32_t colour, Bmp_t* tmp)
 }
 
 // 1 for a character lines may break next to without a space: the full-width (CJK) characters
-static int BreaksAnywhere(uint32_t code, int len)
+static int BreaksAnywhere(OpenBGI_t* o, uint32_t code, int len)
 {
-	if(!gTextUtf8)
+	if(!o->enc.textUtf8)
 		return len > 1 || code >= 0x80; // double-byte characters and the half-width katakana
 	return (code >= 0x2e80 && code <= 0xd7ff) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe30 && code <= 0xfe4f) ||
 		(code >= 0xff00 && code <= 0xffef) || code >= 0x20000;
@@ -119,14 +114,14 @@ static int BreaksAnywhere(uint32_t code, int len)
  * a space, a control byte or a character lines may break next to.  It is
  * copied to `out` (which must hold strlen(p) + 1 bytes); the byte count, 0
  * when `p` does not start a word. */
-int Text_WrapWordRun(char* out, const char* p)
+int Text_WrapWordRun(OpenBGI_t* o, char* out, const char* p)
 {
 	int n = 0;
 	for(;;)
 	{
 		uint32_t code;
-		int len = TextGetChar(&code, p + n);
-		if(code <= 0x20 || BreaksAnywhere(code, len))
+		int len = TextGetChar(o, &code, p + n);
+		if(code <= 0x20 || BreaksAnywhere(o, code, len))
 			break;
 		n += len;
 	}
@@ -141,13 +136,13 @@ int Text_WrapWordRun(char* out, const char* p)
  * `maxBytes` bytes, the cut moves back to the start of the last line that
  * is within the limit, or - a single line being longer than the limit - to
  * the last character that is. */
-int Text_Fit(Window_t* win, char* dst, const char* src, int lines, int maxBytes, int rubyOn, int hang)
+int Text_Fit(OpenBGI_t* o, Window_t* win, char* dst, const char* src, int lines, int maxBytes, int rubyOn, int hang)
 {
 	RichState_t rich;
 	RichChar_t* c;
 	Rect_t area;
 	int32_t cur[2], lineCount, style[5];
-	uint32_t savedColour = gTextLastColour;
+	uint32_t savedColour = o->text.textLastColour;
 	int total = (int)strlen(src), cut = total, adv, font, n;
 
 	dst[0] = 0;
@@ -161,11 +156,11 @@ int Text_Fit(Window_t* win, char* dst, const char* src, int lines, int maxBytes,
 	cur[0] = area.l;
 	cur[1] = area.t;
 	memset(&rich, 0, sizeof rich);
-	Text_MakeStyle(style, 0, 0, 0, 0, 0);
-	if(!Text_LayoutCoreH(&rich, &lineCount, src, rubyOn, &gRubyDict, cur, &area, adv, font, Window_GetProportional(win),
+	Text_MakeStyle(o, style, 0, 0, 0, 0, 0);
+	if(!Text_LayoutCoreH(o, &rich, &lineCount, src, rubyOn, &o->text.rubyDict, cur, &area, adv, font, Window_GetProportional(win),
 		   hang, 0xffffff, style))
 		return 0;
-	gTextLastColour = savedColour; // measuring must not disturb what "92 9B" reports
+	o->text.textLastColour = savedColour; // measuring must not disturb what "92 9B" reports
 	for(c = rich.head; c; c = c->next)
 	{
 		if(c->kind != 2 && adv > 0 && (c->y - area.t) / adv >= lines)
@@ -209,20 +204,20 @@ int Text_Fit(Window_t* win, char* dst, const char* src, int lines, int maxBytes,
 /* "EF 0B": the width of `str` set on one line in font `font`: from the
  * left edge of its first glyph to the right edge of its last, in whatever
  * order the layout places them.  0 for an empty string or an unknown font. */
-int Text_LineWidth(const char* str, int font, int proportional)
+int Text_LineWidth(OpenBGI_t* o, const char* str, int font, int proportional)
 {
 	RichState_t rich;
 	RichChar_t* c;
 	Rect_t area = {0, 0, 0xfffff, 0xfffff};
 	int32_t cur[2] = {0, 0}, lineCount, style[5];
-	uint32_t savedColour = gTextLastColour;
+	uint32_t savedColour = o->text.textLastColour;
 	int left = 0x7fffffff, right = -0x7fffffff;
 
 	memset(&rich, 0, sizeof rich);
-	Text_MakeStyle(style, 0, 0, 0, 0, 0);
-	if(!Text_LayoutCoreH(&rich, &lineCount, str, 0, &gRubyDict, cur, &area, 1, font, proportional, 0, 0xffffff, style))
+	Text_MakeStyle(o, style, 0, 0, 0, 0, 0);
+	if(!Text_LayoutCoreH(o, &rich, &lineCount, str, 0, &o->text.rubyDict, cur, &area, 1, font, proportional, 0, 0xffffff, style))
 		return 0;
-	gTextLastColour = savedColour;
+	o->text.textLastColour = savedColour;
 	for(c = rich.head; c; c = c->next)
 	{
 		if(c->x < left)

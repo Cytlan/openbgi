@@ -44,19 +44,18 @@ typedef struct DscNode
  * ascending and lay the canonical tree out level by level.  Two 0x200-entry
  * work buffers alternate per level; the node count for the next level is
  * twice the number of internal nodes that were left over on the current
- * level.  Takes the engine lock while the global hash generator is in use.
+ * level.  The lengths are unscrambled with the engine's hash generator.
  */
-static void DscBuildTree(DscNode_t* nodes, const uint8_t* src)
+static void DscBuildTree(OpenBGI_t* o, DscNode_t* nodes, const uint8_t* src)
 {
 	uint32_t list[513];
 	uint32_t level[2][0x200];
 	uint32_t count = 0, i, j;
 
-	EngineLock_Enter(); // the hash state is a global
-	BGI_HashSeed(((const DscHeader_t*)src)->key);
+	BGI_HashSeed(o, ((const DscHeader_t*)src)->key);
 	for(i = 0; i < 512; i++)
 	{
-		uint8_t len = (uint8_t)(src[0x20 + i] - (uint8_t)BGI_HashNext());
+		uint8_t len = (uint8_t)(src[0x20 + i] - (uint8_t)BGI_HashNext(o));
 		if(len != 0)
 			list[count++] = ((uint32_t)len << 16) | i;
 	}
@@ -116,7 +115,6 @@ static void DscBuildTree(DscNode_t* nodes, const uint8_t* src)
 			cur ^= 1;
 		}
 	}
-	EngineLock_Leave();
 }
 
 /*
@@ -187,11 +185,11 @@ static uint32_t DscDecodeStream(uint8_t* dst, const uint8_t* src, const DscNode_
 /* decompress the DSC file at src into dst (BGI_DscOutSize(src) bytes);
  * returns the number of bytes written, which is outSize for a well-formed
  * stream */
-uint32_t BGI_DscDecode(const void* src, void* dst)
+uint32_t BGI_DscDecode(OpenBGI_t* o, const void* src, void* dst)
 {
 	DscNode_t* nodes = (DscNode_t*)BGI_Calloc(sizeof(DscNode_t) * DSC_MAX_NODES);
 	uint32_t n;
-	DscBuildTree(nodes, (const uint8_t*)src);
+	DscBuildTree(o, nodes, (const uint8_t*)src);
 	n = DscDecodeStream((uint8_t*)dst, (const uint8_t*)src, nodes);
 	BGI_Free(nodes);
 	return n;

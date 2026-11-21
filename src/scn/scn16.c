@@ -5,7 +5,7 @@
  * scn16.c - the scenes of the 1.64 games (NurseryRhyme, nrarc02.arc): a
  *           flat stream of 16-bit opcodes with inline operands, their
  *           decoder, decompiler and compiler (interface in scn_internal.h;
- *           the source language in docs/scenario.md)
+ *           the source language in docs/modding/scenario.md)
  *
  * The scene interpreter of these games (scrmain._bp) fetches a 16-bit
  * opcode and calls the handler the dispatch table holds for it; the
@@ -13,9 +13,8 @@
  * terminated strings - through two helpers of scrdrv._bp, so every
  * opcode's operand list is fixed by its handler (kOps below, read from
  * the decompiled handlers of scrmsg, scrgrp, scrgrp2, scrsnd, scrsys,
- * scrctrl, scrslct and anmscr: internal/re_tools/scn16sig.py lists the
- * reads of every registered handler, the meaning of each dword was read
- * from the handler by hand).  There is no stack and no expression: a
+ * scrctrl, scrslct and anmscr: the reads of every registered handler give
+ * the operands, the meaning of each dword was read from the handler).  There is no stack and no expression: a
  * jump carries its target as a file offset, a message carries the file
  * offset of its text, and the texts lie after the code in order of
  * reference, from the next multiple of 16 (zero padding between; a file
@@ -32,6 +31,8 @@
  */
 #include "scn_internal.h"
 #include "bgi/asm.h"
+#include "bgi/bytes.h"
+#include "bgi/core.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -239,11 +240,6 @@ void Scn16_WriteOps(FILE* out)
 
 // ---- the decoder ------------------------------------------------------------------------------------
 
-static uint32_t Rd32(const uint8_t* p)
-{
-	return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
 static int Fail(char* err, size_t errSize, const char* fmt, ...)
 {
 	va_list ap;
@@ -279,7 +275,7 @@ static int DecodeOne(const uint8_t* data, uint32_t size, uint32_t off, Scn16Insn
 		{ // a count, then that many (at least one)
 			if(p + 4 > size)
 				return Fail(err, errSize, "the operands of 0x%x at 0x%x run past the end of the file", out->op, off);
-			n = Rd32(data + p);
+			n = Le32(data + p);
 			if(out->argc >= SCN16_MAX_ARGS)
 				return Fail(err, errSize, "too many operands at 0x%x", off);
 			out->args[out->argc].kind = 'n';
@@ -318,7 +314,7 @@ static int DecodeOne(const uint8_t* data, uint32_t size, uint32_t off, Scn16Insn
 			{
 				if(p + 4 > size)
 					return Fail(err, errSize, "the operands of 0x%x at 0x%x run past the end of the file", out->op, off);
-				a->num = Rd32(data + p);
+				a->num = Le32(data + p);
 				p += 4;
 			}
 			out->argc++;
@@ -450,15 +446,15 @@ static void PutVar(FILE* b, uint32_t v)
 		PutNumber(b, v);
 }
 
-static void PutArg(FILE* b, const Scn16Scene_t* s, const Scn16Arg_t* a)
+static void PutArg(OpenBGI_t* o, FILE* b, const Scn16Scene_t* s, const Scn16Arg_t* a)
 {
 	switch(a->kind)
 	{
 		case 's':
-			Asm_WriteStringLiteral(b, (const uint8_t*)a->str, (uint32_t)strlen(a->str));
+			Asm_WriteStringLiteral(o, b, (const uint8_t*)a->str, (uint32_t)strlen(a->str));
 			break;
 		case 't':
-			Asm_WriteStringLiteral(b, s->data + a->num, (uint32_t)strlen((const char*)s->data + a->num));
+			Asm_WriteStringLiteral(o, b, s->data + a->num, (uint32_t)strlen((const char*)s->data + a->num));
 			break;
 		case 'l':
 			if(IsLabel(s, a->num))
@@ -476,7 +472,7 @@ static void PutArg(FILE* b, const Scn16Scene_t* s, const Scn16Arg_t* a)
 }
 
 // the arguments of a command, the counts of the D / S / L forms left out
-static void PutArgs(FILE* b, const Scn16Scene_t* s, const Scn16Insn_t* in)
+static void PutArgs(OpenBGI_t* o, FILE* b, const Scn16Scene_t* s, const Scn16Insn_t* in)
 {
 	int k, first = 1;
 	for(k = 0; k < in->argc; k++)
@@ -486,44 +482,44 @@ static void PutArgs(FILE* b, const Scn16Scene_t* s, const Scn16Insn_t* in)
 		if(!first)
 			fprintf(b, ", ");
 		first = 0;
-		PutArg(b, s, &in->args[k]);
+		PutArg(o, b, s, &in->args[k]);
 	}
 }
 
-static void PutStatement(FILE* b, const Scn16Scene_t* s, const Scn16Insn_t* in)
+static void PutStatement(OpenBGI_t* o, FILE* b, const Scn16Scene_t* s, const Scn16Insn_t* in)
 {
 	const Scn16Arg_t* a = in->args;
 	if(in->op >= OP_SET && in->op <= OP_MOD)
 	{
-		PutArg(b, s, &a[0]);
+		PutArg(o, b, s, &a[0]);
 		fprintf(b, " %s ", kAssignOps[in->op - OP_SET]);
-		PutArg(b, s, &a[1]);
+		PutArg(o, b, s, &a[1]);
 	}
 	else if(in->op == OP_JUMP)
 	{
 		fprintf(b, "goto ");
-		PutArg(b, s, &a[0]);
+		PutArg(o, b, s, &a[0]);
 	}
 	else if(in->op == OP_JUMP_FLAG || in->op == OP_JUMP_NOT)
 	{
 		fprintf(b, in->op == OP_JUMP_FLAG ? "if (flag(" : "if (!flag(");
-		PutArg(b, s, &a[0]);
+		PutArg(o, b, s, &a[0]);
 		fprintf(b, ")) goto ");
-		PutArg(b, s, &a[1]);
+		PutArg(o, b, s, &a[1]);
 	}
 	else if(in->op >= OP_JUMP_EQ && in->op <= OP_JUMP_LT)
 	{
 		fprintf(b, "if (");
-		PutArg(b, s, &a[0]);
+		PutArg(o, b, s, &a[0]);
 		fprintf(b, " %s ", kCompareOps[in->op - OP_JUMP_EQ]);
-		PutArg(b, s, &a[1]);
+		PutArg(o, b, s, &a[1]);
 		fprintf(b, ") goto ");
-		PutArg(b, s, &a[2]);
+		PutArg(o, b, s, &a[2]);
 	}
 	else if(in->op == OP_GOSUB || in->op == OP_JUMP_SCN || in->op == OP_CALL_SCN)
 	{
 		fprintf(b, in->op == OP_JUMP_SCN ? "jump " : "call ");
-		PutArg(b, s, &a[0]);
+		PutArg(o, b, s, &a[0]);
 	}
 	else if(in->op == OP_RETURN)
 		fprintf(b, "return");
@@ -532,7 +528,7 @@ static void PutStatement(FILE* b, const Scn16Scene_t* s, const Scn16Insn_t* in)
 	else
 	{
 		fprintf(b, "%s(", in->def->name);
-		PutArgs(b, s, in);
+		PutArgs(o, b, s, in);
 		fprintf(b, ")");
 	}
 	fprintf(b, ";\n");
@@ -551,25 +547,25 @@ static uint8_t* FindLabels(const Scn16Scene_t* s)
 	return marks;
 }
 
-static void WriteSource(FILE* b, const Scn16Scene_t* s, const char* name)
+static void WriteSource(OpenBGI_t* o, FILE* b, const Scn16Scene_t* s, const char* name)
 {
 	uint8_t* marks = FindLabels(s);
 	uint32_t i;
-	fprintf(b, "// %s - decompiled by bgiscn (docs/scenario.md)\n#style inline\n%s\n", name ? name : "scene",
-		gAsmUtf8 ? "#encoding utf-8\n" : "");
+	fprintf(b, "// %s - decompiled by bgiscn (docs/modding/scenario.md)\n#style inline\n%s\n", name ? name : "scene",
+		o->tools.asmUtf8 ? "#encoding utf-8\n" : "");
 	for(i = 0; i < s->count; i++)
 	{
 		const Scn16Insn_t* in = &s->insns[i];
 		if(marks[in->off])
 			fprintf(b, "L_%04x:\n", in->off);
-		PutStatement(b, s, in);
+		PutStatement(o, b, s, in);
 	}
 	if(marks[s->codeEnd])
 		fprintf(b, "L_%04x:\n", s->codeEnd);
 	free(marks);
 }
 
-static void WriteListing(FILE* out, const Scn16Scene_t* s, const char* name)
+static void WriteListing(OpenBGI_t* o, FILE* out, const Scn16Scene_t* s, const char* name)
 {
 	uint32_t i;
 	fprintf(out, "; %s - 16-bit scene, %u instructions, code 0x%x bytes, texts from 0x%x\n", name ? name : "scene", s->count,
@@ -586,7 +582,7 @@ static void WriteListing(FILE* out, const Scn16Scene_t* s, const char* name)
 			if(a->kind == 'n')
 				fprintf(out, "%u:", a->num);
 			else if(a->kind == 's' || a->kind == 't')
-				PutArg(out, s, a);
+				PutArg(o, out, s, a);
 			else
 				fprintf(out, "0x%x", a->num);
 		}
@@ -594,7 +590,7 @@ static void WriteListing(FILE* out, const Scn16Scene_t* s, const char* name)
 	}
 }
 
-int Scn16_Decompile(const uint8_t* data, uint32_t size, const ScnDecOptions_t* opt, FILE* out)
+int Scn16_Decompile(OpenBGI_t* o, const uint8_t* data, uint32_t size, const ScnDecOptions_t* opt, FILE* out)
 {
 	Scn16Scene_t s;
 	char err[128];
@@ -609,19 +605,19 @@ int Scn16_Decompile(const uint8_t* data, uint32_t size, const ScnDecOptions_t* o
 	}
 	if(opt->rawTokens)
 	{
-		WriteListing(out, &s, opt->name);
+		WriteListing(o, out, &s, opt->name);
 		Scn16_FreeScene(&s);
 		return 0;
 	}
 	mem = opt->noVerify ? NULL : tmpfile();
 	if(!mem)
 	{
-		WriteSource(out, &s, opt->name);
+		WriteSource(o, out, &s, opt->name);
 		Scn16_FreeScene(&s);
 		return 0;
 	}
 	// write to a temporary stream, compile that back and compare, then copy it out
-	WriteSource(mem, &s, opt->name);
+	WriteSource(o, mem, &s, opt->name);
 	len = ftell(mem);
 	fseek(mem, 0, SEEK_SET);
 	text = (char*)malloc((size_t)len + 1);
@@ -633,7 +629,7 @@ int Scn16_Decompile(const uint8_t* data, uint32_t size, const ScnDecOptions_t* o
 		uint8_t* back;
 		uint32_t backSize;
 		FILE* log = opt->verbose ? stderr : tmpfile();
-		int errors = Scn16_Compile(text, (size_t)len, opt->name ? opt->name : "scene", NULL, log ? log : stderr, &back, &backSize);
+		int errors = Scn16_Compile(o, text, (size_t)len, opt->name ? opt->name : "scene", NULL, log ? log : stderr, &back, &backSize);
 		if(log && log != stderr)
 			fclose(log);
 		if(errors || backSize != size || memcmp(back, data, size) != 0)
@@ -775,7 +771,7 @@ static void SkipSpace(Comp_t* c)
 static const char* const kPuncts[] = {"+=", "-=", "*=", "/=", "%=", "==", "!=", "<=", ">=", "(", ")", ",", ";", ":", "=",
 	"<", ">", "!", "-", NULL};
 
-static void ReadToken(Comp_t* c, Token_t* t)
+static void ReadToken(OpenBGI_t* o, Comp_t* c, Token_t* t)
 {
 	SkipSpace(c);
 	memset(t, 0, sizeof *t);
@@ -795,7 +791,7 @@ static void ReadToken(Comp_t* c, Token_t* t)
 		if(strcmp(t->text, "encoding") == 0)
 		{ // "#encoding utf-8": takes effect here, before the next literal is read
 			int ok;
-			c->p = Asm_EncodingDirective(c->p, c->end, &ok);
+			c->p = Asm_EncodingDirective(o, c->p, c->end, &ok);
 			if(!ok)
 				Errorf(c, c->line, "#encoding utf-8 or #encoding sjis");
 		}
@@ -805,7 +801,7 @@ static void ReadToken(Comp_t* c, Token_t* t)
 	{
 		const char* next;
 		const char* q;
-		const char* e = Asm_ReadStringLiteral(c->p, c->end, &t->bytes, &t->len, &next);
+		const char* e = Asm_ReadStringLiteral(o, c->p, c->end, &t->bytes, &t->len, &next);
 		if(e)
 		{
 			Errorf(c, c->line, "%s", e);
@@ -856,10 +852,10 @@ static void ReadToken(Comp_t* c, Token_t* t)
 	}
 	Errorf(c, c->line, "unexpected character '%c'", *c->p);
 	c->p++;
-	ReadToken(c, t);
+	ReadToken(o, c, t);
 }
 
-static void Next(Comp_t* c)
+static void Next(OpenBGI_t* o, Comp_t* c)
 {
 	free(c->tok.bytes);
 	if(c->peeked)
@@ -868,14 +864,14 @@ static void Next(Comp_t* c)
 		c->peeked = 0;
 	}
 	else
-		ReadToken(c, &c->tok);
+		ReadToken(o, c, &c->tok);
 }
 
-static const Token_t* Peek(Comp_t* c)
+static const Token_t* Peek(OpenBGI_t* o, Comp_t* c)
 {
 	if(!c->peeked)
 	{
-		ReadToken(c, &c->peek);
+		ReadToken(o, c, &c->peek);
 		c->peeked = 1;
 	}
 	return &c->peek;
@@ -891,14 +887,14 @@ static int IsIdent(const Comp_t* c, const char* p)
 	return c->tok.kind == T_IDENT && strcmp(c->tok.text, p) == 0;
 }
 
-static int Expect(Comp_t* c, const char* p)
+static int Expect(OpenBGI_t* o, Comp_t* c, const char* p)
 {
 	if(!IsPunct(c, p))
 	{
 		Errorf(c, c->tok.line, "'%s' expected", p);
 		return 0;
 	}
-	Next(c);
+	Next(o, c);
 	return 1;
 }
 
@@ -987,13 +983,13 @@ static void DefineLabel(Comp_t* c, const char* name, int line)
 }
 
 // a number, possibly negative (the dword is its two's complement)
-static int ParseNumber(Comp_t* c, uint32_t* v)
+static int ParseNumber(OpenBGI_t* o, Comp_t* c, uint32_t* v)
 {
 	int neg = 0;
 	if(IsPunct(c, "-"))
 	{
 		neg = 1;
-		Next(c);
+		Next(o, c);
 	}
 	if(c->tok.kind != T_NUM)
 	{
@@ -1003,20 +999,20 @@ static int ParseNumber(Comp_t* c, uint32_t* v)
 	*v = (uint32_t)c->tok.num;
 	if(neg)
 		*v = (uint32_t)(0u - *v);
-	Next(c);
+	Next(o, c);
 	return 1;
 }
 
 // `lwork(n)`, `gwork(n)` or a number (which the engine reads as a literal, or as nothing for a destination)
-static int ParseVar(Comp_t* c, uint32_t* v)
+static int ParseVar(OpenBGI_t* o, Comp_t* c, uint32_t* v)
 {
 	if(IsIdent(c, "lwork") || IsIdent(c, "gwork"))
 	{
 		uint32_t hi = IsIdent(c, "lwork") ? 1 : 2, n;
-		Next(c);
-		if(!Expect(c, "("))
+		Next(o, c);
+		if(!Expect(o, c, "("))
 			return 0;
-		if(!ParseNumber(c, &n))
+		if(!ParseNumber(o, c, &n))
 			return 0;
 		if(n > 0xffff)
 		{
@@ -1024,13 +1020,13 @@ static int ParseVar(Comp_t* c, uint32_t* v)
 			return 0;
 		}
 		*v = hi << 16 | n;
-		return Expect(c, ")");
+		return Expect(o, c, ")");
 	}
-	return ParseNumber(c, v);
+	return ParseNumber(o, c, v);
 }
 
 // one operand of the kind `k`
-static int ParseArg(Comp_t* c, char k)
+static int ParseArg(OpenBGI_t* o, Comp_t* c, char k)
 {
 	uint32_t v;
 	switch(k)
@@ -1046,27 +1042,27 @@ static int ParseArg(Comp_t* c, char k)
 				EmitString(c, c->tok.bytes, c->tok.len);
 			else
 				AddText(c, c->tok.bytes, c->tok.len);
-			Next(c);
+			Next(o, c);
 			return 1;
 		case 'l':
 			if(c->tok.kind == T_IDENT)
 			{
 				AddFixup(c, c->tok.text, c->tok.line);
-				Next(c);
+				Next(o, c);
 				return 1;
 			}
-			if(!ParseNumber(c, &v))
+			if(!ParseNumber(o, c, &v))
 				return 0;
 			Emit32(c, v);
 			return 1;
 		case 'v':
 		case 'x':
-			if(!ParseVar(c, &v))
+			if(!ParseVar(o, c, &v))
 				return 0;
 			Emit32(c, v);
 			return 1;
 		default:
-			if(!ParseNumber(c, &v))
+			if(!ParseNumber(o, c, &v))
 				return 0;
 			Emit32(c, v);
 			return 1;
@@ -1074,11 +1070,11 @@ static int ParseArg(Comp_t* c, char k)
 }
 
 // `name(args);` for any opcode, the arguments by its signature
-static int ParseCommand(Comp_t* c, const Scn16Op_t* op)
+static int ParseCommand(OpenBGI_t* o, Comp_t* c, const Scn16Op_t* op)
 {
 	const char* sig = op->sig;
-	Next(c);
-	if(!Expect(c, "("))
+	Next(o, c);
+	if(!Expect(o, c, "("))
 		return 0;
 	for(; *sig; sig++)
 	{
@@ -1095,9 +1091,9 @@ static int ParseCommand(Comp_t* c, const Scn16Op_t* op)
 				k = 'l';
 			while(!IsPunct(c, ")"))
 			{
-				if(n && !Expect(c, ","))
+				if(n && !Expect(o, c, ","))
 					return 0;
-				if(!ParseArg(c, k))
+				if(!ParseArg(o, c, k))
 					return 0;
 				n++;
 			}
@@ -1112,47 +1108,47 @@ static int ParseCommand(Comp_t* c, const Scn16Op_t* op)
 			c->code[countAt + 3] = (uint8_t)(n >> 24);
 			break;
 		}
-		if(sig != op->sig && !Expect(c, ","))
+		if(sig != op->sig && !Expect(o, c, ","))
 			return 0;
-		if(!ParseArg(c, k))
+		if(!ParseArg(o, c, k))
 			return 0;
 	}
-	return Expect(c, ")") && Expect(c, ";");
+	return Expect(o, c, ")") && Expect(o, c, ";");
 }
 
-static int ParseStatement(Comp_t* c)
+static int ParseStatement(OpenBGI_t* o, Comp_t* c)
 {
 	const Scn16Op_t* op;
 	int line = c->tok.line;
-	if(c->tok.kind == T_IDENT && Peek(c)->kind == T_PUNCT && strcmp(Peek(c)->text, ":") == 0)
+	if(c->tok.kind == T_IDENT && Peek(o, c)->kind == T_PUNCT && strcmp(Peek(o, c)->text, ":") == 0)
 	{
 		DefineLabel(c, c->tok.text, line);
-		Next(c);
-		Next(c);
+		Next(o, c);
+		Next(o, c);
 		return 1;
 	}
 	if(IsIdent(c, "goto"))
 	{
-		Next(c);
+		Next(o, c);
 		Emit16(c, OP_JUMP);
-		return ParseArg(c, 'l') && Expect(c, ";");
+		return ParseArg(o, c, 'l') && Expect(o, c, ";");
 	}
 	if(IsIdent(c, "if"))
 	{
 		int neg = 0, k;
 		uint32_t v;
-		Next(c);
-		if(!Expect(c, "("))
+		Next(o, c);
+		if(!Expect(o, c, "("))
 			return 0;
 		if(IsPunct(c, "!"))
 		{
 			neg = 1;
-			Next(c);
+			Next(o, c);
 		}
 		if(IsIdent(c, "flag"))
 		{
-			Next(c);
-			if(!Expect(c, "(") || !ParseNumber(c, &v) || !Expect(c, ")"))
+			Next(o, c);
+			if(!Expect(o, c, "(") || !ParseNumber(o, c, &v) || !Expect(o, c, ")"))
 				return 0;
 			Emit16(c, neg ? OP_JUMP_NOT : OP_JUMP_FLAG);
 			Emit32(c, v);
@@ -1164,7 +1160,7 @@ static int ParseStatement(Comp_t* c)
 				Errorf(c, line, "'!' applies to flag() only");
 				return 0;
 			}
-			if(!ParseVar(c, &v))
+			if(!ParseVar(o, c, &v))
 				return 0;
 			for(k = 0; k < 6; k++)
 				if(IsPunct(c, kCompareOps[k]))
@@ -1174,50 +1170,50 @@ static int ParseStatement(Comp_t* c)
 				Errorf(c, c->tok.line, "a comparison expected");
 				return 0;
 			}
-			Next(c);
+			Next(o, c);
 			Emit16(c, OP_JUMP_EQ + (uint32_t)k);
 			Emit32(c, v);
-			if(!ParseArg(c, 'x'))
+			if(!ParseArg(o, c, 'x'))
 				return 0;
 		}
-		if(!Expect(c, ")"))
+		if(!Expect(o, c, ")"))
 			return 0;
 		if(!IsIdent(c, "goto"))
 		{
 			Errorf(c, c->tok.line, "'goto' expected");
 			return 0;
 		}
-		Next(c);
-		return ParseArg(c, 'l') && Expect(c, ";");
+		Next(o, c);
+		return ParseArg(o, c, 'l') && Expect(o, c, ";");
 	}
 	if(IsIdent(c, "call"))
 	{
-		Next(c);
+		Next(o, c);
 		if(c->tok.kind == T_STR)
 		{
 			Emit16(c, OP_CALL_SCN);
-			return ParseArg(c, 's') && Expect(c, ";");
+			return ParseArg(o, c, 's') && Expect(o, c, ";");
 		}
 		Emit16(c, OP_GOSUB);
-		return ParseArg(c, 'l') && Expect(c, ";");
+		return ParseArg(o, c, 'l') && Expect(o, c, ";");
 	}
 	if(IsIdent(c, "jump"))
 	{
-		Next(c);
+		Next(o, c);
 		Emit16(c, OP_JUMP_SCN);
-		return ParseArg(c, 's') && Expect(c, ";");
+		return ParseArg(o, c, 's') && Expect(o, c, ";");
 	}
 	if(IsIdent(c, "return") || IsIdent(c, "end"))
 	{
 		Emit16(c, IsIdent(c, "end") ? OP_END : OP_RETURN);
-		Next(c);
-		return Expect(c, ";");
+		Next(o, c);
+		return Expect(o, c, ";");
 	}
-	if((IsIdent(c, "lwork") || IsIdent(c, "gwork")) && Peek(c)->kind == T_PUNCT && strcmp(Peek(c)->text, "(") == 0)
+	if((IsIdent(c, "lwork") || IsIdent(c, "gwork")) && Peek(o, c)->kind == T_PUNCT && strcmp(Peek(o, c)->text, "(") == 0)
 	{ // an assignment
 		uint32_t v;
 		int k;
-		if(!ParseVar(c, &v))
+		if(!ParseVar(o, c, &v))
 			return 0;
 		for(k = 0; k < 6; k++)
 			if(IsPunct(c, kAssignOps[k]))
@@ -1227,10 +1223,10 @@ static int ParseStatement(Comp_t* c)
 			Errorf(c, c->tok.line, "an assignment expected");
 			return 0;
 		}
-		Next(c);
+		Next(o, c);
 		Emit16(c, OP_SET + (uint32_t)k);
 		Emit32(c, v);
-		return ParseArg(c, 'x') && Expect(c, ";");
+		return ParseArg(o, c, 'x') && Expect(o, c, ";");
 	}
 	if(c->tok.kind != T_IDENT)
 	{
@@ -1253,7 +1249,7 @@ static int ParseStatement(Comp_t* c)
 		return 0;
 	}
 	Emit16(c, op->op);
-	return ParseCommand(c, op);
+	return ParseCommand(o, c, op);
 }
 
 int Scn16_IsSource(const char* text, size_t len)
@@ -1291,7 +1287,7 @@ int Scn16_IsSource(const char* text, size_t len)
 	return (size_t)(end - p) >= 6 && memcmp(p, "inline", 6) == 0 && (end - p == 6 || !IsIdentChar((unsigned char)p[6]));
 }
 
-int Scn16_Compile(const char* text, size_t len, const char* fileName, const PrepIncludes_t* inc, FILE* log, uint8_t** outData,
+int Scn16_Compile(OpenBGI_t* o, const char* text, size_t len, const char* fileName, const PrepIncludes_t* inc, FILE* log, uint8_t** outData,
 	uint32_t* outSize)
 {
 	Comp_t c;
@@ -1315,14 +1311,14 @@ int Scn16_Compile(const char* text, size_t len, const char* fileName, const Prep
 	c.line = 1;
 	c.log = log ? log : stderr;
 	c.prep = &pre;
-	Next(&c);
-	if(c.tok.kind != T_DIRECTIVE || strcmp(c.tok.text, "style") != 0 || Peek(&c)->kind != T_IDENT ||
-		strcmp(Peek(&c)->text, "inline") != 0)
+	Next(o, &c);
+	if(c.tok.kind != T_DIRECTIVE || strcmp(c.tok.text, "style") != 0 || Peek(o, &c)->kind != T_IDENT ||
+		strcmp(Peek(o, &c)->text, "inline") != 0)
 		Errorf(&c, c.tok.line, "'#style inline' expected first");
 	else
 	{
-		Next(&c);
-		Next(&c);
+		Next(o, &c);
+		Next(o, &c);
 	}
 	while(c.tok.kind != T_EOF && c.errors <= 50)
 	{
@@ -1330,15 +1326,15 @@ int Scn16_Compile(const char* text, size_t len, const char* fileName, const Prep
 		{
 			if(strcmp(c.tok.text, "encoding") != 0) // (the lexer has switched the encoding of the literals)
 				Errorf(&c, c.tok.line, "#%s: a 16-bit scene knows '#style inline', '#encoding', '#include', '#define' and '#undef'", c.tok.text);
-			Next(&c);
+			Next(o, &c);
 			continue;
 		}
-		if(!ParseStatement(&c))
+		if(!ParseStatement(o, &c))
 		{ // resync at the next ';'
 			while(c.tok.kind != T_EOF && !IsPunct(&c, ";"))
-				Next(&c);
+				Next(o, &c);
 			if(IsPunct(&c, ";"))
-				Next(&c);
+				Next(o, &c);
 		}
 	}
 	free(c.tok.bytes);

@@ -5,18 +5,16 @@
  * memory.c - the Memory view of the debugger (dbg_internal.h)
  *
  * The memory areas as a list on the left - the global memory, the system
- * area and the selected thread's (gDbgThreadId) code, data and local-heap
- * areas - and the selected area as a hex dump with an ASCII column on
- * the right, 16 bytes per row; PgUp / PgDn move by 0x100 bytes, the
- * wheel by 48, Home / End to the ends.  Choosing another area returns to
- * its start.
+ * area and the selected thread's (o->dbg.dbgThreadId) code, data and
+ * local-heap areas - and the selected area as a hex dump with an ASCII
+ * column on the right, 16 bytes per row; PgUp / PgDn move by 0x100
+ * bytes, the wheel by 48, Home / End to the ends.  Choosing another area
+ * returns to its start.
  */
 #include "../dbg_internal.h"
 #include "bgi/vm.h"
 #include "bgi/sys.h"
-
-static DbgList_t gAreaList; // the area list
-static uint32_t gMemTop;    // the first byte shown (clamped to the area when drawing)
+#include "bgi/core.h"
 
 typedef struct MemArea // one dumpable area
 {
@@ -26,17 +24,17 @@ typedef struct MemArea // one dumpable area
 } MemArea_t;
 
 // the areas into out (room for 8): the two global ones always, the thread's three when there is a thread; their count
-static int MemAreas(MemArea_t* out)
+static int MemAreas(OpenBGI_t* o, MemArea_t* out)
 {
-	Thread_t* t = Dbg_SelectedThread();
+	Thread_t* t = Dbg_SelectedThread(o);
 	int n = 0;
 	out[n].name = "global memory";
-	out[n].base = gGlobalMem;
-	out[n].size = gGlobalMem ? gGlobalMemSize : 0;
+	out[n].base = o->mem.globalMem;
+	out[n].size = o->mem.globalMem ? o->mem.globalMemSize : 0;
 	n++;
 	out[n].name = "system area";
-	out[n].base = gSysArea;
-	out[n].size = gSysArea ? gSysAreaSize : 0;
+	out[n].base = o->mem.sysArea;
+	out[n].size = o->mem.sysArea ? o->mem.sysAreaSize : 0;
 	n++;
 	if(t)
 	{
@@ -56,107 +54,107 @@ static int MemAreas(MemArea_t* out)
 	return n;
 }
 
-// the list, then the dump of the selected area from gMemTop on
-static void MemoryDraw(int x, int y, int w, int h)
+// the list, then the dump of the selected area from o->dbg.memTop on
+static void MemoryDraw(OpenBGI_t* o, int x, int y, int w, int h)
 {
 	MemArea_t areas[8];
-	int n = MemAreas(areas), i;
+	int n = MemAreas(o, areas), i;
 	int rx = x + DBG_LEFT_W + DBG_PAD, rw = w - DBG_LEFT_W - 2 * DBG_PAD;
-	gAreaList.count = n;
-	DbgPane_Frame(x + DBG_PAD, y + DBG_PAD, DBG_LEFT_W - DBG_PAD, h - 2 * DBG_PAD, "areas   (PgUp / PgDn and the wheel move the dump)");
-	DbgPane_ListArea(&gAreaList, x + DBG_PAD, y + DBG_PAD, DBG_LEFT_W - DBG_PAD, h - 2 * DBG_PAD);
-	if(gAreaList.sel < 0)
-		gAreaList.sel = 0;
+	o->dbg.areaList.count = n;
+	DbgPane_Frame(o, x + DBG_PAD, y + DBG_PAD, DBG_LEFT_W - DBG_PAD, h - 2 * DBG_PAD, "areas   (PgUp / PgDn and the wheel move the dump)");
+	DbgPane_ListArea(&o->dbg.areaList, x + DBG_PAD, y + DBG_PAD, DBG_LEFT_W - DBG_PAD, h - 2 * DBG_PAD);
+	if(o->dbg.areaList.sel < 0)
+		o->dbg.areaList.sel = 0;
 	for(i = 0; i < n; i++)
 	{
-		if(i == gAreaList.sel)
-			DbgPane_RowBg(&gAreaList, i, DBG_SELECT);
-		DbgDraw_TextF(gAreaList.x + 4, DbgPane_RowY(&gAreaList, i), areas[i].base ? DBG_TEXT : DBG_DIM, "%-20s %8u bytes", areas[i].name,
+		if(i == o->dbg.areaList.sel)
+			DbgPane_RowBg(o, &o->dbg.areaList, i, DBG_SELECT);
+		DbgDraw_TextF(o, o->dbg.areaList.x + 4, DbgPane_RowY(&o->dbg.areaList, i), areas[i].base ? DBG_TEXT : DBG_DIM, "%-20s %8u bytes", areas[i].name,
 			(unsigned)areas[i].size);
 	}
-	if(gAreaList.sel < n && areas[gAreaList.sel].base)
+	if(o->dbg.areaList.sel < n && areas[o->dbg.areaList.sel].base)
 	{
-		const MemArea_t* a = &areas[gAreaList.sel];
+		const MemArea_t* a = &areas[o->dbg.areaList.sel];
 		int rows = (h - 2 * DBG_PAD - DBG_CELL_H - 8) / DBG_CELL_H, r;
 		char title[0x80];
-		if(gMemTop + 16 > a->size)
-			gMemTop = a->size > 16 ? (a->size - 16) & ~15u : 0;
-		snprintf(title, sizeof title, "%s  0x%x of 0x%x", a->name, (unsigned)gMemTop, (unsigned)a->size);
-		DbgPane_Frame(rx, y + DBG_PAD, rw, h - 2 * DBG_PAD, title);
+		if(o->dbg.memTop + 16 > a->size)
+			o->dbg.memTop = a->size > 16 ? (a->size - 16) & ~15u : 0;
+		snprintf(title, sizeof title, "%s  0x%x of 0x%x", a->name, (unsigned)o->dbg.memTop, (unsigned)a->size);
+		DbgPane_Frame(o, rx, y + DBG_PAD, rw, h - 2 * DBG_PAD, title);
 		for(r = 0; r < rows; r++)
 		{
-			uint32_t off = gMemTop + (uint32_t)r * 16;
+			uint32_t off = o->dbg.memTop + (uint32_t)r * 16;
 			char line[0x100], chars[20];
-			size_t o;
+			size_t ofs;
 			int c;
 			if(off >= a->size)
 				break;
-			o = (size_t)snprintf(line, sizeof line, "%06x ", (unsigned)off);
+			ofs = (size_t)snprintf(line, sizeof line, "%06x ", (unsigned)off);
 			for(c = 0; c < 16; c++)
 			{
 				if(off + c < a->size)
 				{
 					uint8_t b = a->base[off + c];
-					o += (size_t)snprintf(line + o, sizeof line - o, "%s%02x", c == 8 ? "  " : " ", b);
+					ofs += (size_t)snprintf(line + ofs, sizeof line - ofs, "%s%02x", c == 8 ? "  " : " ", b);
 					chars[c] = (b >= 0x20 && b < 0x7f) ? (char)b : '.';
 				}
 				else
 				{
-					o += (size_t)snprintf(line + o, sizeof line - o, "%s  ", c == 8 ? "  " : " ");
+					ofs += (size_t)snprintf(line + ofs, sizeof line - ofs, "%s  ", c == 8 ? "  " : " ");
 					chars[c] = ' ';
 				}
 			}
 			chars[16] = 0;
-			snprintf(line + o, sizeof line - o, "  %s", chars);
-			DbgDraw_Text(rx + DBG_PAD, y + DBG_PAD + DBG_CELL_H + 6 + r * DBG_CELL_H, DBG_TEXT, line);
+			snprintf(line + ofs, sizeof line - ofs, "  %s", chars);
+			DbgDraw_Text(o, rx + DBG_PAD, y + DBG_PAD + DBG_CELL_H + 6 + r * DBG_CELL_H, DBG_TEXT, line);
 		}
 	}
 	else
-		DbgPane_Frame(rx, y + DBG_PAD, rw, h - 2 * DBG_PAD, "nothing here");
+		DbgPane_Frame(o, rx, y + DBG_PAD, rw, h - 2 * DBG_PAD, "nothing here");
 }
 
 // Up / Down choose the area (and rewind the dump); PgUp / PgDn, Home, End move the dump (End: the last row, once clamped)
-static int MemoryKey(int vk, int ch)
+static int MemoryKey(OpenBGI_t* o, int vk, int ch)
 {
 	switch(vk)
 	{
 		case 0x26:
-			gAreaList.sel--;
-			gMemTop = 0;
+			o->dbg.areaList.sel--;
+			o->dbg.memTop = 0;
 			break;
 		case 0x28:
-			gAreaList.sel++;
-			gMemTop = 0;
+			o->dbg.areaList.sel++;
+			o->dbg.memTop = 0;
 			break;
-		case 0x21: gMemTop = gMemTop > 0x100 ? gMemTop - 0x100 : 0; break;
-		case 0x22: gMemTop += 0x100; break;
-		case 0x24: gMemTop = 0; break;
-		case 0x23: gMemTop = 0xffffffffu; break;
+		case 0x21: o->dbg.memTop = o->dbg.memTop > 0x100 ? o->dbg.memTop - 0x100 : 0; break;
+		case 0x22: o->dbg.memTop += 0x100; break;
+		case 0x24: o->dbg.memTop = 0; break;
+		case 0x23: o->dbg.memTop = 0xffffffffu; break;
 		default: return 0;
 	}
-	DbgList_Clamp(&gAreaList);
+	DbgList_Clamp(&o->dbg.areaList);
 	return 1;
 }
 
 // a click on a row chooses the area and rewinds the dump
-static int MemoryClick(int x, int y, int button)
+static int MemoryClick(OpenBGI_t* o, int x, int y, int button)
 {
-	int row = DbgList_Hit(&gAreaList, x, y);
+	int row = DbgList_Hit(&o->dbg.areaList, x, y);
 	if(row >= 0)
 	{
-		gAreaList.sel = row;
-		gMemTop = 0;
+		o->dbg.areaList.sel = row;
+		o->dbg.memTop = 0;
 	}
 	return row >= 0;
 }
 
 // the wheel moves the dump by three rows, wherever the mouse is
-static int MemoryWheel(int x, int y, int delta)
+static int MemoryWheel(OpenBGI_t* o, int x, int y, int delta)
 {
 	if(delta > 0)
-		gMemTop = gMemTop > 48 ? gMemTop - 48 : 0;
+		o->dbg.memTop = o->dbg.memTop > 48 ? o->dbg.memTop - 48 : 0;
 	else
-		gMemTop += 48;
+		o->dbg.memTop += 48;
 	return 1;
 }
 

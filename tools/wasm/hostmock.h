@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * hostmock.h - a host-side stand-in for the browser half of the WebAssembly
- *              back end's file transport (src/os/wasm/host.c)
+ *              back end's file transport (src/host/wasm/host.c)
  *
  * Implements the WasmHostJs_* functions host.c would get from client.js and
  * server.js, against a directory on the local disk, with the server's

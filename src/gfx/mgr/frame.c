@@ -4,13 +4,13 @@
  *
  * frame.c - the graphics manager's frame cycle: rendering through the
  *           compositor, the scaled copy of the back buffer, presenting
- *           to the window, snapshots (inc/bgi/gfx/gfxmgr.h)
+ *           to the window, snapshots (src/include/bgi/gfx/gfxmgr.h)
  *
  * A frame is Gfx_Render (the compositor repaints the dirty rectangles of
  * the back buffer and, when the window is scaled, Gfx_UpdateScaled
  * stretches them into the scaled surface) followed by Gfx_Present, which
- * copies the rectangles to the window.  Gfx_RenderAll / Gfx_PresentAll do
- * the same for the whole screen.  The scaled presentation keeps the
+ * copies the rectangles to the window's picture (src/sys/screen.c).
+ * Gfx_RenderAll / Gfx_PresentAll do the same for the whole screen.  The scaled presentation keeps the
  * horizontal size and stretches vertically by the factor of the scale
  * mode, centred on the back buffer's centre; the stretch is cut into band
  * jobs for the worker pool.
@@ -18,116 +18,74 @@
 #include <string.h>
 
 #include "bgi/gfx/gfxmgr.h"
+#include "bgi/display.h"
 #include "bgi/gfx/objects.h"
 #include "bgi/gfx/text.h"
 #include "bgi/gfx.h"
 #include "bgi/engine.h"
 #include "bgi/file.h"
 #include "bgi/sys.h"
+#include "bgi/core.h"
 
 // repaint the whole back buffer (and the scaled surface); 0 without a back buffer
-int Gfx_RenderAll(Gfx_t* g)
+int Gfx_RenderAll(OpenBGI_t* o, Gfx_t* g)
 {
 	if(!g->back.pixels)
 		return 0;
-	Compositor_RenderAll(g->comp);
-	Gfx_UpdateScaled(g, 0, NULL);
+	Compositor_RenderAll(o, g->comp);
+	Gfx_UpdateScaled(o, g, 0, NULL);
 	return 1;
 }
 
 /* paint what is dirty; *count receives the number of repainted rectangles
  * written to `rects`, or -1 when the compositor repainted everything.
  * 0 without a back buffer. */
-int Gfx_Render(Gfx_t* g, int* count, Rect_t* rects)
+int Gfx_Render(OpenBGI_t* o, Gfx_t* g, int* count, Rect_t* rects)
 {
 	if(!g->back.pixels)
 		return 0;
-	*count = Compositor_Render(g->comp, rects);
+	*count = Compositor_Render(o, g->comp, rects);
 	if(*count == -1)
-		Gfx_UpdateScaled(g, 0, NULL);
+		Gfx_UpdateScaled(o, g, 0, NULL);
 	else
-		Gfx_UpdateScaled(g, *count, rects);
+		Gfx_UpdateScaled(o, g, *count, rects);
 	return 1;
 }
 
-// the back buffer as an OS surface for the window blit
-static OsSurface_t BackSurface(Gfx_t* g)
+/* the whole back buffer (the scaled surface when the window is scaled) to
+ * (x, y) of the window's picture.  1 ok, 0 without a back buffer. */
+int Gfx_PresentAll(OpenBGI_t* o, Gfx_t* g, int x, int y)
 {
-	OsSurface_t s;
-	s.pixels = g->back.pixels;
-	s.pitch = g->back.pitch;
-	s.width = g->back.w;
-	s.height = g->back.h;
-	s.bpp = ModeBits(g->back.mode);
-	return s;
-}
-
-// the scaled surface as an OS surface for the window blit
-static OsSurface_t ScaledSurface(Gfx_t* g)
-{
-	OsSurface_t s;
-	s.pixels = g->scaled.pixels;
-	s.pitch = g->scaled.pitch;
-	s.width = g->scaled.w;
-	s.height = g->scaled.h;
-	s.bpp = ModeBits(g->scaled.mode);
-	return s;
-}
-
-/* one BitBlt of the whole surface (the scaled one when the window is
- * scaled) to (x, y) of the window.  1 ok, 0 without a back buffer. */
-int Gfx_PresentAll(Gfx_t* g, OsDc_t* dc, int x, int y)
-{
-	OsSurface_t s;
-
+	const Bmp_t* b = g->scaledMem ? &g->scaled : &g->back;
 	if(!g->backMem)
 		return 0;
-	if(!g->scaledMem)
-	{
-		s = BackSurface(g);
-		OS_BlitToWindow(dc, x, y, g->back.w, g->back.h, &s, 0, 0);
-	}
-	else
-	{
-		s = ScaledSurface(g);
-		OS_BlitToWindow(dc, x, y, g->scaled.w, g->scaled.h, &s, 0, 0);
-	}
+	Screen_Copy(o, x, y, b, 0, 0, b->w, b->h);
 	return 1;
 }
 
-int Gfx_PresentAllAt0(Gfx_t* g, OsDc_t* dc)
+int Gfx_PresentAllAt0(OpenBGI_t* o, Gfx_t* g)
 {
-	return Gfx_PresentAll(g, dc, 0, 0);
+	return Gfx_PresentAll(o, g, 0, 0);
 }
 
-/* BitBlt each of the `count` back-buffer rectangles to the window; from
- * the scaled surface, after mapping the rectangle, when the window is
+/* each of the `count` back-buffer rectangles to the window's picture;
+ * from the scaled surface, after mapping the rectangle, when the window is
  * scaled.  1 ok, 0 without a back buffer. */
-int Gfx_Present(Gfx_t* g, OsDc_t* dc, const Rect_t* rects, int count)
+int Gfx_Present(OpenBGI_t* o, Gfx_t* g, const Rect_t* rects, int count)
 {
-	OsSurface_t s;
 	Rect_t m;
-	uint32_t i;
-
+	int i;
 	if(!g->backMem)
 		return 0;
-	if(!g->scaledMem)
+	for(i = 0; i < count; i++)
 	{
-		s = BackSurface(g);
-		for(i = 0; i < (uint32_t)count; i++)
+		const Rect_t* r = &rects[i];
+		if(g->scaledMem)
 		{
-			const Rect_t* r = &rects[i];
-			OS_BlitToWindow(dc, r->l, r->t, r->r - r->l + 1, r->b - r->t + 1, &s, r->l, r->t);
+			Gfx_MapRectScaled(g, &m, r);
+			r = &m;
 		}
-	}
-	else
-	{
-		s = ScaledSurface(g);
-		for(i = 0; i < (uint32_t)count; i++)
-		{
-			Gfx_MapRectScaled(g, &m, &rects[i]);
-			OS_BlitToWindow(dc, m.l, m.t, m.r - m.l + 1, m.b - m.t + 1, &s, m.l, m.t);
-		}
+		Screen_Copy(o, r->l, r->t, g->scaledMem ? &g->scaled : &g->back, r->l, r->t, r->r - r->l + 1, r->b - r->t + 1);
 	}
 	return 1;
 }
@@ -213,7 +171,7 @@ uint32_t Gfx_SplitCopyJobs(Rect_t* out, const Rect_t* r, uint32_t pixelsPerJob)
 }
 
 // the worker pool callback: one copy job per call
-static int CopyJobThunk(void* arg)
+static int CopyJobThunk(OpenBGI_t* o, void* arg)
 {
 	return Gfx_CopyJob((Gfx_t*)arg);
 }
@@ -223,7 +181,7 @@ static int CopyJobThunk(void* arg)
  * The mapped rectangles are split into band jobs (one band per job when
  * the pool has a single thread) and run through the pool.  Nothing
  * happens when the window is not scaled. */
-void Gfx_UpdateScaled(Gfx_t* g, int count, const Rect_t* rects)
+void Gfx_UpdateScaled(OpenBGI_t* o, Gfx_t* g, int count, const Rect_t* rects)
 {
 	Rect_t whole, *mapped, *p;
 	uint32_t ppj, total = 0, i, n;
@@ -256,7 +214,7 @@ void Gfx_UpdateScaled(Gfx_t* g, int count, const Rect_t* rects)
 		p += Gfx_SplitCopyJobs(p, &mapped[i], ppj);
 
 	WorkerPool_SetCallback(g->pool, CopyJobThunk, g);
-	WorkerPool_Run(g->pool, 1);
+	WorkerPool_Run(o, g->pool, 1);
 	WorkerPool_SetCallback(g->pool, NULL, NULL);
 	BGI_Free(g->copyJobs);
 	BGI_Free(mapped);
@@ -304,16 +262,16 @@ int Gfx_CopyJob(Gfx_t* g)
 /* "90 04": create bitmap bmpNo at screen size and copy the back buffer
  * into it.  Returns the bitmap manager's result: 1 ok, 0 for a bad slot
  * number or a failed allocation. */
-int Gfx_Snapshot(Gfx_t* g, int bmpNo)
+int Gfx_Snapshot(OpenBGI_t* o, Gfx_t* g, int bmpNo)
 {
 	Bmp_t back, info;
 	int r;
 
 	Gfx_CopyBackBmp(g, &back);
-	r = BmpMgr_Create(gGfxBmpMgr, bmpNo, back.w, back.h, back.mode);
+	r = BmpMgr_Create(o->gfx.gfxBmpMgr, bmpNo, back.w, back.h, back.mode);
 	if(r)
 	{
-		BmpMgr_GetInfo(gGfxBmpMgr, &info, bmpNo);
+		BmpMgr_GetInfo(o->gfx.gfxBmpMgr, &info, bmpNo);
 		Bmp_CopyRect(&info, &back);
 	}
 	return r;
@@ -321,25 +279,25 @@ int Gfx_Snapshot(Gfx_t* g, int bmpNo)
 
 /* "90 05": as above, but the picture is re-composed from the objects up
  * to priority `prio` instead of copied. */
-int Gfx_SnapshotPrio(Gfx_t* g, int bmpNo, int prio)
+int Gfx_SnapshotPrio(OpenBGI_t* o, Gfx_t* g, int bmpNo, int prio)
 {
 	Bmp_t back, info;
 	int r;
 
 	Gfx_CopyBackBmp(g, &back);
-	r = BmpMgr_Create(gGfxBmpMgr, bmpNo, back.w, back.h, back.mode);
+	r = BmpMgr_Create(o->gfx.gfxBmpMgr, bmpNo, back.w, back.h, back.mode);
 	if(r)
 	{
-		BmpMgr_GetInfo(gGfxBmpMgr, &info, bmpNo);
-		Compositor_Snapshot(g->comp, &info, prio);
+		BmpMgr_GetInfo(o->gfx.gfxBmpMgr, &info, bmpNo);
+		Compositor_Snapshot(o, g->comp, &info, prio);
 	}
 	return r;
 }
 
 // "90 08": the global effect value (stored only; nothing reads it); the whole screen is repainted
-void Gfx_SetGlobalEffect(Gfx_t* g, int v)
+void Gfx_SetGlobalEffect(OpenBGI_t* o, Gfx_t* g, int v)
 {
-	Gfx_SetGlobalEffectValue(v);
+	Gfx_SetGlobalEffectValue(o, v);
 	Compositor_InvalidateAll(g->comp);
 }
 
@@ -376,7 +334,7 @@ void Gfx_AddDirty(Gfx_t* g, uint32_t key, const Rect_t* r)
 }
 
 // re-sort an object whose sort key (priority, depth) may have changed; 1 if the compositor knows it
-int Gfx_Resort(Gfx_t* g, DispObj_t* o)
+int Gfx_Resort(OpenBGI_t* o, Gfx_t* g, DispObj_t* obj)
 {
-	return Compositor_Resort(g->comp, o);
+	return Compositor_Resort(o, g->comp, obj);
 }

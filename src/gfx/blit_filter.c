@@ -2,7 +2,7 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * blit_filter.c - the filter blitters (inc/bgi/gfx/bitmap.h): the colour
+ * blit_filter.c - the filter blitters (src/include/bgi/gfx/bitmap.h): the colour
  *                 filters of the Filter display object and of "91 1D", the
  *                 gray conversions, the blit through a gray map and the
  *                 channel extraction of effect 0xFF
@@ -162,7 +162,7 @@ void Blit_FilterKind3(Bmp_t* dst, const Bmp_t* src, uint32_t colour, int level)
 	}
 }
 
-/* The two remaining colour modes of "91 1D" (1.494 on): RGB32 or ARGB32
+/* The two remaining colour modes of "91 1D" (1.492 on): RGB32 or ARGB32
  * with the same mode on both sides, the alpha byte carried over
  * unchanged. */
 

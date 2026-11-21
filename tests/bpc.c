@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * tests/bpc.c - unit test of the program decompiler and compiler
- *               (src/bpc/, declared in inc/bgi/bpc.h); built as
- *               bin/test_bpc by `make test`
+ *               (src/bpc/, declared in src/include/bgi/bpc.h); built as
+ *               test_bpc by `make test`
  *
  * The groups of tests, in the order they run:
  *
  *   shapes     - sources compile to the bytes the original compiler's
- *                shapes give (docs/bpc.md): the frame and the parameters,
+ *                shapes give (docs/modding/programs.md): the frame and the parameters,
  *                the argument orders, the two stores, the condition chains
  *                and the statements, the sign test, the wide literal, the
  *                string table and its padding
@@ -36,28 +36,20 @@
  * that labels and encodings need not be worked out by hand.
  */
 #include "bgi/bpc.h"
-#include "bgi/os.h"
+#include "host/os.h"
+#include "bgi/core.h"
 
 #include <stdio.h>
 
-static int gFails; // the number of failed checks so far
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 #define GEN GEN_1_553
 
 // compile a source; NULL (with the messages on stdout) when it does not compile
-static uint8_t* Compile(const char* src, uint32_t* size)
+static uint8_t* Compile(OpenBGI_t* o, const char* src, uint32_t* size)
 {
 	BpcResult_t r;
-	Bpc_Compile(src, strlen(src), "test", GEN, NULL, stdout, &r);
+	Bpc_Compile(o, src, strlen(src), "test", GEN, NULL, stdout, &r);
 	BGI_Free(r.labels);
 	if(r.errors)
 		return NULL;
@@ -66,10 +58,10 @@ static uint8_t* Compile(const char* src, uint32_t* size)
 }
 
 // assemble a listing; NULL when it does not assemble
-static uint8_t* Assemble(const char* listing, uint32_t* size)
+static uint8_t* Assemble(OpenBGI_t* o, const char* listing, uint32_t* size)
 {
 	AsmResult_t r;
-	Asm_Assemble(listing, strlen(listing), GEN, stdout, &r);
+	Asm_Assemble(o, listing, strlen(listing), GEN, stdout, &r);
 	BGI_Free(r.labels);
 	if(r.errors)
 		return NULL;
@@ -78,7 +70,7 @@ static uint8_t* Assemble(const char* listing, uint32_t* size)
 }
 
 // decompile a program into a malloc'ed string
-static char* Decompile(const uint8_t* file, uint32_t size, int* blocks)
+static char* Decompile(OpenBGI_t* o, const uint8_t* file, uint32_t size, int* blocks)
 {
 	BpcDecOptions_t opt;
 	FILE* mem = tmpfile();
@@ -87,7 +79,7 @@ static char* Decompile(const uint8_t* file, uint32_t size, int* blocks)
 	memset(&opt, 0, sizeof opt);
 	opt.gen = GEN;
 	opt.name = "test";
-	*blocks = Bpc_Decompile(file, size, &opt, mem);
+	*blocks = Bpc_Decompile(o, file, size, &opt, mem);
 	n = ftell(mem);
 	fseek(mem, 0, SEEK_SET);
 	text = (char*)malloc((size_t)n + 1);
@@ -119,20 +111,20 @@ static void Same(const char* what, const uint8_t* a, uint32_t an, const uint8_t*
 /* compile `src`, check it against the assembled `listing`, then round
  * trip it through the decompiler; returns the decompiled text (malloc'ed)
  * so that the caller can look for its constructs */
-static char* Shape(const char* what, const char* src, const char* listing)
+static char* Shape(OpenBGI_t* o, const char* what, const char* src, const char* listing)
 {
 	uint32_t cn = 0, an = 0, rn = 0;
-	uint8_t* c = Compile(src, &cn);
-	uint8_t* a = Assemble(listing, &an);
+	uint8_t* c = Compile(o, src, &cn);
+	uint8_t* a = Assemble(o, listing, &an);
 	char* text = NULL;
 	Same(what, c, cn, a, an);
 	if(c)
 	{
 		int blocks = -1;
 		uint8_t* r;
-		text = Decompile(c, cn, &blocks);
+		text = Decompile(o, c, cn, &blocks);
 		CHECK(blocks == 0);
-		r = Compile(text, &rn);
+		r = Compile(o, text, &rn);
 		Same(what, c, cn, r, rn);
 		BGI_Free(r);
 	}
@@ -143,9 +135,9 @@ static char* Shape(const char* what, const char* src, const char* listing)
 
 // ---- shapes ----------------------------------------------------------------------------------------
 
-static void TestFrame(void)
+static void TestFrame(OpenBGI_t* o)
 {
-	char* t = Shape("frame",
+	char* t = Shape(o, "frame",
 		"#engine 1.553\n"
 		"main(p1, p2) { int a; char buf[8]; int b = p1;\n"
 		"    a = p1 + p2;\n"
@@ -172,9 +164,9 @@ static void TestFrame(void)
 	}
 }
 
-static void TestConditions(void)
+static void TestConditions(OpenBGI_t* o)
 {
-	char* t = Shape("conditions",
+	char* t = Shape(o, "conditions",
 		"#engine 1.553\n"
 		"main(p1, p2) {\n"
 		"    if (p1 && p2) { sys.yield(); } else { sys.quit(); }\n"
@@ -229,9 +221,9 @@ static void TestConditions(void)
 	}
 }
 
-static void TestValues(void)
+static void TestValues(OpenBGI_t* o)
 {
-	char* t = Shape("values",
+	char* t = Shape(o, "values",
 		"#engine 1.553\n"
 		"main(p1) { int t[2]; int r;\n"
 		"    *(int*)t = {1, 2};\n"
@@ -287,9 +279,9 @@ static void TestValues(void)
 	}
 }
 
-static void TestJumps(void)
+static void TestJumps(OpenBGI_t* o)
 {
-	char* t = Shape("jumps",
+	char* t = Shape(o, "jumps",
 		"#engine 1.553\n"
 		"main(p1) { int i;\n"
 		"    i = 0;\n"
@@ -329,28 +321,28 @@ static void TestJumps(void)
 // ---- memory areas ----------------------------------------------------------------------------------
 
 // compile `src` (which names its engine) and compare with the assembled `listing`
-static void Bytes(const char* what, const char* src, const char* listing)
+static void Bytes(OpenBGI_t* o, const char* what, const char* src, const char* listing)
 {
 	uint32_t cn = 0, an = 0;
-	uint8_t* c = Compile(src, &cn);
-	uint8_t* a = Assemble(listing, &an);
+	uint8_t* c = Compile(o, src, &cn);
+	uint8_t* a = Assemble(o, listing, &an);
 	Same(what, c, cn, a, an);
 	BGI_Free(c);
 	BGI_Free(a);
 }
 
 // two sources that must compile to the same file
-static void SameSource(const char* what, const char* one, const char* other)
+static void SameSource(OpenBGI_t* o, const char* what, const char* one, const char* other)
 {
 	uint32_t an = 0, bn = 0;
-	uint8_t* a = Compile(one, &an);
-	uint8_t* b = Compile(other, &bn);
+	uint8_t* a = Compile(o, one, &an);
+	uint8_t* b = Compile(o, other, &bn);
 	Same(what, a, an, b, bn);
 	BGI_Free(a);
 	BGI_Free(b);
 }
 
-static void TestAreas(void)
+static void TestAreas(OpenBGI_t* o)
 {
 	static const char named[] =
 		"#engine 1.553\n"
@@ -369,7 +361,7 @@ static void TestAreas(void)
 		"    p1 = &hSprite[p1];\n"
 		"    gFlag();\n"
 		"}\n";
-	char* t = Shape("global variables", named,
+	char* t = Shape(o, "global variables", named,
 		".engine 1.553\n"
 		"main:\n"
 		"\tpush_fp\n\tpush_i8 12\n\tadd\n\tset_fp\n"
@@ -390,7 +382,7 @@ static void TestAreas(void)
 		"\t.align 16\n");
 	free(t);
 	// the names against the numbers they stand for
-	SameSource("names and numbers", named,
+	SameSource(o, "names and numbers", named,
 		"#engine 1.553\n"
 		"main(p1) { char buf[8];\n"
 		"    *(int*)1124 = 1;\n"
@@ -402,7 +394,7 @@ static void TestAreas(void)
 		"    (*(int*)1124)();\n"
 		"}\n");
 	// the other areas: the first number of the address carries the tag of the engine's pointer layout
-	Bytes("areas of 1.64",
+	Bytes(o, "areas of 1.64",
 		"#engine 1.64\n"
 		"heap int hp @ 0x10;\n"
 		"heap char blk[64] @ 0x20;\n"
@@ -425,7 +417,7 @@ static void TestAreas(void)
 		"\tpush_i32 0x10000004\n\tpush_i32 0x11000000\n\tpush_i8 1\n\tadd\n\tload 0\n\tstore_keep 2\n"
 		"EXIT:\n\tpush_fp\n\tpush_i8 0\n\tsub\n\tset_fp\n\tret\n"
 		"\t.align 16\n");
-	Bytes("areas of 1.69/444",
+	Bytes(o, "areas of 1.69/444",
 		"#engine 1.69/444\nheap int hp @ 0x10;\ndynamic[0] int dyn @ 0x220400;\nmain() { hp = dyn; }\n",
 		".engine 1.69/444\n"
 		"main:\n"
@@ -433,7 +425,7 @@ static void TestAreas(void)
 		"\tpush_i32 0x14000010\n\tpush_i32 0x20220400\n\tload 2\n\tstore_keep 2\n"
 		"EXIT:\n\tpush_fp\n\tpush_i8 0\n\tsub\n\tset_fp\n\tret\n"
 		"\t.align 16\n");
-	Bytes("areas of 1.553",
+	Bytes(o, "areas of 1.553",
 		"#engine 1.553\nheap int hp @ 0x10;\nmain() { hp = 1; }\n",
 		".engine 1.553\n"
 		"main:\n"
@@ -442,7 +434,7 @@ static void TestAreas(void)
 		"EXIT:\n\tpush_fp\n\tpush_i8 0\n\tsub\n\tset_fp\n\tret\n"
 		"\t.align 16\n");
 	// the words of the areas stay ordinary names where no declaration starts
-	SameSource("area words as names",
+	SameSource(o, "area words as names",
 		"#engine 1.553\nglobal(heap) { int data; int code; int dynamic[2]; data = heap; code = data; dynamic[1] = code; return dynamic[1]; }\n",
 		"#engine 1.553\nmain(p1) { int a; int b; int c[2]; a = p1; b = a; c[1] = b; return c[1]; }\n");
 }
@@ -461,15 +453,21 @@ static int gReads; // the files ReadMem handed out
 static uint8_t* ReadMem(void* ctx, const char* path, uint32_t* size)
 {
 	const MemFile_t* f;
+	char want[256];
+	size_t i;
+	// both with the native separator: a path may come with either ('/' works on Windows too)
+	snprintf(want, sizeof want, "%s", path);
+	for(i = 0; want[i]; i++)
+		if(want[i] == '/')
+			want[i] = OS_NATIVE_SEP;
 	for(f = (const MemFile_t*)ctx; f->path; f++)
 	{
 		char native[256];
-		size_t i;
 		snprintf(native, sizeof native, "%s", f->path);
 		for(i = 0; native[i]; i++)
 			if(native[i] == '/')
 				native[i] = OS_NATIVE_SEP;
-		if(strcmp(native, path) == 0)
+		if(strcmp(native, want) == 0)
 		{
 			size_t n = strlen(f->text);
 			uint8_t* copy = (uint8_t*)malloc(n + 1);
@@ -482,7 +480,7 @@ static uint8_t* ReadMem(void* ctx, const char* path, uint32_t* size)
 	return NULL;
 }
 
-static void TestIncludes(void)
+static void TestIncludes(OpenBGI_t* o)
 {
 	static const MemFile_t files[] = {
 		{"src/globals.inc", "\xEF\xBB\xBF// the flags\nglobal int gFlag @ 1124;\n#include \"more.inc\"\n"},
@@ -504,14 +502,14 @@ static void TestIncludes(void)
 	PrepIncludes_t inc;
 	BpcResult_t r;
 	uint32_t pn = 0;
-	uint8_t* plain = Compile("#engine 1.553\nhelper() { return *(int*)1128 + *(int*)1132; }\nmain() { *(int*)1124 = helper() + *(int*)1136; }\n", &pn);
+	uint8_t* plain = Compile(o, "#engine 1.553\nhelper() { return *(int*)1128 + *(int*)1132; }\nmain() { *(int*)1124 = helper() + *(int*)1136; }\n", &pn);
 	memset(&inc, 0, sizeof inc);
 	inc.dirs = dirs;
 	inc.dirCount = 2;
 	inc.read = ReadMem;
 	inc.ctx = (void*)files;
 	gReads = 0;
-	Bpc_Compile(main1, strlen(main1), "src/main.bpc", GEN, &inc, stdout, &r);
+	Bpc_Compile(o, main1, strlen(main1), "src/main.bpc", GEN, &inc, stdout, &r);
 	CHECK(r.errors == 0);
 	Same("includes", r.file, r.size, plain, pn);
 	CHECK(gReads == 4); // globals, more, deep, only - each once
@@ -523,7 +521,7 @@ static void TestIncludes(void)
 		PrepIncludes_t at = inc;
 		at.baseDir = "lib";
 		at.dirCount = 0;
-		Bpc_Compile(main2, strlen(main2), "entry.bpc", GEN, &at, stdout, &r);
+		Bpc_Compile(o, main2, strlen(main2), "entry.bpc", GEN, &at, stdout, &r);
 		CHECK(r.errors == 0 && r.file != NULL);
 		BGI_Free(r.file);
 		BGI_Free(r.labels);
@@ -533,7 +531,7 @@ static void TestIncludes(void)
 		FILE* log = tmpfile();
 		char text[512];
 		size_t n;
-		Bpc_Compile(main3, strlen(main3), "src/main.bpc", GEN, &inc, log ? log : stdout, &r);
+		Bpc_Compile(o, main3, strlen(main3), "src/main.bpc", GEN, &inc, log ? log : stdout, &r);
 		CHECK(r.errors == 1 && r.file == NULL);
 		BGI_Free(r.labels);
 		if(log)
@@ -549,9 +547,9 @@ static void TestIncludes(void)
 
 // ---- defines -----------------------------------------------------------------------------------------
 
-static void TestDefines(void)
+static void TestDefines(OpenBGI_t* o)
 {
-	SameSource("defined constants",
+	SameSource(o, "defined constants",
 		"#engine 1.553\n"
 		"#define ST_BASE 0x1bb84        // a comment is no part of the text\n"
 		"#define ST_IP   ST_BASE + 164  /* nor is this one */\n"
@@ -587,7 +585,7 @@ static void TestDefines(void)
 		FILE* log = tmpfile();
 		char text[512];
 		size_t n;
-		Bpc_Compile(src, strlen(src), "lines.bpc", GEN, NULL, log ? log : stdout, &r);
+		Bpc_Compile(o, src, strlen(src), "lines.bpc", GEN, NULL, log ? log : stdout, &r);
 		CHECK(r.errors > 0 && r.file == NULL);
 		BGI_Free(r.labels);
 		if(log)
@@ -606,9 +604,9 @@ static void TestDefines(void)
 /* Records are names for address arithmetic: every form is compared with
  * the same access written with numbers and casts, which the shapes above
  * pin to bytes. */
-static void TestRecords(void)
+static void TestRecords(OpenBGI_t* o)
 {
-	SameSource("records",
+	SameSource(o, "records",
 		"#engine 1.553\n"
 		"struct Point { int x; int y; };\n"
 		"struct Font { char kind; short size; short width; char bold; int colour @ 12; };\n" // packed; @ places a field
@@ -674,7 +672,7 @@ static void TestRecords(void)
 		FILE* null = tmpfile();
 		uint8_t* a;
 		BpcResult_t r;
-		Bpc_Compile(sjis, strlen(sjis), "test", GEN, NULL, null ? null : stdout, &r); // (the "?" comes with a warning)
+		Bpc_Compile(o, sjis, strlen(sjis), "test", GEN, NULL, null ? null : stdout, &r); // (the "?" comes with a warning)
 		BGI_Free(r.labels);
 		a = r.file;
 		n = r.size;
@@ -682,7 +680,7 @@ static void TestRecords(void)
 			found |= memcmp(a + i, wantSjis, sizeof wantSjis) == 0;
 		CHECK(found);
 		BGI_Free(a);
-		a = Compile(utf8, &n);
+		a = Compile(o, utf8, &n);
 		for(found = 0, i = 0; a && i + sizeof wantUtf8 <= n; i++)
 			found |= memcmp(a + i, wantUtf8, sizeof wantUtf8) == 0;
 		CHECK(found);
@@ -694,7 +692,7 @@ static void TestRecords(void)
 
 // ---- errors ----------------------------------------------------------------------------------------
 
-static void TestErrors(void)
+static void TestErrors(OpenBGI_t* o)
 {
 	static const char* const bad[] = {
 		"main() { x = 1; }",                                         // an unknown variable
@@ -749,7 +747,7 @@ static void TestErrors(void)
 	for(i = 0; i < sizeof bad / sizeof bad[0]; i++)
 	{
 		BpcResult_t r;
-		Bpc_Compile(bad[i], strlen(bad[i]), "bad", GEN, NULL, null ? null : stdout, &r);
+		Bpc_Compile(o, bad[i], strlen(bad[i]), "bad", GEN, NULL, null ? null : stdout, &r);
 		CHECK(r.errors > 0);
 		CHECK(r.file == NULL);
 		BGI_Free(r.labels);
@@ -762,7 +760,7 @@ static void TestErrors(void)
 		FILE* mem = tmpfile();
 		memset(&opt, 0, sizeof opt);
 		opt.gen = GEN;
-		CHECK(Bpc_Decompile(junk, sizeof junk, &opt, mem ? mem : stdout) == -1);
+		CHECK(Bpc_Decompile(o, junk, sizeof junk, &opt, mem ? mem : stdout) == -1);
 		if(mem)
 			fclose(mem);
 	}
@@ -770,22 +768,25 @@ static void TestErrors(void)
 
 int main(void)
 {
+	OpenBGI_t* o = OpenBGI_New(OS_Host()); // the engine whose code the test runs
+	if(!o)
+		return 1;
 	OS_Init(); // the string conversions (the Shift-JIS strings of TestRecords)
 	printf("bpc: shapes\n");
-	TestFrame();
-	TestConditions();
-	TestValues();
-	TestJumps();
+	TestFrame(o);
+	TestConditions(o);
+	TestValues(o);
+	TestJumps(o);
 	printf("bpc: areas\n");
-	TestAreas();
+	TestAreas(o);
 	printf("bpc: records\n");
-	TestRecords();
+	TestRecords(o);
 	printf("bpc: includes\n");
-	TestIncludes();
+	TestIncludes(o);
 	printf("bpc: defines\n");
-	TestDefines();
+	TestDefines(o);
 	printf("bpc: errors\n");
-	TestErrors();
+	TestErrors(o);
 	if(gFails)
 	{
 		printf("bpc: %d check(s) failed\n", gFails);

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=OpenBGI
+GenericName=Visual novel engine
+Comment=Plays the games of the BGI/Ethornell engine
+Exec=openbgi %f
+Icon=openbgi
+Terminal=false
+Categories=Game;
+MimeType=application/x-cd-image;application/zip;inode/directory;
+StartupWMClass=OpenBGI

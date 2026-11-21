@@ -18,58 +18,30 @@
 #include "bgi/display.h"
 #include "bgi/gfx.h"
 #include "bgi/sys.h"
-#include "bgi/os.h"
+#include "bgi/core.h"
 #include <math.h>
-
-int gCursorShape; // "80 67": 0 the arrow, 1 the resource cursor, 2 .. 4 the class arrow
 
 // ---- position ---------------------------------------------------------
 
 /*
- * The cursor in back-buffer coordinates: the screen position mapped
- * through the display scaling (GetCursorBufferPos) minus the client
- * origin.  (The original subtracts the window rectangle plus the fixed
- * frame and caption metrics in windowed mode.)  0, 0 when there is no
- * window.  "80 08" reports this.
+ * The cursor in back-buffer coordinates: the pointer where the host says
+ * it is, through the display scaling (GetCursorBufferPos).  (The original
+ * reads the screen position and subtracts the window rectangle plus the
+ * fixed frame and caption metrics in windowed mode; the host's position
+ * is already the picture's.)  0, 0 when there is no window.  "80 08"
+ * reports this.
  */
-void GetMouseClientPos(int xy[2])
+void GetMouseClientPos(OpenBGI_t* o, int xy[2])
 {
-	int ox = 0, oy = 0;
-	if(!gWindowAlive)
+	if(!o->display.windowAlive)
 	{
 		xy[0] = xy[1] = 0;
 		return;
 	}
-	OS_ClientToScreen(&ox, &oy); // the client origin (GetWindowRect + frame in the original)
-	GetCursorBufferPos(xy);
-	xy[0] -= ox;
-	xy[1] -= oy;
-}
-
-// the inverse of GetMouseClientPos (screen coordinates); `out` is left alone without a window
-void ClientToScreenPos(int out[2], const int in[2])
-{
-	int ox = 0, oy = 0;
-	if(!gWindowAlive)
-		return;
-	OS_ClientToScreen(&ox, &oy);
-	out[0] = in[0] + ox;
-	out[1] = in[1] + oy;
+	GetCursorBufferPos(o, xy);
 }
 
 // ---- scripted move ("80 1F") ------------------------------------------
-static int gMvActive;         // a move is in progress
-static int gMvStart[2];       // start (screen)
-static int gMvDelta[2];       // target - start (screen)
-static int gMvPos[2];         // last position set
-static int gMvCurve;          // 1 = cosine ease, else linear
-static uint32_t gMvStep;      // steps done
-static uint32_t gMvSteps;     // steps in all
-static uint32_t gMvDuration;  // ms
-static uint32_t gMvStartTick; // GetTicks at the start
-static uint32_t gMvNextTick;  // when the next step is due
-static int gMvCancelOnMove;   // stop when the user moves the mouse
-
 /*
  * "80 1F": start moving the cursor to back-buffer position (x, y) over
  * `duration` ms in duration * fps / 1000 steps (at least one).  curve 1
@@ -79,33 +51,30 @@ static int gMvCancelOnMove;   // stop when the user moves the mouse
  * carried out by Cursor_Update, one step per due tick; the menu waits use
  * it to glide the cursor onto the selected item.
  */
-void MouseMove_Start(int x, int y, int curve, int duration, int fps, int cancelOnMove)
+void MouseMove_Start(OpenBGI_t* o, int x, int y, int curve, int duration, int fps, int cancelOnMove)
 {
-	int target[2], in[2];
 	uint32_t steps;
-	if(OS_WindowMinimized())
+	if(MainWin_Minimized(o))
 		return;
-	gMvActive = 1;
-	GetCursorBufferPos(gMvStart);
-	in[0] = x;
-	in[1] = y;
-	target[0] = x; // ClientToScreenPos leaves the target alone when the window
-	target[1] = y; // is gone; the original reads it uninitialised then
-	ClientToScreenPos(target, in);
-	gMvDelta[0] = target[0] - gMvStart[0];
-	gMvDelta[1] = target[1] - gMvStart[1];
-	gMvPos[0] = gMvStart[0];
-	gMvPos[1] = gMvStart[1];
-	gMvCurve = curve;
+	o->cursor.mvActive = 1;
+	GetCursorBufferPos(o, o->cursor.mvStart);
+	/* the original turns the target into screen coordinates (the client
+	 * origin added) to move the system's cursor; the engine's pointer is
+	 * in the picture's own */
+	o->cursor.mvDelta[0] = x - o->cursor.mvStart[0];
+	o->cursor.mvDelta[1] = y - o->cursor.mvStart[1];
+	o->cursor.mvPos[0] = o->cursor.mvStart[0];
+	o->cursor.mvPos[1] = o->cursor.mvStart[1];
+	o->cursor.mvCurve = curve;
 	steps = (uint32_t)(duration * fps) / 1000u;
 	if(steps == 0)
 		steps = 1;
-	gMvStep = 0;
-	gMvSteps = steps;
-	gMvDuration = (uint32_t)duration;
-	gMvStartTick = GetTicks();
-	gMvNextTick = gMvStartTick + gMvDuration / steps;
-	gMvCancelOnMove = cancelOnMove;
+	o->cursor.mvStep = 0;
+	o->cursor.mvSteps = steps;
+	o->cursor.mvDuration = (uint32_t)duration;
+	o->cursor.mvStartTick = GetTicks(o);
+	o->cursor.mvNextTick = o->cursor.mvStartTick + o->cursor.mvDuration / steps;
+	o->cursor.mvCancelOnMove = cancelOnMove;
 }
 
 // the offset after `step` of `steps` along `delta`, linear or cosine eased
@@ -123,43 +92,38 @@ static int Move_Interp(int delta, int curve, uint32_t step, uint32_t steps)
 }
 
 // ---- auto-hide ("B0 05") ----------------------------------------------
-static int gHideEnabled;    // auto-hide is on
-static int gHideShown;      // the cursor is currently shown by the auto-hide
-static uint32_t gHideDelay; // ms of rest before the cursor is hidden
-static uint32_t gHideAt;    // the tick at which it will be hidden
-static int gHideLast[2];    // the position last seen (0x80000000: none yet)
 
-// show or hide the system cursor (the OS layer keeps the show count)
-static void CursorShowSys(int show)
+// show or hide the system cursor (the host's window keeps the show count)
+static void CursorShowSys(OpenBGI_t* o, int show)
 {
-	OS_CursorShow(show);
+	MainWin_CursorShow(o, show);
 }
 
 /* "B0 05": hide the cursor after `ms` of rest over the picture; 0 switches
  * the auto-hide off (showing the cursor again if it was hidden), a later
  * non-zero value only changes the delay. */
-void SetCursorAutoHide(uint32_t ms)
+void SetCursorAutoHide(OpenBGI_t* o, uint32_t ms)
 {
-	if(!gHideEnabled)
+	if(!o->cursor.hideEnabled)
 	{
 		if(ms == 0)
 			return;
-		gHideEnabled = 1;
-		gHideShown = 1;
-		gHideDelay = ms;
-		gHideAt = GetTicks() + ms;
-		gHideLast[0] = gHideLast[1] = (int)0x80000000;
+		o->cursor.hideEnabled = 1;
+		o->cursor.hideShown = 1;
+		o->cursor.hideDelay = ms;
+		o->cursor.hideAt = GetTicks(o) + ms;
+		o->cursor.hideLast[0] = o->cursor.hideLast[1] = (int)0x80000000;
 	}
 	else if(ms != 0)
 	{
-		gHideDelay = ms;
-		gHideAt = GetTicks() + ms;
+		o->cursor.hideDelay = ms;
+		o->cursor.hideAt = GetTicks(o) + ms;
 	}
 	else
 	{
-		gHideEnabled = 0;
-		if(!gHideShown)
-			CursorShowSys(1);
+		o->cursor.hideEnabled = 0;
+		if(!o->cursor.hideShown)
+			CursorShowSys(o, 1);
 	}
 }
 
@@ -167,126 +131,112 @@ void SetCursorAutoHide(uint32_t ms)
  * auto-hide (the sprite cursor of "B0 04" counts as visible).  The 1.616
  * and later originals also ask Windows whether touch input suppressed the
  * cursor; there is no such state here. */
-int Cursor_IsVisible(void)
+int Cursor_IsVisible(OpenBGI_t* o)
 {
-	return !gHideEnabled || gHideShown;
+	return !o->cursor.hideEnabled || o->cursor.hideShown;
 }
 
 // Show an auto-hidden cursor again (before a dialog or message box).
-void Cursor_Refresh(void)
+void Cursor_Refresh(OpenBGI_t* o)
 {
-	if(gHideEnabled && !gHideShown)
-		CursorShowSys(1);
+	if(o->cursor.hideEnabled && !o->cursor.hideShown)
+		CursorShowSys(o, 1);
 }
 
 /* Once per pass: advance the scripted move (every step whose tick has
  * come; the move is abandoned when the window loses the focus or, with
  * cancelOnMove, when the user moved the mouse), then the auto-hide (the
- * cursor is hidden after resting `gHideDelay` ms inside the picture and
- * shown again as soon as it moves, leaves the picture, or the window is
- * inactive or minimised). */
-void Cursor_Update(void)
+ * cursor is hidden after resting `o->cursor.hideDelay` ms inside the
+ * picture and shown again as soon as it moves, leaves the picture, or
+ * the window is inactive or minimised). */
+void Cursor_Update(OpenBGI_t* o)
 {
 	uint32_t now;
-	if(gMvActive)
+	if(o->cursor.mvActive)
 	{
-		if(!Window_IsActive())
+		if(!Window_IsActive(o))
 		{
-			gMvActive = 0;
+			o->cursor.mvActive = 0;
 		}
 		else
 		{
-			now = GetTicks();
-			while(gMvActive && gMvNextTick <= now)
+			now = GetTicks(o);
+			while(o->cursor.mvActive && o->cursor.mvNextTick <= now)
 			{
 				int pos[2];
-				GetCursorBufferPos(pos);
-				if((pos[0] != gMvPos[0] || pos[1] != gMvPos[1]) && gMvCancelOnMove)
+				GetCursorBufferPos(o, pos);
+				if((pos[0] != o->cursor.mvPos[0] || pos[1] != o->cursor.mvPos[1]) && o->cursor.mvCancelOnMove)
 				{
-					gMvActive = 0; // the user took over
+					o->cursor.mvActive = 0; // the user took over
 					break;
 				}
-				gMvStep++;
-				if(gMvStep < gMvSteps)
+				o->cursor.mvStep++;
+				if(o->cursor.mvStep < o->cursor.mvSteps)
 				{
-					gMvPos[0] = gMvStart[0] + Move_Interp(gMvDelta[0], gMvCurve, gMvStep, gMvSteps);
-					gMvPos[1] = gMvStart[1] + Move_Interp(gMvDelta[1], gMvCurve, gMvStep, gMvSteps);
-					gMvNextTick = gMvStartTick + ((gMvStep + 1) * gMvDuration) / gMvSteps;
+					o->cursor.mvPos[0] = o->cursor.mvStart[0] + Move_Interp(o->cursor.mvDelta[0], o->cursor.mvCurve, o->cursor.mvStep, o->cursor.mvSteps);
+					o->cursor.mvPos[1] = o->cursor.mvStart[1] + Move_Interp(o->cursor.mvDelta[1], o->cursor.mvCurve, o->cursor.mvStep, o->cursor.mvSteps);
+					o->cursor.mvNextTick = o->cursor.mvStartTick + ((o->cursor.mvStep + 1) * o->cursor.mvDuration) / o->cursor.mvSteps;
 				}
 				else
 				{
-					gMvPos[0] = gMvStart[0] + gMvDelta[0]; // the last step lands exactly on the target
-					gMvPos[1] = gMvStart[1] + gMvDelta[1];
-					gMvActive = 0;
+					o->cursor.mvPos[0] = o->cursor.mvStart[0] + o->cursor.mvDelta[0]; // the last step lands exactly on the target
+					o->cursor.mvPos[1] = o->cursor.mvStart[1] + o->cursor.mvDelta[1];
+					o->cursor.mvActive = 0;
 				}
-				SetCursorBufferPos(gMvPos[0], gMvPos[1]);
+				SetCursorBufferPos(o, o->cursor.mvPos[0], o->cursor.mvPos[1]);
 			}
 		}
 	}
 
-	if(!gHideEnabled)
+	if(!o->cursor.hideEnabled)
 		return;
-	if(Window_IsActive())
+	if(Window_IsActive(o))
 	{
 		int pos[2];
-		GetMouseClientPos(pos);
-		if(pos[0] == gHideLast[0] && pos[1] == gHideLast[1] &&
-			pos[0] >= 0 && pos[0] < gScreenWidths[gSizeIndex] &&
-			pos[1] >= 0 && pos[1] < gScreenHeights[gSizeIndex])
+		GetMouseClientPos(o, pos);
+		if(pos[0] == o->cursor.hideLast[0] && pos[1] == o->cursor.hideLast[1] &&
+			pos[0] >= 0 && pos[0] < o->display.screenWidths[o->display.sizeIndex] &&
+			pos[1] >= 0 && pos[1] < o->display.screenHeights[o->display.sizeIndex])
 		{
 			// resting inside the picture: hide after the delay
-			if(OS_WindowMinimized())
+			if(MainWin_Minimized(o))
 				goto reshow;
-			if(gHideShown && GetTicks() >= gHideAt)
+			if(o->cursor.hideShown && GetTicks(o) >= o->cursor.hideAt)
 			{
-				CursorShowSys(0);
-				gHideShown = 0;
+				CursorShowSys(o, 0);
+				o->cursor.hideShown = 0;
 			}
 			return;
 		}
-		gHideLast[0] = pos[0];
-		gHideLast[1] = pos[1];
-		if(gHideShown)
+		o->cursor.hideLast[0] = pos[0];
+		o->cursor.hideLast[1] = pos[1];
+		if(o->cursor.hideShown)
 		{
-			gHideAt = GetTicks() + gHideDelay; // moved: the rest starts over
+			o->cursor.hideAt = GetTicks(o) + o->cursor.hideDelay; // moved: the rest starts over
 			return;
 		}
-		CursorShowSys(1);
-		gHideShown = 1;
-		gHideAt = GetTicks() + gHideDelay;
+		CursorShowSys(o, 1);
+		o->cursor.hideShown = 1;
+		o->cursor.hideAt = GetTicks(o) + o->cursor.hideDelay;
 		return;
 	}
 reshow:
-	if(!gHideShown)
+	if(!o->cursor.hideShown)
 	{
-		CursorShowSys(1);
-		gHideShown = 1;
-		gHideAt = GetTicks() + gHideDelay;
+		CursorShowSys(o, 1);
+		o->cursor.hideShown = 1;
+		o->cursor.hideAt = GetTicks(o) + o->cursor.hideDelay;
 	}
 }
 
 // ---- system state -----------------------------------------------------
-static int gSysSwap; // the system's SwapMouseButton setting, as probed at start-up
-
-// Cache whether the system has the mouse buttons swapped (start-up).
-void Mouse_ProbeSwap(void)
-{
-	gSysSwap = OS_MouseButtonsSwapped();
-}
-
-int Mouse_SysSwapped(void)
-{
-	return gSysSwap;
-}
-
-static int gCursorShown = 1; // the engine's own ShowCursor state
 
 /* Show or hide the system cursor, changing the OS show count only on a
  * transition so that the engine's state never drifts from it; returns
  * the previous state. */
-int ShowCursorCount(int show)
+int ShowCursorCount(OpenBGI_t* o, int show)
 {
-	int old = gCursorShown;
+	int old = o->cursor.cursorShown;
 	if(show)
 	{
 		if(old)
@@ -296,38 +246,34 @@ int ShowCursorCount(int show)
 	{
 		return old;
 	}
-	gCursorShown = show;
-	OS_CursorShow(show);
+	o->cursor.cursorShown = show;
+	MainWin_CursorShow(o, show);
 	return old;
 }
 
-int Cursor_IsShown(void)
+int Cursor_IsShown(OpenBGI_t* o)
 {
-	return gCursorShown;
+	return o->cursor.cursorShown;
 }
 
 // ---- cursor sprite ("B0 04") ------------------------------------------
-static uint32_t gCurSprite; // sprite id, 0 = none
-static int gCurDx, gCurDy;  // the sprite's offset from the cursor position, pixels
-static int gCurLast[2];     // the cursor position the sprite was last placed at
-
 /* "B0 04": let sprite `sprite` follow the cursor at offset (dx, dy) and
  * hide the system cursor over the picture; 0 restores the system cursor.
  * 0 ok, -1 when the sprite cannot be shown. */
-int SetCursorSprite(uint32_t sprite, int dx, int dy)
+int SetCursorSprite(OpenBGI_t* o, uint32_t sprite, int dx, int dy)
 {
 	if(sprite)
 	{
-		if(!GfxCall_SpriteShow(sprite, 1))
+		if(!GfxCall_SpriteShow(o, sprite, 1))
 			return -1;
-		gCurSprite = sprite;
-		gCurDx = dx;
-		gCurDy = dy;
-		CursorSprite_Update();
+		o->cursor.curSprite = sprite;
+		o->cursor.curDx = dx;
+		o->cursor.curDy = dy;
+		CursorSprite_Update(o);
 		return 0;
 	}
-	gCurSprite = 0;
-	ShowCursorCount(1);
+	o->cursor.curSprite = 0;
+	ShowCursorCount(o, 1);
 	return 0;
 }
 
@@ -335,24 +281,24 @@ int SetCursorSprite(uint32_t sprite, int dx, int dy)
  * system cursor hidden while the cursor is inside the picture and shown
  * outside it.  A sprite that can no longer be positioned (deleted) ends
  * the arrangement and restores the system cursor. */
-void CursorSprite_Update(void)
+void CursorSprite_Update(OpenBGI_t* o)
 {
 	int pos[2], inside;
 	Rect_t rect;
-	if(!gCurSprite)
+	if(!o->cursor.curSprite)
 		return;
-	GetMouseClientPos(pos);
-	if(pos[0] == gCurLast[0] && pos[1] == gCurLast[1])
+	GetMouseClientPos(o, pos);
+	if(pos[0] == o->cursor.curLast[0] && pos[1] == o->cursor.curLast[1])
 		return;
-	gCurLast[0] = pos[0];
-	gCurLast[1] = pos[1];
-	Gfx_GetScreenRect(gGfx, &rect);
+	o->cursor.curLast[0] = pos[0];
+	o->cursor.curLast[1] = pos[1];
+	Gfx_GetScreenRect(o->gfx.gfx, &rect);
 	inside = pos[0] >= rect.l && pos[0] <= rect.r && pos[1] >= rect.t && pos[1] <= rect.b;
-	ShowCursorCount(!inside);
-	if(!GfxCall_ObjSetPos(gCurSprite, pos[0] + gCurDx, pos[1] + gCurDy))
+	ShowCursorCount(o, !inside);
+	if(!GfxCall_ObjSetPos(o, o->cursor.curSprite, pos[0] + o->cursor.curDx, pos[1] + o->cursor.curDy))
 	{
-		gCurSprite = 0;
-		ShowCursorCount(1);
+		o->cursor.curSprite = 0;
+		ShowCursorCount(o, 1);
 	}
-	Present_RequestDirty();
+	Present_RequestDirty(o);
 }

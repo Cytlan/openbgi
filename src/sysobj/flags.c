@@ -2,7 +2,7 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * flags.c - named groups of bit flags (inc/bgi/sysobj/flags.h)
+ * flags.c - named groups of bit flags (src/include/bgi/sysobj/flags.h)
  *
  * The groups live in an array in the order they were registered (none is
  * ever removed but all at once), so a name is found by a linear search
@@ -13,6 +13,7 @@
  */
 #include "bgi/sysobj/flags.h"
 #include "bgi/version.h"
+#include "bgi/core.h"
 
 struct FlagMgr
 {
@@ -21,8 +22,6 @@ struct FlagMgr
 	uint32_t limit;      // the groups allowed until 1.599
 	FlagGroup_t* groups; // capacity slots, the first count in use
 };
-
-FlagMgr_t* gFlagMgr;
 
 // the byte holding bit `idx` and the mask of the bit inside it
 static uint32_t FlagByte(uint32_t idx)
@@ -88,9 +87,9 @@ static FlagGroup_t* FlagMgr_Find(FlagMgr_t* m, const char* name)
 
 /* Register a group or resize an existing one: a new group's bits are
  * cleared, a resized group keeps its old bits as far as they fit. */
-uint32_t FlagMgr_Register(FlagMgr_t* m, const char* name, uint32_t bits)
+uint32_t FlagMgr_Register(OpenBGI_t* o, FlagMgr_t* m, const char* name, uint32_t bits)
 {
-	const int limited = gEngine->gen < GEN_1_616;
+	const int limited = o->engine.profile->gen < GEN_1_616;
 	size_t len = strlen(name);
 	uint32_t bytes = FlagBytes(bits);
 	FlagGroup_t* g;
@@ -130,21 +129,21 @@ uint32_t FlagMgr_Register(FlagMgr_t* m, const char* name, uint32_t bits)
 }
 
 // Register a group and load its bits from `src` (the database restores groups this way).
-uint32_t FlagMgr_RegisterWithData(FlagMgr_t* m, const char* name, uint32_t bits, const uint8_t* src)
+uint32_t FlagMgr_RegisterWithData(OpenBGI_t* o, FlagMgr_t* m, const char* name, uint32_t bits, const uint8_t* src)
 {
-	uint32_t r = FlagMgr_Register(m, name, bits);
+	uint32_t r = FlagMgr_Register(o, m, name, bits);
 	if(r == FLAG_OK)
 		memcpy(FlagMgr_Find(m, name)->data, src, FlagBytes(bits));
 	return r;
 }
 
-uint32_t FlagMgr_Merge(FlagMgr_t* m, const char* name, uint32_t bits, const uint8_t* src)
+uint32_t FlagMgr_Merge(OpenBGI_t* o, FlagMgr_t* m, const char* name, uint32_t bits, const uint8_t* src)
 {
 	FlagGroup_t* g = FlagMgr_Find(m, name);
 	uint32_t r, i, n;
 	if(!g)
-		return FlagMgr_RegisterWithData(m, name, bits, src);
-	r = FlagMgr_Register(m, name, g->bits > bits ? g->bits : bits);
+		return FlagMgr_RegisterWithData(o, m, name, bits, src);
+	r = FlagMgr_Register(o, m, name, g->bits > bits ? g->bits : bits);
 	if(r != FLAG_OK)
 		return r;
 	g = FlagMgr_Find(m, name);
@@ -204,25 +203,25 @@ uint32_t FlagMgr_GetBit(FlagMgr_t* m, uint32_t* out, const char* name, uint32_t 
 	return FLAG_OK;
 }
 
-// ---- the global manager, as the "80 8x" instructions see it ------------------------------
+// ---- the engine's manager, as the "80 8x" instructions see it ----------------------------
 
 // "80 88": 1 ok, 0 for any error
-int GFlag_RegisterGroup(const char* name, uint32_t bits)
+int GFlag_RegisterGroup(OpenBGI_t* o, const char* name, uint32_t bits)
 {
-	return FlagMgr_Register(gFlagMgr, name, bits) == FLAG_OK;
+	return FlagMgr_Register(o, o->sysobj.flagMgr, name, bits) == FLAG_OK;
 }
 
-uint32_t GFlag_SetBit(const char* name, uint32_t idx, uint32_t val)
+uint32_t GFlag_SetBit(OpenBGI_t* o, const char* name, uint32_t idx, uint32_t val)
 {
-	return FlagMgr_SetBit(gFlagMgr, name, idx, val);
+	return FlagMgr_SetBit(o->sysobj.flagMgr, name, idx, val);
 }
 
-uint32_t GFlag_SetBits(const char* name, uint32_t idx, uint32_t val, uint32_t count)
+uint32_t GFlag_SetBits(OpenBGI_t* o, const char* name, uint32_t idx, uint32_t val, uint32_t count)
 {
-	return FlagMgr_SetBits(gFlagMgr, name, idx, val, count);
+	return FlagMgr_SetBits(o->sysobj.flagMgr, name, idx, val, count);
 }
 
-uint32_t GFlag_GetBit(uint32_t* out, const char* name, uint32_t idx)
+uint32_t GFlag_GetBit(OpenBGI_t* o, uint32_t* out, const char* name, uint32_t idx)
 {
-	return FlagMgr_GetBit(gFlagMgr, out, name, idx);
+	return FlagMgr_GetBit(o->sysobj.flagMgr, out, name, idx);
 }

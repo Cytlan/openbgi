@@ -2,98 +2,117 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * process.c - starting other programs from the engine ("80 E0", "80 E1",
- *             "80 E2", "80 E3", the registration and uninstaller runs) and
- *             the audio availability check of the start-up; declared in
- *             bgi/install.h
+ * process.c - what a game asks of other programs ("80 E0", "80 E1",
+ *             "80 E2", "80 E3") and the audio availability check of the
+ *             start-up; declared in bgi/install.h
  *
- * RunProgram is the one routine behind every program start: the
- * instructions and the installer differ only in its flags (whether the
- * engine waits, hides its window, lets the user retry a missing disc).
+ * The original starts programs for the scripts - a registration tool,
+ * the uninstaller, the game a launcher hands over to (CreateProcess) -
+ * and opens files and links with the program the system has for them
+ * (ShellExecute "open").  OpenBGI starts no program for a game, on any
+ * system: such a request is refused, said on stderr, and the script
+ * gets the answer the original gives when the program could not be
+ * started and the player gave up (0), without the boxes that come before
+ * it there.  Of the second kind a web link and a document are opened,
+ * since that is what the games mean by it (the maker's site, the
+ * manual); anything else - a program, a shortcut, a script - is refused
+ * the same way.
  */
 #include "bgi/install.h"
-#include "bgi/file.h"
-#include "bgi/error.h"
-#include "bgi/display.h"
-#include "bgi/engine.h"
-#include "bgi/version.h"
-#include "bgi/msg.h"
-#include "bgi/os.h"
+#include "bgi/host.h"
+#include "bgi/fs.h"
+#include "bgi/sjis.h"
+#include "bgi/core.h"
 
-/* Start "<dir>\<file>" (or "<base dir><file>" when dir is NULL) as a new
- * process.  While the file's drive is not ready or the process cannot be
- * created, `msg` is shown ("Insert the disc"): with allowRetry the box is
- * OK / Cancel and Cancel asks whether to abort, without it the box is
- * informational and the call fails; a NULL msg fails silently.  With
- * `wait` the engine waits for the process (hiding the main window first
- * when hideWindow is set, and pumping the window's messages meanwhile)
- * and, when waitUninstaller is set, also until the uninstaller's mutex is
- * gone.  1 when the process was started, 0 when not.
- * "80 E0" calls it with wait and allowRetry, "80 E2" (the uninstaller)
- * with hideWindow, wait and waitUninstaller, "80 E1" after the shutdown
- * with none of them. */
-int RunProgram(const char* dir, const char* file, const char* msg, int hideWindow, int wait, int allowRetry,
-	int waitUninstaller)
+#include <stdio.h>
+#include <string.h>
+
+// a text of the scripts' for a line on stderr
+static void Shown(OpenBGI_t* o, const char* text, char* out, size_t n)
 {
-	char cmd[0x104];
-	OsProcess_t* p;
+	Sjis_ToUtf8(text ? text : "", out, n, o->enc.textUtf8);
+}
 
+int Program_Refuse(OpenBGI_t* o, const char* dir, const char* file)
+{
+	char name[0x400], shown[0x800];
 	if(dir)
-		sprintf(cmd, "%s\\%s", dir, file);
+		snprintf(name, sizeof name, "%s\\%s", dir, file ? file : "");
 	else
-		sprintf(cmd, "%s%s", gBaseDir, file);
+		snprintf(name, sizeof name, "%s%s", o->files.baseDir, file ? file : "");
+	Shown(o, name, shown, sizeof shown);
+	fprintf(stderr, "openbgi: the game asked to start the program \"%s\": not started (OpenBGI starts no programs for a game)\n", shown);
+	return 0;
+}
 
-	for(;;)
+// the same letters, whatever their case (ASCII)
+static int SameNoCase(const char* a, const char* b, size_t n)
+{
+	size_t i;
+	for(i = 0; i < n; i++)
 	{
-		p = DriveReady(cmd) ? OS_ProcessStart(cmd) : NULL;
-		if(p)
+		char x = a[i], y = b[i];
+		if(x >= 'A' && x <= 'Z')
+			x = (char)(x + 32);
+		if(y >= 'A' && y <= 'Z')
+			y = (char)(y + 32);
+		if(x != y)
+			return 0;
+		if(!x)
 			break;
-		if(!msg)
-			return 0;
-		if(!allowRetry)
-		{
-			MsgBox(msg, MSG_NOTICE, OS_MB_ICONINFO);
-			return 0;
-		}
-		if(MsgBox(msg, MSG_NOTICE, OS_MB_OKCANCEL | OS_MB_ICONINFO) != OS_IDOK)
-		{
-			if(MsgBox(MSG_ASK_ABORT, MSG_CONFIRM, OS_MB_YESNO | OS_MB_ICONQUESTION | OS_MB_DEFBUTTON2) == OS_IDYES)
-				return 0;
-		}
-	}
-	if(wait)
-	{
-		if(hideWindow)
-			ShowMainWindow(0);
-		OS_ProcessWaitIdle(p);
-		while(!OS_ProcessWait(p, 10)) // 10 ms slices, the window stays responsive in between
-			PumpMessages();
-		OS_ProcessClose(p);
-		if(waitUninstaller)
-		{
-			char mutexName[0x140];
-			// the uninstaller holds a mutex named after the product while it runs
-			snprintf(mutexName, sizeof mutexName, "Uninstaller for %s is executing.", Engine_ProductName());
-			while(OS_NamedMutexExists(mutexName))
-				OS_SleepMs(100);
-		}
-		ShowMainWindow(1);
-	}
-	else
-	{
-		OS_ProcessClose(p);
 	}
 	return 1;
 }
 
-// "80 E3": open a file or URL with its associated program (ShellExecute "open"); the OS layer's result
-int ShellOpen(const char* path)
+int ShellOpen_IsLink(const char* path)
 {
-	return OS_ShellExecute(path, NULL, NULL);
+	return SameNoCase(path, "http://", 7) || SameNoCase(path, "https://", 8);
+}
+
+int ShellOpen_IsDocument(OpenBGI_t* o, const char* path)
+{
+	// what a desktop shows and does not run: text, pages, pictures
+	static const char* const kKinds[] = {".txt", ".htm", ".html", ".pdf", ".rtf", ".png", ".jpg", ".jpeg", ".bmp", ".gif"};
+	const char* dot = NULL;
+	size_t i;
+	if((path[0] == '\\' || path[0] == '/') && (path[1] == '\\' || path[1] == '/'))
+		return 0; // another machine's file
+	for(i = 0; path[i]; i++)
+	{
+		if(!o->enc.textUtf8 && Sjis_IsLead((uint8_t)path[i]) && path[i + 1])
+			i++; // (a trail byte is no separator and no dot)
+		else if(path[i] == ':' && !(i == 1 && ((path[0] | 32) >= 'a' && (path[0] | 32) <= 'z')))
+			return 0; // no path of a file: a link of some kind, a stream of a file
+		else if(path[i] == '\\' || path[i] == '/')
+			dot = NULL;
+		else if(path[i] == '.')
+			dot = path + i;
+	}
+	for(i = 0; dot && i < sizeof kKinds / sizeof kKinds[0]; i++)
+		if(strlen(dot) == strlen(kKinds[i]) && SameNoCase(dot, kKinds[i], strlen(dot)))
+			return 1;
+	return 0;
+}
+
+int ShellOpen(OpenBGI_t* o, const char* path)
+{
+	char local[0x400], shown[0x800];
+	if(!path)
+		return 0;
+	if(ShellOpen_IsLink(path))
+		return Host_OpenDocument(o, path);
+	if(!ShellOpen_IsDocument(o, path))
+	{
+		Shown(o, path, shown, sizeof shown);
+		fprintf(stderr, "openbgi: the game asked to open \"%s\": not opened (only web links and documents are, no programs)\n", shown);
+		return 0;
+	}
+	Fs_LocalPath(o, path, local, sizeof local); // a file only a game's archive holds is extracted for the program that shows it
+	return Host_OpenDocument(o, local);
 }
 
 // Whether audio output is available (the start-up refuses to run without it, except in launcher mode).
-int DSound8_IsAvailable(void)
+int DSound8_IsAvailable(OpenBGI_t* o)
 {
-	return OS_AudioAvailable();
+	return Host_AudioAvailable(o);
 }

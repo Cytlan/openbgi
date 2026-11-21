@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * userop.c - user-defined instructions "FF xx" (UserOp_Init, UserOp_Clear
- *            and the handler Opcode_User are declared in inc/bgi/vm.h)
+ *            and the handler Opcode_User are declared in src/include/bgi/vm.h)
  *
  * A script registers a program file under a slot ("FF F0"); afterwards
  * the byte pair FF <slot> calls that program like a subroutine.  The call
@@ -24,6 +24,7 @@
 #include "bgi/sys.h"
 #include "bgi/error.h"
 #include "bgi/msg.h"
+#include "bgi/core.h"
 
 typedef struct UserOp // 8 bytes: one registered slot
 {
@@ -31,51 +32,49 @@ typedef struct UserOp // 8 bytes: one registered slot
 	uint8_t* image; // copy of the loaded program
 } UserOp_t;
 
-#define USEROP_SLOTS 0xf0                // slots 00 .. EF; F0 .. FF are the management sub-opcodes
-static UserOp_t* gUserOps[USEROP_SLOTS]; // the registrations, NULL for a free slot
-
 // clear the slot table, once at start-up
-void UserOp_Init(void)
+void UserOp_Init(OpenBGI_t* o)
 {
-	memset(gUserOps, 0, sizeof gUserOps);
+	memset(o->vm.userOps, 0, sizeof o->vm.userOps);
 }
 
 // free the registration of `slot`; 1 when there was one, 0 for a free slot
-static int UserOp_Unregister(uint32_t slot)
+static int UserOp_Unregister(OpenBGI_t* o, uint32_t slot)
 {
-	UserOp_t* u = gUserOps[slot];
+	UserOp_t* u = o->vm.userOps[slot];
 	if(!u)
 		return 0;
 	BGI_Free(u->name);
 	BGI_Free(u->image);
 	BGI_Free(u);
-	gUserOps[slot] = NULL;
+	o->vm.userOps[slot] = NULL;
 	return 1;
 }
 
 // free every registration (part of the machine's reset, Vm_ResetSubsystems)
-void UserOp_Clear(void)
+void UserOp_Clear(OpenBGI_t* o)
 {
 	uint32_t i;
 	for(i = 0; i < USEROP_SLOTS; i++)
-		UserOp_Unregister(i);
+		UserOp_Unregister(o, i);
 }
 
 /* load program `name` of archive `arc` (at most 0x20000 bytes) and keep a
  * copy of it under `slot`, replacing an earlier registration; 1 on
  * success, 0 when the file loads as 0 bytes (the slot is then free) */
-static int UserOp_Register(uint32_t slot, const char* arc, const char* name)
+static int UserOp_Register(OpenBGI_t* o, uint32_t slot, const char* arc, const char* name)
 {
-	uint8_t* buf = (uint8_t*)BGI_Alloc(0x20000);
+	uint8_t* buf = (uint8_t*)Vm_TempAlloc(o, 0x20000);
 	uint32_t n;
 	int ok;
-	UserOp_Unregister(slot);
-	n = LoadFile(buf, arc, name);
+	UserOp_Unregister(o, slot);
+	n = LoadFile(o, buf, arc, name);
+	Vm_TempKeep(o, buf);
 	ok = n != 0;
 	if(ok)
 	{
 		UserOp_t* u = (UserOp_t*)BGI_Alloc(sizeof(UserOp_t));
-		gUserOps[slot] = u;
+		o->vm.userOps[slot] = u;
 		u->name = BGI_Strdup(name);
 		u->image = (uint8_t*)BGI_Alloc(n);
 		memcpy(u->image, buf, n);
@@ -85,35 +84,35 @@ static int UserOp_Register(uint32_t slot, const char* arc, const char* name)
 }
 
 // register program `file` of archive `arc` under `slot`; a slot of F0 or above, or a program that cannot be loaded, is a script error
-static void OpFFF0Register(Thread_t* t) // file, arc, slot →
+static void OpFFF0Register(OpenBGI_t* o, Thread_t* t) // file, arc, slot →
 {
-	char* file = (char*)PopPtr(t);
-	char* arc = (char*)PopPtr(t);
+	char* file = (char*)PopPtr(o, t);
+	char* arc = (char*)PopPtr(o, t);
 	uint32_t slot = Thread_Pop(t);
 	char msg[0x100];
 	if(slot >= USEROP_SLOTS)
 	{
 		sprintf(msg, MSG_BAD_USEROP_SLOT, (int)slot);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
-	if(!UserOp_Register(slot, arc, file))
+	if(!UserOp_Register(o, slot, arc, file))
 	{
 		sprintf(msg, MSG_PROGRAM_NOT_FOUND, arc, file);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
 }
 
 // free `slot` (a free slot is no error); a slot of F0 or above is a script error
-static void OpFFF1Unregister(Thread_t* t) // slot →
+static void OpFFF1Unregister(OpenBGI_t* o, Thread_t* t) // slot →
 {
 	uint32_t slot = Thread_Pop(t);
 	if(slot >= USEROP_SLOTS)
 	{
 		char msg[0x100];
 		sprintf(msg, MSG_BAD_USEROP_SLOT, (int)slot);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
-	UserOp_Unregister(slot);
+	UserOp_Unregister(o, slot);
 }
 
 /* the return from a user-defined instruction: drop the two modules the
@@ -138,7 +137,7 @@ static void OpFFF8Return(Thread_t* t)
  * stack (a full data area is a script error) and execution jumps to the
  * mediation program.  Always returns scheduler code 0.
  */
-int Opcode_User(Thread_t* t)
+int Opcode_User(OpenBGI_t* o, Thread_t* t)
 {
 	static const uint8_t mediation[0x28] = {
 		0x10, 0, 0, 0, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,             // ProgramHeader {0x10, 0x10} + pad
@@ -150,34 +149,34 @@ int Opcode_User(Thread_t* t)
 
 	switch(sub)
 	{
-		case 0xf0: OpFFF0Register(t); return 0;
-		case 0xf1: OpFFF1Unregister(t); return 0;
+		case 0xf0: OpFFF0Register(o, t); return 0;
+		case 0xf1: OpFFF1Unregister(o, t); return 0;
 		case 0xf8: OpFFF8Return(t); return 0;
 		default: break;
 	}
 	if(sub >= USEROP_SLOTS)
 	{
 		sprintf(msg, MSG_UNDEF_USEROP_MGMT, sub);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
-	if(!gUserOps[sub])
+	if(!o->vm.userOps[sub])
 	{
 		sprintf(msg, MSG_UNDEF_USEROP, sub);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
-	base = Thread_LoadModule(t, mediation, "Mediation program");
+	base = Thread_LoadModule(o, t, mediation, "Mediation program");
 	if(base == 0x80000000u)
 	{
 		sprintf(msg, MSG_USEROP_CODE_FULL, sub);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
-	if(Thread_LoadModule(t, gUserOps[sub]->image, gUserOps[sub]->name) == 0x80000000u)
+	if(Thread_LoadModule(o, t, o->vm.userOps[sub]->image, o->vm.userOps[sub]->name) == 0x80000000u)
 	{
 		sprintf(msg, MSG_USEROP_CODE_FULL, sub);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
 	if(Thread_GetFP(t) + 4 >= t->dataSize)
-		ScriptError(MSG_STACK_FULL, t);
+		ScriptError(o, MSG_STACK_FULL, t);
 	FramePush(t, Thread_CurOpIP(t) + 2);
 	Thread_SetIP(t, base);
 	return 0;

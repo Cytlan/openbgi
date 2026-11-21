@@ -4,7 +4,7 @@
  *
  * window_text.c - the text layer of a message window: drawing text into
  *                 it, the text area, the font settings and the cursor
- *                 (inc/bgi/gfx/window.h)
+ *                 (src/include/bgi/gfx/window.h)
  *
  * Text is drawn through the text engine (text.h) into the text layer at
  * the window's cursor, which advances along the writing direction and
@@ -16,6 +16,7 @@
  * where the plain output lets a closing character overhang.
  */
 #include "window_internal.h"
+#include "bgi/core.h"
 
 // ---- text layer --------------------------------------------------------------------------------
 
@@ -29,27 +30,33 @@ void Window_SetTextLevel(Window_t* w, int lvl) // the text layer's transparency,
 	w->textLevel = lvl;
 }
 
-// "92 8D": Window_DrawBmpToText with script bitmap `bmp`; 2 when it does not exist
-int Window_DrawToText(Window_t* w, Rect_t* outScreen, int x, int y, int bmp, int effect, int level)
+// "92 8D": Window_DrawBmpToText with script bitmap `bmp`; 2 when it does not exist (*outScreen empty)
+int Window_DrawToText(OpenBGI_t* o, Window_t* w, Rect_t* outScreen, int x, int y, int bmp, int effect, int level)
 {
 	Bmp_t info;
 
-	if(!BmpMgr_GetInfo(gDispBmpMgr, &info, bmp))
+	if(!BmpMgr_GetInfo(o->gfx.dispBmpMgr, &info, bmp))
+	{
+		outScreen->l = outScreen->t = 0;
+		outScreen->r = outScreen->b = -1;
 		return 2;
-	return Window_DrawBmpToText(w, outScreen, x, y, &info, effect, level);
+	}
+	return Window_DrawBmpToText(o, w, outScreen, x, y, &info, effect, level);
 }
 
 /* like Window_DrawToFrame but into the text layer, clipped to the usable
  * text area; (x, y) are text-layer coordinates.  The touched rectangle is
  * recomposited and returned in *outScreen in screen coordinates.  0 ok,
- * 4..7 the blit failed (Window_BlitResult). */
-int Window_DrawBmpToText(Window_t* w, Rect_t* outScreen, int x, int y, const Bmp_t* src, int effect, int level)
+ * 4..7 the blit failed (Window_BlitResult; *outScreen is empty then). */
+int Window_DrawBmpToText(OpenBGI_t* o, Window_t* w, Rect_t* outScreen, int x, int y, const Bmp_t* src, int effect, int level)
 {
 	Bmp_t t = w->text;
 	Rect_t area, r2;
 	int32_t pos[2];
 	int r;
 
+	outScreen->l = outScreen->t = 0; // nothing drawn, nothing to repaint
+	outScreen->r = outScreen->b = -1;
 	Window_UsableArea(w, &area);
 	Bmp_Crop(&t, &area);
 	r = Bmp_Blit(&t, x - area.l, y - area.t, src, effect, level);
@@ -59,9 +66,9 @@ int Window_DrawBmpToText(Window_t* w, Rect_t* outScreen, int x, int y, const Bmp
 		Rect_FromBmp(&r2, src);
 		Rect_Offset(&r2, x, y);
 		Rect_Clip(outScreen, &r2);
-		w->obj.vt->getPos(&w->obj, pos);
+		w->obj.vt->getPos(o, &w->obj, pos);
 		Rect_Offset(outScreen, pos[0], pos[1]);
-		Window_RecompositeAt(w, x, y, src);
+		Window_RecompositeAt(o, w, x, y, src);
 		return 0;
 	}
 	return Window_BlitResult(r, 0);
@@ -75,7 +82,7 @@ int Window_DrawBmpToText(Window_t* w, Rect_t* outScreen, int x, int y, const Bmp
  * rectangles, which are recomposited one by one, and the cursor moves
  * behind the text.  Returns the layout's result: 1 drawn, 0 when the font
  * is unknown. */
-int Window_DrawText(Window_t* w, const char* str, int parseTags, int hang, uint32_t colour,
+int Window_DrawText(OpenBGI_t* o, Window_t* w, const char* str, int parseTags, int hang, uint32_t colour,
 	uint32_t rubyColour, const int32_t style[5])
 {
 	char tags[0x400];
@@ -90,18 +97,18 @@ int Window_DrawText(Window_t* w, const char* str, int parseTags, int hang, uint3
 
 	Window_SetTextLevel(w, 0);
 	Window_ShowText(w, 1);
-	Window_ItemsDisableAll(w);
+	Window_ItemsDisableAll(o, w);
 	Window_GetCursor(w, cur);
 	Window_GetTextArea(w, &area);
 
 	// the original seeds tags[0] from the engine's always-empty 8-byte
-	// string (gEmptyPath) and zero-fills the rest
+	// string (o->files.emptyPath) and zero-fills the rest
 	memset(tags, 0, sizeof tags);
-	tags[0] = gEmptyPath[0];
+	tags[0] = o->files.emptyPath[0];
 	if(parseTags)
-		Text_ParseTags(tags, str);
-	if(Window_DocActive(w)) // OpenBGI "EF 08": the glyphs are kept, so that the text can scroll
-		return Window_DocDrawText(w, str, parseTags, tags, hang, colour, rubyColour, style);
+		Text_ParseTags(o, tags, str);
+	if(Window_DocActive(o, w)) // OpenBGI "EF 08": the glyphs are kept, so that the text can scroll
+		return Window_DocDrawText(o, w, str, parseTags, tags, hang, colour, rubyColour, style);
 
 	font = Window_GetFont(w);
 	proportional = Window_GetProportional(w);
@@ -112,11 +119,11 @@ int Window_DrawText(Window_t* w, const char* str, int parseTags, int hang, uint3
 	switch(Window_GetDrawStyle(w))
 	{
 		case 0:
-			ok = Text_LayoutH(&w->text, &rectCount, rects, &extra, cur, &area, str, parseTags, tags,
+			ok = Text_LayoutH(o, &w->text, &rectCount, rects, &extra, cur, &area, str, parseTags, tags,
 				font, proportional, hang, swing, spacing, colour, rubyColour, style, 0, 0);
 			break;
 		case 1:
-			ok = Text_LayoutV(&w->text, &rectCount, rects, &extra, cur, &area, str, parseTags, tags,
+			ok = Text_LayoutV(o, &w->text, &rectCount, rects, &extra, cur, &area, str, parseTags, tags,
 				font, proportional, hang, swing, spacing, colour, rubyColour, style, 0, 0);
 			break;
 		default:
@@ -126,7 +133,7 @@ int Window_DrawText(Window_t* w, const char* str, int parseTags, int hang, uint3
 	if(ok)
 	{
 		for(i = 0; i < (size_t)(uint32_t)rectCount; i++)
-			Window_Recomposite(w, &rects[i]);
+			Window_Recomposite(o, w, &rects[i]);
 		Window_SetCursor(w, cur[0], cur[1]);
 	}
 	BGI_Free(rects);
@@ -168,17 +175,17 @@ int Window_SetTextArea(Window_t* w, int x, int y, int cw, int ch)
 }
 
 // clear the whole text layer and recomposite
-void Window_ClearText(Window_t* w)
+void Window_ClearText(OpenBGI_t* o, Window_t* w)
 {
 	Window_DocDrop(w); // (OpenBGI) the kept text document goes with the pixels
 	Bmp_Clear(&w->text, NULL);
-	Window_RecompositeAll(w);
+	Window_RecompositeAll(o, w);
 }
 
 /* move the usable area's contents up by n pixels and clear the
  * vacated strip (the whole area when n is not smaller than its height).
  * 1 when scrolled, 0 for n <= 0. */
-int Window_Scroll(Window_t* w, int n)
+int Window_Scroll(OpenBGI_t* o, Window_t* w, int n)
 {
 	Rect_t area, r;
 	Bmp_t src;
@@ -197,7 +204,7 @@ int Window_Scroll(Window_t* w, int n)
 		r.t = area.b - n + 1;
 	}
 	Bmp_Clear(&w->text, &r);
-	Window_RecompositeAll(w);
+	Window_RecompositeAll(o, w);
 	return 1;
 }
 
@@ -214,11 +221,11 @@ void Window_UsableArea(Window_t* w, Rect_t* out)
 }
 
 // the text layer's rectangle in screen coordinates
-void Window_TextScreenRect(Window_t* w, Rect_t* out)
+void Window_TextScreenRect(OpenBGI_t* o, Window_t* w, Rect_t* out)
 {
 	int32_t pos[2];
 
-	w->obj.vt->getPos(&w->obj, pos);
+	w->obj.vt->getPos(o, &w->obj, pos);
 	Rect_FromBmp(out, &w->text);
 	Rect_Offset(out, pos[0], pos[1]);
 }
@@ -237,12 +244,12 @@ int Window_RubyReserve(Window_t* w)
  * in so the reservation fits.  Returns the font cache result (0 ok,
  * 0x80000002 bad size, 0x80000003 bad width, 0x80000004 the font could
  * not be opened). */
-int Window_SetFont(Window_t* w, const char* face, int size, int widthPct, int bold)
+int Window_SetFont(OpenBGI_t* o, Window_t* w, const char* face, int size, int widthPct, int bold)
 {
 	Rect_t area, tr;
 	int r, limit;
 
-	r = BmpMgr_FontOpen(gDispBmpMgr, &w->font, face, size, widthPct, bold);
+	r = BmpMgr_FontOpen(o, o->gfx.dispBmpMgr, &w->font, face, size, widthPct, bold);
 	if(r != 0)
 		return r;
 	w->fontSize = size;
@@ -445,7 +452,7 @@ void Window_GetCursor(Window_t* w, int32_t out[2]) // "91 8D"
 
 /* "91 8E": 1 when the cursor sits at the start of a line, i.e.
  * at the area's leading edge plus the text engine's indent. */
-int Window_CursorAtLineStart(Window_t* w)
+int Window_CursorAtLineStart(OpenBGI_t* o, Window_t* w)
 {
 	int32_t cur[2];
 	Rect_t area;
@@ -454,8 +461,8 @@ int Window_CursorAtLineStart(Window_t* w)
 	Window_GetTextArea(w, &area);
 	switch(Window_GetDrawStyle(w))
 	{
-		case 0: return cur[0] == area.l + Text_GetIndent();
-		case 1: return cur[1] == area.t + Text_GetIndent();
+		case 0: return cur[0] == area.l + Text_GetIndent(o);
+		case 1: return cur[1] == area.t + Text_GetIndent(o);
 		default: return 0;
 	}
 }

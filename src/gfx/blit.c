@@ -2,7 +2,7 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * blit.c - the effect routines of Bmp_BlitEffect (inc/bgi/gfx/bitmap.h):
+ * blit.c - the effect routines of Bmp_BlitEffect (src/include/bgi/gfx/bitmap.h):
  * copies, alpha blending, cross fades, additive drawing, punch-through,
  * dimming and tinting.  The arithmetic blend modes (subtract, multiply,
  * screen, overlay ...) are in blit_modes.c; the filters, gray conversions
@@ -27,16 +27,7 @@
  * views of the same size (Bmp_Blit does that for a positioned blit).  A
  * routine given a mode combination it does not implement draws nothing.
  */
-#include "bgi/gfx/bitmap.h"
-
-// pack a lane to a byte with unsigned saturation (packuswb)
-static inline uint8_t Sat8(int v)
-{
-	return (uint8_t)(v < 0 ? 0 : v > 255 ? 255
-										 : v);
-}
-
-#define ROW(b, y) ((b)->pixels + (size_t)(y) * (size_t)(b)->pitch)
+#include "blit_internal.h"
 
 // ========================================================================
 // 0x80 raw copy and 0x00 alpha copy
@@ -110,15 +101,9 @@ static void AlphaCopy32_To1(Bmp_t* dst, const Bmp_t* src)
 		for(x = 0; x < src->w; x++)
 		{
 			uint32_t sv = s[x], dv = d[x];
-			int a = (int)(sv >> 25), i, out = (int)(dv & 0xff000000u);
 			if(!(sv & 0xfe000000u))
 				continue;
-			for(i = 0; i < 24; i += 8)
-			{
-				int sc = (int)((sv >> i) & 0xff), dc = (int)((dv >> i) & 0xff);
-				out |= Sat8((((sc - dc) * a) >> 7) + dc) << i;
-			}
-			d[x] = (uint32_t)out;
+			d[x] = (dv & 0xff000000u) | Lerp7(dv, sv, sv >> 25);
 		}
 	}
 }
@@ -229,14 +214,8 @@ static void Blend32_Plain(Bmp_t* dst, const Bmp_t* src, int level)
 		uint32_t* d = (uint32_t*)ROW(dst, y);
 		for(x = 0; x < src->w; x++)
 		{
-			uint32_t sv = s[x], dv = d[x];
-			int i, out = (int)(sv & 0xff000000u);
-			for(i = 0; i < 24; i += 8)
-			{
-				int sc = (int)((sv >> i) & 0xff), dc = (int)((dv >> i) & 0xff);
-				out |= Sat8((((dc - sc) * l2) >> 7) + sc) << i;
-			}
-			d[x] = (uint32_t)out;
+			uint32_t sv = s[x];
+			d[x] = (sv & 0xff000000u) | Lerp7(sv, d[x], (uint32_t)l2);
 		}
 	}
 }
@@ -281,16 +260,9 @@ static void Blend32_2to1(Bmp_t* dst, const Bmp_t* src, int level)
 		for(x = 0; x < src->w; x++)
 		{
 			uint32_t sv = s[x], dv = d[x];
-			int w, i, out = (int)(dv & 0xff000000u);
 			if(!(sv & 0xfe000000u))
 				continue;
-			w = ((int)(sv >> 25) * inv) >> 8;
-			for(i = 0; i < 24; i += 8)
-			{
-				int sc = (int)((sv >> i) & 0xff), dc = (int)((dv >> i) & 0xff);
-				out |= Sat8((((sc - dc) * w) >> 7) + dc) << i;
-			}
-			d[x] = (uint32_t)out;
+			d[x] = (dv & 0xff000000u) | Lerp7(dv, sv, ((sv >> 25) * (uint32_t)inv) >> 8);
 		}
 	}
 }
@@ -554,6 +526,22 @@ static void Add16(Bmp_t* dst, const Bmp_t* src, int level)
 static void Add32_From1(Bmp_t* dst, const Bmp_t* src, int level, int withAlpha)
 {
 	int y, x;
+	if(level <= 0x100)
+	{ // (the scaled colour stays a byte: three lanes at once)
+		uint32_t top = withAlpha ? (uint32_t)(level > 0xff ? 0xff : level) << 24 : 0;
+		for(y = 0; y < src->h; y++)
+		{
+			const uint32_t* s = (const uint32_t*)ROW(src, y);
+			uint32_t* d = (uint32_t*)ROW(dst, y);
+			for(x = 0; x < src->w; x++)
+			{
+				uint32_t sv = s[x];
+				if(sv & 0x00ffffffu)
+					d[x] = AddSat4(d[x], Scale3(sv, (uint32_t)level, 8) | top);
+			}
+		}
+		return;
+	}
 	for(y = 0; y < src->h; y++)
 	{
 		const uint8_t* s = ROW(src, y);
@@ -590,18 +578,14 @@ static void Add32_From2(Bmp_t* dst, const Bmp_t* src, int level, int withAlpha)
 		uint32_t* d = (uint32_t*)ROW(dst, y);
 		for(x = 0; x < src->w; x++)
 		{
-			uint32_t sv = s[x], dv = d[x];
-			int a = (int)(sv >> 25), w, i, out = 0;
+			uint32_t sv = s[x], dv = d[x], out;
+			int a = (int)(sv >> 25), w;
 			if(!(sv & 0xfe000000u))
 				continue;
 			w = level >= 0x100 ? a : (a * level) >> 8;
-			for(i = 0; i < 24; i += 8)
-			{
-				int sc = (int)((sv >> i) & 0xff), dc = (int)((dv >> i) & 0xff);
-				out |= Sat8(dc + Sat8((sc * w) >> 7)) << i;
-			}
+			out = AddSat4(dv & 0x00ffffffu, Scale3(sv, (uint32_t)w, 7));
 			if(withAlpha)
-				out |= Sat8((int)(dv >> 24) + Sat8(w << 1)) << 24;
+				out |= (uint32_t)Sat8((int)(dv >> 24) + Sat8(w << 1)) << 24;
 			else
 				out |= (int)(dv & 0xff000000u);
 			d[x] = (uint32_t)out;
@@ -717,8 +701,7 @@ static void Dim32(Bmp_t* dst, const Bmp_t* src, int level)
 		uint32_t* d = (uint32_t*)ROW(dst, y);
 		for(x = 0; x < src->w; x++)
 		{
-			uint32_t sv = s[x];
-			d[x] = (uint32_t)(((sv & 0xff) * inv) >> 8) | (uint32_t)((((sv >> 8) & 0xff) * inv) >> 8) << 8 | (uint32_t)((((sv >> 16) & 0xff) * inv) >> 8) << 16;
+			d[x] = Scale3(s[x], (uint32_t)inv, 8);
 		}
 	}
 }
@@ -737,6 +720,11 @@ static void Dim32_2to1(Bmp_t* dst, const Bmp_t* src, int level)
 			int a = (int)(sv >> 25), i, out = (int)(dv & 0xff000000u);
 			if(!(sv & 0xfe000000u))
 				continue;
+			if(inv > 0)
+			{ // (the dimmed colour stays a byte: three lanes at once)
+				d[x] = (dv & 0xff000000u) | Lerp7(dv, Scale3(sv, (uint32_t)inv, 8), (uint32_t)a);
+				continue;
+			}
 			for(i = 0; i < 24; i += 8)
 			{
 				int sc = (int)((sv >> i) & 0xff), dc = (int)((dv >> i) & 0xff);

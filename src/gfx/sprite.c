@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * sprite.c - Sprite, the general-purpose image object (class order 2).
- * Interface in inc/bgi/gfx/sprite.h.
+ * Interface in src/include/bgi/gfx/sprite.h.
  *
  * A sprite is in one of six modes, each selected by one "set" instruction:
  * "90 56" plain, "90 58" blend, "90 59" transform, "90 5A" wipe, "90 5B"
@@ -29,9 +29,10 @@
 #include "bgi/gfx/sprite.h"
 #include "bgi/gfx/gfxmgr.h" // the projection centre of 1.535 on
 #include "bgi/version.h"    // the parameters the later builds added
+#include "bgi/core.h"
 
 /* the projection distance of the perspective scale: 0 (no depth scaling)
- * while setParam 0x8001 of 1.494 on is set */
+ * while setParam 0x8001 of 1.492 on is set */
 #define SpProjDist(s) ((s)->obj.noPerspective ? 0 : (s)->projDist)
 
 #define DEG16_TO_RAD  2.663161090079238e-07 // 2*pi / (360 << 16): 16.16 degrees to radians
@@ -42,21 +43,21 @@
 // ========================================================================
 
 // the descriptor of bitmap `no`; 0 when there is no such bitmap
-static int SpGetInfo(Bmp_t* out, int no)
+static int SpGetInfo(OpenBGI_t* o, Bmp_t* out, int no)
 {
-	return BmpMgr_GetInfo(gDispBmpMgr, out, no);
+	return BmpMgr_GetInfo(o->gfx.dispBmpMgr, out, no);
 }
 
 // the generation counter of bitmap slot `no` (bumped on every load / free)
-static int SpGen(int no)
+static int SpGen(OpenBGI_t* o, int no)
 {
-	return BmpMgr_Generation(gDispBmpMgr, no);
+	return BmpMgr_Generation(o->gfx.dispBmpMgr, no);
 }
 
 // the descriptor of bitmap `no`, but only while it still is the bitmap of generation `gen` the sprite was set with
-static int SpCurrent(Bmp_t* out, int no, int gen)
+static int SpCurrent(OpenBGI_t* o, Bmp_t* out, int no, int gen)
 {
-	return SpGetInfo(out, no) && SpGen(no) == gen;
+	return SpGetInfo(o, out, no) && SpGen(o, no) == gen;
 }
 
 // (a * b) >> sh in 64 bits with a sign-extended and b zero-extended
@@ -97,9 +98,9 @@ static void FreeBmpSlot(Bmp_t* b, int* had)
 // ========================================================================
 
 // invisible, sizeless, mode 0 with no bitmap
-void Sprite_Ctor(Sprite_t* s, int slotId)
+void Sprite_Ctor(OpenBGI_t* o, Sprite_t* s, int slotId)
 {
-	DispObj_Ctor(&s->obj, 2, slotId);
+	DispObj_Ctor(o, &s->obj, 2, slotId);
 	s->obj.vt = &Sprite_Vtbl;
 	s->bmp1 = -1;
 	s->levelRoute = -1;
@@ -115,12 +116,12 @@ void Sprite_Ctor(Sprite_t* s, int slotId)
 }
 
 // unlink the mask sprite in both directions, drop the caches, then the base destructor
-void Sprite_Dtor(Sprite_t* s)
+void Sprite_Dtor(OpenBGI_t* o, Sprite_t* s)
 {
 	s->obj.vt = &Sprite_Vtbl;
-	Sprite_LinkMask(s, NULL); // (the links of "91 55" cannot outlive either side)
+	Sprite_LinkMask(o, s, NULL); // (the links of "91 55" cannot outlive either side)
 	if(s->maskUser)
-		Sprite_LinkMask(s->maskUser, NULL);
+		Sprite_LinkMask(o, s->maskUser, NULL);
 	Sprite_DropCaches(s);
 	DispObj_Dtor(&s->obj);
 }
@@ -131,11 +132,11 @@ void Sprite_Dtor(Sprite_t* s)
  * 0 ok, 0x8000000B already linked, 0x8000000C nothing to unlink,
  * 0x8000000D the mask sprite is in use, 0x8000000E the mask sprite had no
  * user. */
-uint32_t Sprite_LinkMask(Sprite_t* s, Sprite_t* mask)
+uint32_t Sprite_LinkMask(OpenBGI_t* o, Sprite_t* s, Sprite_t* mask)
 {
 	if(mask)
 	{
-		Sprite_SetMask(s, -1);
+		Sprite_SetMask(o, s, -1);
 		if(s->maskObj)
 			return 0x8000000bu;
 		if(mask->maskUser)
@@ -153,11 +154,11 @@ uint32_t Sprite_LinkMask(Sprite_t* s, Sprite_t* mask)
 	return 0;
 }
 
-static void Sprite_Destroy(DispObj_t* o, int flags)
+static void Sprite_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	Sprite_Dtor((Sprite_t*)o);
+	Sprite_Dtor(o, (Sprite_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
 // ========================================================================
@@ -165,14 +166,14 @@ static void Sprite_Destroy(DispObj_t* o, int flags)
 // ========================================================================
 
 // "90 56": place the sprite with one bitmap, effect, level and priority; the Sprite_SetPlain result
-int Sprite_Set(Sprite_t* s, int x, int y, int bmp, int effect, int level, int prio)
+int Sprite_Set(OpenBGI_t* o, Sprite_t* s, int x, int y, int bmp, int effect, int level, int prio)
 {
-	int r = Sprite_SetPlain(s, bmp);
+	int r = Sprite_SetPlain(o, s, bmp);
 	if(r == 0)
 	{
-		s->obj.vt->setPos(&s->obj, x, y);
+		s->obj.vt->setPos(o, &s->obj, x, y);
 		DispObj_SetEffect(&s->obj, effect);
-		s->obj.vt->setLevel(&s->obj, level);
+		s->obj.vt->setLevel(o, &s->obj, level);
 		DispObj_SetPriority(&s->obj, (uint32_t)prio);
 	}
 	return r;
@@ -181,15 +182,15 @@ int Sprite_Set(Sprite_t* s, int x, int y, int bmp, int effect, int level, int pr
 /* "90 58": the blend mode placed; the effect is forced to 1 (blend) and the
  * level is stored through the base class (the override would route it by
  * levelRoute).  The Sprite_SetBlend result. */
-int Sprite_SetBlendEx(Sprite_t* s, int x, int y, int bmp1, int bmp2, int mixRatio, int level, int prio,
+int Sprite_SetBlendEx(OpenBGI_t* o, Sprite_t* s, int x, int y, int bmp1, int bmp2, int mixRatio, int level, int prio,
 	int levelRoute)
 {
-	int r = Sprite_SetBlend(s, bmp1, bmp2, mixRatio, levelRoute);
+	int r = Sprite_SetBlend(o, s, bmp1, bmp2, mixRatio, levelRoute);
 	if(r == 0)
 	{
-		s->obj.vt->setPos(&s->obj, x, y);
+		s->obj.vt->setPos(o, &s->obj, x, y);
 		DispObj_SetEffect(&s->obj, 1);
-		DispObj_SetLevel(&s->obj, level);
+		DispObj_SetLevel(o, &s->obj, level);
 		DispObj_SetPriority(&s->obj, (uint32_t)prio);
 	}
 	return r;
@@ -198,29 +199,29 @@ int Sprite_SetBlendEx(Sprite_t* s, int x, int y, int bmp1, int bmp2, int mixRati
 /* "90 59": the transform mode placed.  The animation deltas and the curve
  * are cleared and the common state is set first, then the transform; the
  * Sprite_SetTransform result (the common state stays set when it fails). */
-int Sprite_SetTransformEx(Sprite_t* s, int x, int y, int bmp, int ox, int oy, int32_t angle, int32_t sx,
+int Sprite_SetTransformEx(OpenBGI_t* o, Sprite_t* s, int x, int y, int bmp, int ox, int oy, int32_t angle, int32_t sx,
 	int32_t sy, int smooth, int effect, int level, int prio)
 {
 	s->dOx = s->dOy = s->dAngle = s->dSx = s->dSy = s->curve = 0;
-	s->obj.vt->setPos(&s->obj, x, y);
+	s->obj.vt->setPos(o, &s->obj, x, y);
 	DispObj_SetEffect(&s->obj, effect);
-	s->obj.vt->setLevel(&s->obj, level);
+	s->obj.vt->setLevel(o, &s->obj, level);
 	DispObj_SetPriority(&s->obj, (uint32_t)prio);
-	return Sprite_SetTransform(s, bmp, ox, oy, angle, sx, sy, smooth);
+	return Sprite_SetTransform(o, s, bmp, ox, oy, angle, sx, sy, smooth);
 }
 
 // "90 5A": the wipe mode placed, with the blitter's mode and the starting progress; the Sprite_SetWipe result
-int Sprite_SetWipeEx(Sprite_t* s, int x, int y, int bmp, int gray, int wipeMode, int progress, int effect,
+int Sprite_SetWipeEx(OpenBGI_t* o, Sprite_t* s, int x, int y, int bmp, int gray, int wipeMode, int progress, int effect,
 	int level, int prio)
 {
-	int r = Sprite_SetWipe(s, bmp, gray);
+	int r = Sprite_SetWipe(o, s, bmp, gray);
 	if(r == 0)
 	{
-		s->obj.vt->setPos(&s->obj, x, y);
+		s->obj.vt->setPos(o, &s->obj, x, y);
 		s->wipeMode = wipeMode;
-		DispObj_SetProgressInt(&s->obj, progress);
+		DispObj_SetProgressInt(o, &s->obj, progress);
 		DispObj_SetEffect(&s->obj, effect);
-		s->obj.vt->setLevel(&s->obj, level);
+		s->obj.vt->setLevel(o, &s->obj, level);
 		DispObj_SetPriority(&s->obj, (uint32_t)prio);
 	}
 	return r;
@@ -229,15 +230,15 @@ int Sprite_SetWipeEx(Sprite_t* s, int x, int y, int bmp, int gray, int wipeMode,
 /* "90 5B": the ripple mode placed.  `level` is the ripple amplitude
  * (consumed by Sprite_SetRipple), `fade` the transparency the blitter
  * draws with; the effect is forced to 1.  The Sprite_SetRipple result. */
-int Sprite_SetRippleEx(Sprite_t* s, int x, int y, int bmp, int map, int rings, int rippleNo, int level,
+int Sprite_SetRippleEx(OpenBGI_t* o, Sprite_t* s, int x, int y, int bmp, int map, int rings, int rippleNo, int level,
 	int fade, int prio)
 {
-	int r = Sprite_SetRipple(s, bmp, map, rings, rippleNo, level);
+	int r = Sprite_SetRipple(o, s, bmp, map, rings, rippleNo, level);
 	if(r == 0)
 	{
-		s->obj.vt->setPos(&s->obj, x, y);
+		s->obj.vt->setPos(o, &s->obj, x, y);
 		DispObj_SetEffect(&s->obj, 1);
-		DispObj_SetFade(&s->obj, fade);
+		DispObj_SetFade(o, &s->obj, fade);
 		DispObj_SetPriority(&s->obj, (uint32_t)prio);
 	}
 	return r;
@@ -246,34 +247,34 @@ int Sprite_SetRippleEx(Sprite_t* s, int x, int y, int bmp, int map, int rings, i
 /* "90 5C": the projected mode placed: depth ordering on, the position from
  * the 16.16 triple; the deltas and the curve are cleared.  The
  * Sprite_SetProjected result. */
-int Sprite_SetProjectedEx(Sprite_t* s, int32_t fx, int32_t fy, int32_t fz, int bmp1, int bmp2, int mixRatio,
+int Sprite_SetProjectedEx(OpenBGI_t* o, Sprite_t* s, int32_t fx, int32_t fy, int32_t fz, int bmp1, int bmp2, int mixRatio,
 	int levelRoute, int ox, int oy, int32_t angle, int projDist, int projPos,
 	int smooth, int effect, int level, int prio)
 {
 	s->dOx = s->dOy = s->dAngle = s->dSx = s->dSy = s->curve = 0;
 	DispObj_SetFlat(&s->obj, 0);
-	s->obj.vt->setFixedPos(&s->obj, fx, fy, fz);
+	s->obj.vt->setFixedPos(o, &s->obj, fx, fy, fz);
 	DispObj_SetEffect(&s->obj, effect);
-	s->obj.vt->setLevel(&s->obj, level);
+	s->obj.vt->setLevel(o, &s->obj, level);
 	DispObj_SetPriority(&s->obj, (uint32_t)prio);
-	return Sprite_SetProjected(s, bmp1, bmp2, mixRatio, levelRoute, ox, oy, angle, projDist, projPos, smooth);
+	return Sprite_SetProjected(o, s, bmp1, bmp2, mixRatio, levelRoute, ox, oy, angle, projDist, projPos, smooth);
 }
 
 /* "90 57" (and setParam 0x10 of 1.573 on): replace the bitmap, keeping the
  * mode's parameters.  Modes 0, 2 and 5 only (mode 5 loses its second
  * bitmap); the other modes return 0 without doing anything.  Else the
  * mode core's result. */
-int Sprite_ChangeBitmap(Sprite_t* s, int bmp)
+int Sprite_ChangeBitmap(OpenBGI_t* o, Sprite_t* s, int bmp)
 {
 	switch(s->mode)
 	{
 		case 0:
-			return Sprite_SetPlain(s, bmp);
+			return Sprite_SetPlain(o, s, bmp);
 		case 2:
-			return Sprite_SetTransform(s, bmp, (int16_t)(s->ox >> 16), (int16_t)(s->oy >> 16),
+			return Sprite_SetTransform(o, s, bmp, (int16_t)(s->ox >> 16), (int16_t)(s->oy >> 16),
 				s->angle, s->sx, s->sy, s->smooth);
 		case 5:
-			return Sprite_SetProjected(s, bmp, -1, 0, -1, (int16_t)(s->ox >> 16), (int16_t)(s->oy >> 16),
+			return Sprite_SetProjected(o, s, bmp, -1, 0, -1, (int16_t)(s->ox >> 16), (int16_t)(s->oy >> 16),
 				s->angle, s->projDist, s->projPos, s->smooth);
 		default:
 			return 0;
@@ -285,17 +286,17 @@ int Sprite_ChangeBitmap(Sprite_t* s, int bmp)
 // ========================================================================
 
 // mode 0: one bitmap; 0 ok, 0x80000001 no such bitmap
-int Sprite_SetPlain(Sprite_t* s, int bmp)
+int Sprite_SetPlain(OpenBGI_t* o, Sprite_t* s, int bmp)
 {
 	Bmp_t b;
-	if(!SpGetInfo(&b, bmp))
+	if(!SpGetInfo(o, &b, bmp))
 		return (int)0x80000001;
 	Sprite_DropCaches(s);
 	s->mode = 0;
 	s->bmp1 = bmp;
-	s->gen1 = SpGen(bmp);
+	s->gen1 = SpGen(o, bmp);
 	s->levelRoute = -1;
-	s->obj.vt->setSize(&s->obj, b.w, b.h);
+	s->obj.vt->setSize(o, &s->obj, b.w, b.h);
 	return 0;
 }
 
@@ -303,12 +304,12 @@ int Sprite_SetPlain(Sprite_t* s, int bmp)
  * first, 0x100 = the second); `levelRoute` says what setLevel drives from
  * now on (-1 / 0 the level, 1 the mix ratio, 2 both).  0 ok, 0x80000001 /
  * 0x80000002 no such bitmap, 0x80000003 the sizes differ. */
-int Sprite_SetBlend(Sprite_t* s, int bmp1, int bmp2, int mixRatio, int levelRoute)
+int Sprite_SetBlend(OpenBGI_t* o, Sprite_t* s, int bmp1, int bmp2, int mixRatio, int levelRoute)
 {
 	Bmp_t a, b;
-	if(!SpGetInfo(&a, bmp1))
+	if(!SpGetInfo(o, &a, bmp1))
 		return (int)0x80000001;
-	if(!SpGetInfo(&b, bmp2))
+	if(!SpGetInfo(o, &b, bmp2))
 		return (int)0x80000002;
 	if(a.w != b.w || a.h != b.h)
 		return (int)0x80000003;
@@ -316,11 +317,11 @@ int Sprite_SetBlend(Sprite_t* s, int bmp1, int bmp2, int mixRatio, int levelRout
 	s->mode = 1;
 	s->bmp1 = bmp1;
 	s->bmp2 = bmp2;
-	s->gen1 = SpGen(bmp1);
-	s->gen2 = SpGen(bmp2);
+	s->gen1 = SpGen(o, bmp1);
+	s->gen2 = SpGen(o, bmp2);
 	s->mixRatio = mixRatio;
 	s->levelRoute = levelRoute;
-	s->obj.vt->setSize(&s->obj, a.w, a.h);
+	s->obj.vt->setSize(o, &s->obj, a.w, a.h);
 	return 0;
 }
 
@@ -329,12 +330,12 @@ int Sprite_SetBlend(Sprite_t* s, int bmp1, int bmp2, int mixRatio, int levelRout
  * `smooth` selects bilinear sampling.  The object's size becomes the
  * bounding box of the transformed picture.  0 ok, 0x80000001 no such
  * bitmap, 0x80000004 the transformed picture is smaller than 2 x 2. */
-int Sprite_SetTransform(Sprite_t* s, int bmp, int ox, int oy, int32_t angle, int32_t sx, int32_t sy, int smooth)
+int Sprite_SetTransform(OpenBGI_t* o, Sprite_t* s, int bmp, int ox, int oy, int32_t angle, int32_t sx, int32_t sy, int smooth)
 {
 	Bmp_t b;
 	int32_t centre[2], cAngle, cSx, cSy, outW, outH, anchor[2];
 	int32_t ox16 = (int32_t)((uint32_t)ox << 16), oy16 = (int32_t)((uint32_t)oy << 16);
-	if(!SpGetInfo(&b, bmp))
+	if(!SpGetInfo(o, &b, bmp))
 		return (int)0x80000001;
 	Sprite_Animate(s, centre, &cAngle, &cSx, &cSy, ox16, oy16, angle, sx, sy);
 	Sprite_BoundsTransform(&outW, &outH, anchor, b.w, b.h, 0, centre[0], centre[1], cAngle, cSx, cSy);
@@ -344,7 +345,7 @@ int Sprite_SetTransform(Sprite_t* s, int bmp, int ox, int oy, int32_t angle, int
 	s->mode = 2;
 	s->zoomX = s->zoomY = 0x10000;
 	s->bmp1 = bmp;
-	s->gen1 = SpGen(bmp);
+	s->gen1 = SpGen(o, bmp);
 	s->sy = sy;
 	s->sx = sx;
 	s->angle = angle;
@@ -361,7 +362,7 @@ int Sprite_SetTransform(Sprite_t* s, int bmp, int ox, int oy, int32_t angle, int
 	s->levelRoute = -1;
 	s->ox = ox16;
 	s->oy = oy16;
-	s->obj.vt->setSize(&s->obj, outW, outH);
+	s->obj.vt->setSize(o, &s->obj, outW, outH);
 	return 0;
 }
 
@@ -370,12 +371,12 @@ int Sprite_SetTransform(Sprite_t* s, int bmp, int ox, int oy, int32_t angle, int
  * picture's size (a smaller pattern leaves the rest at 0).  0 ok,
  * 0x80000001 no such bitmap, 0x80000002 no such pattern, 0x8000000A the
  * pattern is not GRAY8. */
-int Sprite_SetWipe(Sprite_t* s, int bmp, int gray)
+int Sprite_SetWipe(OpenBGI_t* o, Sprite_t* s, int bmp, int gray)
 {
 	Bmp_t a, g;
-	if(!SpGetInfo(&a, bmp))
+	if(!SpGetInfo(o, &a, bmp))
 		return (int)0x80000001;
-	if(!SpGetInfo(&g, gray))
+	if(!SpGetInfo(o, &g, gray))
 		return (int)0x80000002;
 	if(g.mode != PM_GRAY8)
 		return (int)0x8000000a;
@@ -385,9 +386,9 @@ int Sprite_SetWipe(Sprite_t* s, int bmp, int gray)
 	Bmp_Blit(&s->wipeGray, 0, 0, &g, 0x80, 0);
 	s->mode = 3;
 	s->bmp1 = bmp;
-	s->gen1 = SpGen(bmp);
+	s->gen1 = SpGen(o, bmp);
 	s->levelRoute = -1;
-	s->obj.vt->setSize(&s->obj, a.w, a.h);
+	s->obj.vt->setSize(o, &s->obj, a.w, a.h);
 	return 0;
 }
 
@@ -398,23 +399,23 @@ int Sprite_SetWipe(Sprite_t* s, int bmp, int gray)
  * such map, 0x80000006 the map is not mode 6 or differs in size,
  * 0x80000007 no rings, 0x80000008 no such ripple definition, 0x80000009
  * the definition has fewer rings than asked for. */
-int Sprite_SetRipple(Sprite_t* s, int bmp, int map, int rings, int rippleNo, int level)
+int Sprite_SetRipple(OpenBGI_t* o, Sprite_t* s, int bmp, int map, int rings, int rippleNo, int level)
 {
 	Bmp_t a, m;
 	uint32_t* table;
 	int ok = 0;
-	if(!SpGetInfo(&a, bmp))
+	if(!SpGetInfo(o, &a, bmp))
 		return (int)0x80000001;
 	if((uint32_t)a.w == 0 || (uint32_t)a.h == 0)
 		return (int)0x8000000a;
-	if(!SpGetInfo(&m, map))
+	if(!SpGetInfo(o, &m, map))
 		return (int)0x80000005;
 	if(m.mode != 6 || m.w != a.w || m.h != a.h)
 		return (int)0x80000006;
 	if((uint32_t)rings == 0)
 		return (int)0x80000007;
 	table = (uint32_t*)BGI_Alloc((size_t)rings * 16);
-	if(BmpMgr_RippleCheck(gDispBmpMgr, &ok, rippleNo, 0, rings) != 0)
+	if(BmpMgr_RippleCheck(o->gfx.dispBmpMgr, &ok, rippleNo, 0, rings) != 0)
 	{
 		BGI_Free(table);
 		return (int)0x80000008;
@@ -429,14 +430,14 @@ int Sprite_SetRipple(Sprite_t* s, int bmp, int map, int rings, int rippleNo, int
 	s->levelRoute = -1;
 	s->bmp1 = bmp;
 	s->rippleMap = map;
-	s->gen1 = SpGen(bmp);
-	s->rippleMapGen = SpGen(map);
+	s->gen1 = SpGen(o, bmp);
+	s->rippleMapGen = SpGen(o, map);
 	s->rings = rings;
 	s->ringTable = table;
 	s->rippleNo = rippleNo;
 	s->rippleSel = 0;
-	s->obj.vt->setLevel(&s->obj, level);
-	s->obj.vt->setSize(&s->obj, a.w, a.h);
+	s->obj.vt->setLevel(o, &s->obj, level);
+	s->obj.vt->setSize(o, &s->obj, a.w, a.h);
 	return 0;
 }
 
@@ -446,23 +447,23 @@ int Sprite_SetRipple(Sprite_t* s, int bmp, int map, int rings, int rippleNo, int
  * The object switches to depth ordering (the caller does that).  0 ok,
  * 0x80000001 / 0x80000002 no such bitmap, 0x80000003 the two bitmaps differ
  * in size or mode, 0x80000004 the projected picture is smaller than 2 x 2. */
-int Sprite_SetProjected(Sprite_t* s, int bmp1, int bmp2, int mixRatio, int levelRoute, int ox, int oy,
+int Sprite_SetProjected(OpenBGI_t* o, Sprite_t* s, int bmp1, int bmp2, int mixRatio, int levelRoute, int ox, int oy,
 	int32_t angle, int projDist, int projPos, int smooth)
 {
 	Bmp_t a, b;
 	int hasB = bmp2 != -1;
 	int32_t fp[4], scale, centre[2], cAngle, cSx, cSy, outW, outH, anchor[2], skew;
 	int32_t ox16 = (int32_t)((uint32_t)ox << 16), oy16 = (int32_t)((uint32_t)oy << 16);
-	if(!SpGetInfo(&a, bmp1))
+	if(!SpGetInfo(o, &a, bmp1))
 		return (int)0x80000001;
 	if(hasB)
 	{
-		if(!SpGetInfo(&b, bmp2))
+		if(!SpGetInfo(o, &b, bmp2))
 			return (int)0x80000002;
 		if(a.w != b.w || a.h != b.h || a.mode != b.mode)
 			return (int)0x80000003;
 	}
-	DispObj_EffFixedPos(&s->obj, fp); // with the "91 37" / "92 37" offsets of 1.69/472 on
+	DispObj_EffFixedPos(o, &s->obj, fp); // with the "91 37" / "92 37" offsets of 1.69/472 on
 	ProjectScale(&scale, fp[2], s->obj.noPerspective ? 0 : projDist);
 	Sprite_Animate(s, centre, &cAngle, &cSx, &cSy, ox16, oy16, angle, scale, scale);
 	skew = (uint32_t)s->skewOn > 0 ? s->skewAmount : 0;
@@ -475,8 +476,8 @@ int Sprite_SetProjected(Sprite_t* s, int bmp1, int bmp2, int mixRatio, int level
 	s->zoomX = s->zoomY = 0x10000;
 	s->bmp1 = bmp1;
 	s->bmp2 = bmp2;
-	s->gen1 = SpGen(bmp1);
-	s->gen2 = hasB ? SpGen(bmp2) : 0;
+	s->gen1 = SpGen(o, bmp1);
+	s->gen2 = hasB ? SpGen(o, bmp2) : 0;
 	s->mixRatio = hasB ? mixRatio : 0;
 	s->levelRoute = hasB ? levelRoute : -1;
 	s->angle = angle;
@@ -495,10 +496,10 @@ int Sprite_SetProjected(Sprite_t* s, int bmp1, int bmp2, int mixRatio, int level
 	s->anchorX = anchor[0];
 	s->ox = ox16;
 	s->oy = oy16;
-	Sprite_RebuildMix(s);
-	Sprite_RebuildSkew(s);
-	Sprite_ProjectPosition(s);
-	s->obj.vt->setSize(&s->obj, outW, outH);
+	Sprite_RebuildMix(o, s);
+	Sprite_RebuildSkew(o, s);
+	Sprite_ProjectPosition(o, s);
+	s->obj.vt->setSize(o, &s->obj, outW, outH);
 	return 0;
 }
 
@@ -508,24 +509,24 @@ int Sprite_SetProjected(Sprite_t* s, int bmp1, int bmp2, int mixRatio, int level
  * (the sprite shows only where the two overlap), and from 1.599 on an
  * ARGB32 one as well, whose alpha is the mask.  0 ok, 0x80000001 no such
  * bitmap, 0x8000000A not a usable mask. */
-int Sprite_SetMask(Sprite_t* s, int bmp)
+int Sprite_SetMask(OpenBGI_t* o, Sprite_t* s, int bmp)
 {
 	Bmp_t info, back;
 	int ok;
 	if(s->maskObj && bmp != -1) // 1.529 on: a bitmap mask replaces the linked sprite
-		Sprite_LinkMask(s, NULL);
+		Sprite_LinkMask(o, s, NULL);
 	if(bmp == -1)
 	{
 		s->maskBmp = -1;
 		s->maskOn = 0;
 		return 0;
 	}
-	if(!SpGetInfo(&info, bmp))
+	if(!SpGetInfo(o, &info, bmp))
 		return (int)0x80000001;
-	Gfx_CopyBackBmp(gDispGfx, &back);
-	if(gEngine->gen >= GEN_1_599)
+	Gfx_CopyBackBmp(o->gfx.dispGfx, &back);
+	if(o->engine.profile->gen >= GEN_1_599)
 		ok = info.mode == PM_GRAY8 || info.mode == PM_ARGB32;
-	else if(gEngine->gen >= GEN_1_529)
+	else if(o->engine.profile->gen >= GEN_1_529)
 		ok = info.mode == PM_GRAY8;
 	else
 		ok = info.mode == PM_GRAY8 && info.w == back.w && info.h == back.h;
@@ -533,7 +534,7 @@ int Sprite_SetMask(Sprite_t* s, int bmp)
 		return (int)0x8000000a;
 	s->maskOn = 1;
 	s->maskBmp = bmp;
-	s->maskGen = SpGen(bmp);
+	s->maskGen = SpGen(o, bmp);
 	return 0;
 }
 
@@ -552,21 +553,21 @@ void Sprite_SetOrigin(Sprite_t* s, int x, int y)
 }
 
 // setParam 0x41: the angle of modes 2 and 5 (16.16 degrees); the projected recompute is used for mode 2 as well
-void Sprite_SetAngle(Sprite_t* s, int32_t angle)
+void Sprite_SetAngle(OpenBGI_t* o, Sprite_t* s, int32_t angle)
 {
 	if(s->mode == 2 || s->mode == 5)
 	{
 		s->angle = angle;
-		Sprite_ProjectPosition(s);
-		Sprite_RecalcProjected(s);
+		Sprite_ProjectPosition(o, s);
+		Sprite_RecalcProjected(o, s);
 	}
 }
 
 // in modes 2 and 5 the position is where the origin lands, so the box starts `anchor` before it
-static void Sprite_GetDrawPos(DispObj_t* o, int32_t out[2])
+static void Sprite_GetDrawPos(OpenBGI_t* o, DispObj_t* obj, int32_t out[2])
 {
-	Sprite_t* s = (Sprite_t*)o;
-	DispObj_GetDrawPos(o, out);
+	Sprite_t* s = (Sprite_t*)obj;
+	DispObj_GetDrawPos(o, obj, out);
 	if(s->mode == 2 || s->mode == 5)
 	{
 		out[0] -= s->anchorX;
@@ -575,14 +576,14 @@ static void Sprite_GetDrawPos(DispObj_t* o, int32_t out[2])
 }
 
 // "91 33": a new depth changes the projected scale and box
-static void Sprite_SetFixedPos(DispObj_t* o, int32_t fx, int32_t fy, int32_t fz)
+static void Sprite_SetFixedPos(OpenBGI_t* o, DispObj_t* obj, int32_t fx, int32_t fy, int32_t fz)
 {
-	Sprite_t* s = (Sprite_t*)o;
-	DispObj_SetFixedPos(o, fx, fy, fz);
+	Sprite_t* s = (Sprite_t*)obj;
+	DispObj_SetFixedPos(o, obj, fx, fy, fz);
 	if(s->mode == 5)
 	{
-		Sprite_ProjectPosition(s);
-		Sprite_RecalcProjected(s);
+		Sprite_ProjectPosition(o, s);
+		Sprite_RecalcProjected(o, s);
 	}
 }
 
@@ -590,29 +591,29 @@ static void Sprite_SetFixedPos(DispObj_t* o, int32_t fx, int32_t fy, int32_t fz)
  * cross-fade or both, as levelRoute says (-1 / 0 the level, 1 the mix
  * ratio, 2 both).  In ripple mode the level is the amplitude and refills
  * the ring table. */
-static void Sprite_SetLevel(DispObj_t* o, int level)
+static void Sprite_SetLevel(OpenBGI_t* o, DispObj_t* obj, int level)
 {
-	Sprite_t* s = (Sprite_t*)o;
+	Sprite_t* s = (Sprite_t*)obj;
 	switch(s->levelRoute)
 	{
 		case 2:
-			DispObj_SetLevel(o, level);
+			DispObj_SetLevel(o, obj, level);
 			s->mixRatio = level;
-			Sprite_RebuildMix(s);
-			Sprite_RebuildSkew(s);
+			Sprite_RebuildMix(o, s);
+			Sprite_RebuildSkew(o, s);
 			break;
 		case 1:
 			s->mixRatio = level;
-			Sprite_RebuildMix(s);
-			Sprite_RebuildSkew(s);
+			Sprite_RebuildMix(o, s);
+			Sprite_RebuildSkew(o, s);
 			break;
 		case 0:
-			DispObj_SetLevel(o, level);
+			DispObj_SetLevel(o, obj, level);
 			break;
 		case -1:
 			if(s->mode == 4)
-				BmpMgr_RippleFill(gDispBmpMgr, s->ringTable, s->rippleNo, s->rippleSel, level, s->rings);
-			DispObj_SetLevel(o, level);
+				BmpMgr_RippleFill(o->gfx.dispBmpMgr, s->ringTable, s->rippleNo, s->rippleSel, level, s->rings);
+			DispObj_SetLevel(o, obj, level);
 			break;
 		default:
 			break;
@@ -620,43 +621,43 @@ static void Sprite_SetLevel(DispObj_t* o, int level)
 }
 
 // the value Sprite_SetLevel drives: the mix ratio for route 1, else the level
-static int Sprite_GetLevel(DispObj_t* o)
+static int Sprite_GetLevel(OpenBGI_t* o, DispObj_t* obj)
 {
-	Sprite_t* s = (Sprite_t*)o;
+	Sprite_t* s = (Sprite_t*)obj;
 	switch(s->levelRoute)
 	{
 		case 1: return s->mixRatio;
 		case 0:
 		case 2:
-		case -1: return DispObj_GetLevel(o);
+		case -1: return DispObj_GetLevel(o, obj);
 		default: return 0; // uninitialised in the original
 	}
 }
 
 // "90 35": a new progress moves the animated transform of modes 2 and 5
-static void Sprite_SetProgress(DispObj_t* o, int raw, int v)
+static void Sprite_SetProgress(OpenBGI_t* o, DispObj_t* obj, int raw, int v)
 {
-	Sprite_t* s = (Sprite_t*)o;
-	DispObj_SetProgress(o, raw, v);
+	Sprite_t* s = (Sprite_t*)obj;
+	DispObj_SetProgress(o, obj, raw, v);
 	if(s->mode == 2)
-		Sprite_RecalcTransform(s);
+		Sprite_RecalcTransform(o, s);
 	else if(s->mode == 5)
-		Sprite_RecalcProjected(s);
+		Sprite_RecalcProjected(o, s);
 }
 
 /* setParam 0x60: the sine-wave skew of mode 5.  `on` doubles as the
  * period of the wave in rows (0 turns it off), `arg` is its phase in rows,
  * `amount` (16.16) how far a row is shifted, see Blit_Skew.  Stored for
  * every mode, applied in mode 5 only. */
-void Sprite_SetSkew(Sprite_t* s, int on, int arg, int32_t amount)
+void Sprite_SetSkew(OpenBGI_t* o, Sprite_t* s, int on, int arg, int32_t amount)
 {
 	s->skewOn = on;
 	s->skewArg = arg;
 	s->skewAmount = amount;
 	if(s->mode == 5)
 	{
-		Sprite_RebuildSkew(s);
-		Sprite_RecalcProjected(s);
+		Sprite_RebuildSkew(o, s);
+		Sprite_RecalcProjected(o, s);
 	}
 }
 
@@ -666,9 +667,9 @@ void Sprite_SetSkew(Sprite_t* s, int on, int arg, int32_t amount)
  * size and the transformed size (four values; the bitmap's size is left
  * untouched when the bitmap is gone).  Anything else goes to the base
  * class.  0 ok, 0xffff0001 wrong mode. */
-static int Sprite_GetParam(DispObj_t* o, int no, int32_t* out)
+static int Sprite_GetParam(OpenBGI_t* o, DispObj_t* obj, int no, int32_t* out)
 {
-	Sprite_t* s = (Sprite_t*)o;
+	Sprite_t* s = (Sprite_t*)obj;
 	Bmp_t a;
 	switch(no)
 	{
@@ -691,7 +692,7 @@ static int Sprite_GetParam(DispObj_t* o, int no, int32_t* out)
 			return 0;
 		}
 		case 0x10000100:
-			if(SpGetInfo(&a, s->bmp1))
+			if(SpGetInfo(o, &a, s->bmp1))
 			{
 				out[0] = a.w;
 				out[1] = a.h;
@@ -708,12 +709,12 @@ static int Sprite_GetParam(DispObj_t* o, int no, int32_t* out)
 			}
 			return 0;
 		default:
-			return DispObj_GetParam(o, no, out);
+			return DispObj_GetParam(o, obj, no, out);
 	}
 }
 
 /* "90 38": the sprite's parameters - 0x40 the origin (a, c), 0x41 the
- * angle, 0x42 (1.494 on) the zoom (one value until 1.573, a pair from
+ * angle, 0x42 (1.492 on) the zoom (one value until 1.573, a pair from
  * 1.588), 0x10 (1.573 on) the bitmap with the mode kept, 0x60 the skew
  * (a >> 16 the period, a & 0xFFFF the phase, c the amount), 0x80 the
  * origin delta (a, c), 0x81 the angle delta, 0x82 the scale delta (a, c),
@@ -721,9 +722,9 @@ static int Sprite_GetParam(DispObj_t* o, int no, int32_t* out)
  * selector, c the level).  The origin, angle and deltas are ignored outside
  * modes 2 and 5.  Anything else goes to the base class.  0 ok, 0xffff0002
  * when the bitmap change or the ripple selection failed. */
-static int Sprite_SetParam(DispObj_t* o, int no, int a, int c)
+static int Sprite_SetParam(OpenBGI_t* o, DispObj_t* obj, int no, int a, int c)
 {
-	Sprite_t* s = (Sprite_t*)o;
+	Sprite_t* s = (Sprite_t*)obj;
 	int anim = s->mode == 2 || s->mode == 5;
 	switch(no)
 	{
@@ -733,19 +734,19 @@ static int Sprite_SetParam(DispObj_t* o, int no, int a, int c)
 			return 0;
 		case 0x41:
 			if(anim)
-				Sprite_SetAngle(s, a);
+				Sprite_SetAngle(o, s, a);
 			return 0;
-		case 0x42: // 1.494 on; one value until 1.573
-			if(gEngine->gen < GEN_1_494)
+		case 0x42: // 1.492 on; one value until 1.573
+			if(o->engine.profile->gen < GEN_1_492)
 				break;
-			Sprite_SetZoom(s, a, gEngine->gen >= GEN_1_588 ? c : 0);
+			Sprite_SetZoom(o, s, a, o->engine.profile->gen >= GEN_1_588 ? c : 0);
 			return 0;
 		case 0x10: // 1.573 on: the bitmap, the mode kept
-			if(gEngine->gen < GEN_1_573)
+			if(o->engine.profile->gen < GEN_1_573)
 				break;
-			return Sprite_ChangeBitmap(s, a) != 0 ? (int)0xffff0002 : 0;
+			return Sprite_ChangeBitmap(o, s, a) != 0 ? (int)0xffff0002 : 0;
 		case 0x60:
-			Sprite_SetSkew(s, (int)((uint32_t)a >> 16), a & 0xffff, c);
+			Sprite_SetSkew(o, s, (int)((uint32_t)a >> 16), a & 0xffff, c);
 			return 0;
 		case 0x80:
 			if(anim)
@@ -769,28 +770,28 @@ static int Sprite_SetParam(DispObj_t* o, int no, int a, int c)
 			s->curve = a;
 			return 0;
 		case 0x100:
-			return Sprite_SelectRipple(s, a, c) != 0 ? (int)0xffff0002 : 0;
+			return Sprite_SelectRipple(o, s, a, c) != 0 ? (int)0xffff0002 : 0;
 		default:
 			break;
 	}
-	return DispObj_SetParam(o, no, a, c);
+	return DispObj_SetParam(o, obj, no, a, c);
 }
 
 /* "90 53": dirty the part of the sprite that shows the rectangle `r` of its
  * bitmap after the script drew into it; modes without a mapping dirty the
  * whole sprite.  1 when something was dirtied, 0 when the mapped rectangle
  * is empty. */
-int Sprite_UpdateRect(Sprite_t* s, const Rect_t* r)
+int Sprite_UpdateRect(OpenBGI_t* o, Sprite_t* s, const Rect_t* r)
 {
 	Rect_t m;
-	if(!Sprite_MapUpdateRect(s, &m, r))
+	if(!Sprite_MapUpdateRect(o, s, &m, r))
 	{
-		s->obj.vt->invalidate(&s->obj);
+		s->obj.vt->invalidate(o, &s->obj);
 		return 1;
 	}
 	if(m.l > m.r || m.t > m.b)
 		return 0;
-	Gfx_AddDirty(gDispGfx, s->obj.vt->sortKey(&s->obj), &m);
+	Gfx_AddDirty(o->gfx.dispGfx, s->obj.vt->sortKey(o, &s->obj), &m);
 	return 1;
 }
 
@@ -798,24 +799,24 @@ int Sprite_UpdateRect(Sprite_t* s, const Rect_t* r)
  * its amplitude; a level above 0x100 keeps the current one.  0 ok (also
  * outside mode 4, where nothing happens), 0x80000008 no such ripple
  * definition, 0x80000009 not enough rings left from that phase. */
-int Sprite_SelectRipple(Sprite_t* s, int selector, int level)
+int Sprite_SelectRipple(OpenBGI_t* o, Sprite_t* s, int selector, int level)
 {
 	int ok = 0;
 	if(s->mode != 4)
 		return 0;
-	if(BmpMgr_RippleCheck(gDispBmpMgr, &ok, s->rippleNo, selector, s->rings) != 0)
+	if(BmpMgr_RippleCheck(o->gfx.dispBmpMgr, &ok, s->rippleNo, selector, s->rings) != 0)
 		return (int)0x80000008;
 	if(!ok)
 		return (int)0x80000009;
 	s->rippleSel = selector;
 	if((uint32_t)level > 0x100)
-		level = s->obj.vt->getLevel(&s->obj);
-	s->obj.vt->setLevel(&s->obj, level);
+		level = s->obj.vt->getLevel(o, &s->obj);
+	s->obj.vt->setLevel(o, &s->obj, level);
 	return 0;
 }
 
 // mode 5 with two bitmaps: mixCache = crossfade(bmp1, bmp2); dropped and left empty when either bitmap is gone
-void Sprite_RebuildMix(Sprite_t* s)
+void Sprite_RebuildMix(OpenBGI_t* o, Sprite_t* s)
 {
 	Bmp_t a, b;
 	if(s->mode != 5)
@@ -823,9 +824,9 @@ void Sprite_RebuildMix(Sprite_t* s)
 	Sprite_FreeMix(s);
 	if(s->bmp2 == -1)
 		return;
-	if(!SpGetInfo(&a, s->bmp1) || !SpGetInfo(&b, s->bmp2))
+	if(!SpGetInfo(o, &a, s->bmp1) || !SpGetInfo(o, &b, s->bmp2))
 		return;
-	if(SpGen(s->bmp1) != s->gen1 || SpGen(s->bmp2) != s->gen2)
+	if(SpGen(o, s->bmp1) != s->gen1 || SpGen(o, s->bmp2) != s->gen2)
 		return;
 	Bmp_Alloc(&s->mixCache, a.w, a.h, a.mode);
 	Blit_CrossfadeTo(&s->mixCache, &a, &b, s->mixRatio);
@@ -842,7 +843,7 @@ int Sprite_FreeMix(Sprite_t* s)
 /* mode 5 with skew: skewCache = skewed copy of the mix cache (two bitmaps)
  * or of bitmap 1, widened by skewAmount (rounded up to an even number of
  * pixels); dropped and left empty when the source is gone. */
-void Sprite_RebuildSkew(Sprite_t* s)
+void Sprite_RebuildSkew(OpenBGI_t* o, Sprite_t* s)
 {
 	Bmp_t info;
 	const Bmp_t* src;
@@ -860,7 +861,7 @@ void Sprite_RebuildSkew(Sprite_t* s)
 	}
 	else
 	{
-		if(!SpCurrent(&info, s->bmp1, s->gen1))
+		if(!SpCurrent(o, &info, s->bmp1, s->gen1))
 			return;
 		src = &info;
 	}
@@ -1010,11 +1011,11 @@ void Sprite_Animate(Sprite_t* s, int32_t outCentre[2], int32_t* outAngle, int32_
 		*outSy = (int32_t)(((int64_t)*outSy * s->zoomY) >> 16);
 }
 
-/* setParam 0x42 (1.494 on): a 16.16 zoom multiplied into the animated
+/* setParam 0x42 (1.492 on): a 16.16 zoom multiplied into the animated
  * scale of modes 2 and 5; ignored in the other modes.  A zero zx becomes
  * 1 (not 1.0), a zero zy means "the same as zx".  Every mode set resets
  * the zoom to 1.0. */
-void Sprite_SetZoom(Sprite_t* s, int32_t zx, int32_t zy)
+void Sprite_SetZoom(OpenBGI_t* o, Sprite_t* s, int32_t zx, int32_t zy)
 {
 	if(s->mode != 2 && s->mode != 5)
 		return;
@@ -1023,20 +1024,20 @@ void Sprite_SetZoom(Sprite_t* s, int32_t zx, int32_t zy)
 	s->zoomX = zx;
 	s->zoomY = zy ? zy : zx;
 	if(s->mode == 2)
-		Sprite_RecalcTransform(s);
+		Sprite_RecalcTransform(o, s);
 	else
 	{
-		Sprite_ProjectPosition(s);
-		Sprite_RecalcProjected(s);
+		Sprite_ProjectPosition(o, s);
+		Sprite_RecalcProjected(o, s);
 	}
 }
 
 // mode 2: recompute the current transform and the box; a box under 2 x 2 or a vanished bitmap leaves everything as it was
-void Sprite_RecalcTransform(Sprite_t* s)
+void Sprite_RecalcTransform(OpenBGI_t* o, Sprite_t* s)
 {
 	Bmp_t b;
 	int32_t centre[2], cAngle, cSx, cSy, outW, outH, anchor[2];
-	if(!SpCurrent(&b, s->bmp1, s->gen1))
+	if(!SpCurrent(o, &b, s->bmp1, s->gen1))
 		return;
 	Sprite_Animate(s, centre, &cAngle, &cSx, &cSy, s->ox, s->oy, s->angle, s->sx, s->sy);
 	Sprite_BoundsTransform(&outW, &outH, anchor, b.w, b.h, 0, centre[0], centre[1], cAngle, cSx, cSy);
@@ -1051,17 +1052,17 @@ void Sprite_RecalcTransform(Sprite_t* s)
 	s->curSx = cSx;
 	s->curSy = cSy;
 	s->outW = outW;
-	s->obj.vt->setSize(&s->obj, outW, outH);
+	s->obj.vt->setSize(o, &s->obj, outW, outH);
 }
 
 // mode 5: the same with the perspective factor of the depth as the scale, and the position re-projected
-void Sprite_RecalcProjected(Sprite_t* s)
+void Sprite_RecalcProjected(OpenBGI_t* o, Sprite_t* s)
 {
 	Bmp_t b;
 	int32_t fp[4], scale, centre[2], cAngle, cSx, cSy, outW, outH, anchor[2], skew;
-	if(!SpGetInfo(&b, s->bmp1))
+	if(!SpGetInfo(o, &b, s->bmp1))
 		return;
-	DispObj_EffFixedPos(&s->obj, fp); // with the "91 37" / "92 37" offsets of 1.69/472 on
+	DispObj_EffFixedPos(o, &s->obj, fp); // with the "91 37" / "92 37" offsets of 1.69/472 on
 	ProjectScale(&scale, fp[2], SpProjDist(s));
 	Sprite_Animate(s, centre, &cAngle, &cSx, &cSy, s->ox, s->oy, s->angle, scale, scale);
 	skew = (uint32_t)s->skewOn > 0 ? s->skewAmount : 0;
@@ -1078,25 +1079,25 @@ void Sprite_RecalcProjected(Sprite_t* s)
 	s->outH = outH;
 	s->anchorX = anchor[0];
 	s->anchorY = anchor[1];
-	Sprite_ProjectPosition(s);
-	s->obj.vt->setSize(&s->obj, outW, outH);
+	Sprite_ProjectPosition(o, s);
+	s->obj.vt->setSize(o, &s->obj, outW, outH);
 }
 
 /* mode 5: the 16.16 world position (origin = the vanishing point, the
  * screen centre) becomes the integer pixel position plus a sub-pixel
  * remainder (subX, subY) that the draw adds back.  With projPos the
  * position is scaled by the perspective factor as well. */
-void Sprite_ProjectPosition(Sprite_t* s)
+void Sprite_ProjectPosition(OpenBGI_t* o, Sprite_t* s)
 {
 	Bmp_t back;
 	int32_t fp[4], x, y, c[2];
-	DispObj_EffFixedPos(&s->obj, fp); // with the "91 37" / "92 37" offsets of 1.69/472 on
-	Gfx_GetBackBmp(&back);
+	DispObj_EffFixedPos(o, &s->obj, fp); // with the "91 37" / "92 37" offsets of 1.69/472 on
+	Gfx_GetBackBmp(o, &back);
 	// the vanishing point: the centre of the back buffer, or from 1.535 on
 	// the "90 06" point for the manager's sprites
 	c[0] = (int32_t)((uint32_t)back.w << 15);
 	c[1] = (int32_t)((uint32_t)back.h << 15);
-	if(s->useProjCentre && Gfx_GetProjCentre(gDispGfx, c))
+	if(s->useProjCentre && Gfx_GetProjCentre(o->gfx.dispGfx, c))
 	{
 		c[0] = (int32_t)((uint32_t)c[0] << 16);
 		c[1] = (int32_t)((uint32_t)c[1] << 16);
@@ -1113,7 +1114,7 @@ void Sprite_ProjectPosition(Sprite_t* s)
 		x = c[0] + fp[0];
 		y = c[1] + fp[1];
 	}
-	s->obj.vt->setPos(&s->obj, x >> 16, y >> 16);
+	s->obj.vt->setPos(o, &s->obj, x >> 16, y >> 16);
 	s->subX = x & 0xffff;
 	s->subY = y & 0xffff;
 }
@@ -1125,7 +1126,7 @@ void Sprite_ProjectPosition(Sprite_t* s)
  * the current transform and returns 1.  The mode 5 arithmetic reproduces
  * the original on purpose: it builds the vertical extent from the x
  * position and the x scale (an off-by-one in its stack offsets). */
-int Sprite_MapUpdateRect(Sprite_t* s, Rect_t* out, const Rect_t* in)
+int Sprite_MapUpdateRect(OpenBGI_t* o, Sprite_t* s, Rect_t* out, const Rect_t* in)
 {
 	switch(s->mode)
 	{
@@ -1134,7 +1135,7 @@ int Sprite_MapUpdateRect(Sprite_t* s, Rect_t* out, const Rect_t* in)
 		case 3:
 		{
 			Rect_t lr;
-			s->obj.vt->localRect(&s->obj, &lr);
+			s->obj.vt->localRect(o, &s->obj, &lr);
 			out->r = in->r + lr.l;
 			out->b = in->b + lr.t;
 			out->l = in->l + lr.l;
@@ -1145,9 +1146,9 @@ int Sprite_MapUpdateRect(Sprite_t* s, Rect_t* out, const Rect_t* in)
 		{
 			Bmp_t b;
 			int32_t fp[4], scale, centre[2], cAngle, cSx, cSy, skew, outW, outH, anchor[2], pos[2], ax;
-			if(!SpGetInfo(&b, s->bmp1))
+			if(!SpGetInfo(o, &b, s->bmp1))
 				return 0;
-			DispObj_EffFixedPos(&s->obj, fp); // with the "91 37" / "92 37" offsets of 1.69/472 on
+			DispObj_EffFixedPos(o, &s->obj, fp); // with the "91 37" / "92 37" offsets of 1.69/472 on
 			ProjectScale(&scale, fp[2], SpProjDist(s));
 			Sprite_Animate(s, centre, &cAngle, &cSx, &cSy, s->ox, s->oy, s->angle, scale, scale);
 			centre[0] -= (int32_t)((uint32_t)in->l << 16);
@@ -1155,7 +1156,7 @@ int Sprite_MapUpdateRect(Sprite_t* s, Rect_t* out, const Rect_t* in)
 			skew = (uint32_t)s->skewOn > 0 ? s->skewAmount : 0;
 			Sprite_BoundsProjected(&outW, &outH, anchor, in->r - in->l + 1, in->b - in->t + 1, skew,
 				centre[0], centre[1], cAngle, cSx, cSy, fp[0], fp[1]);
-			DispObj_GetDrawPos(&s->obj, pos);
+			DispObj_GetDrawPos(o, &s->obj, pos);
 			ax = pos[0] - anchor[0];
 			out->l = ax - (int32_t)((uint32_t)cSx >> 16);
 			out->r = ax + outW - 1;
@@ -1173,14 +1174,31 @@ int Sprite_MapUpdateRect(Sprite_t* s, Rect_t* out, const Rect_t* in)
 // drawing
 // ========================================================================
 
+// the alpha of the 32-bit picture `pic`, its corner at (x, y) of the gray bitmap `mask`, into that bitmap
+static void SpMaskAlpha(Bmp_t* mask, int x, int y, const Bmp_t* pic)
+{
+	int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
+	int x1 = x + pic->w < mask->w ? x + pic->w : mask->w, y1 = y + pic->h < mask->h ? y + pic->h : mask->h;
+	int i, j;
+	for(j = y0; j < y1; j++)
+	{
+		const uint8_t* src = pic->pixels + (size_t)(j - y) * (size_t)pic->pitch + (size_t)(x0 - x) * 4 + 3;
+		uint8_t* dst = mask->pixels + (size_t)j * (size_t)mask->pitch + (size_t)x0;
+		for(i = x0; i < x1; i++, src += 4)
+			*dst++ = *src;
+	}
+}
+
 /* Fetch the mask for the dirty piece `local` (object coordinates).  Returns
  * 1 when masking applies: `mask` is then the "90 55" bitmap (screen
  * coordinates; FinishMasked crops it), or, for a "91 55" link, a GRAY8
  * bitmap of the piece composed from the linked sprite's picture at that
- * sprite's position - that one is owned (*owned = 1) and freed by
- * FinishMasked.  Returns 0 to draw unmasked: no mask, or its bitmap is
- * gone, or the linked sprite's picture is not GRAY8. */
-static int SpMask(Sprite_t* s, Bmp_t* mask, const Rect_t* local, int* owned)
+ * sprite's position - a gray picture as it is, a picture with an alpha
+ * channel by that channel (the cut-ins of Tayutama 2 mask a scene with a
+ * white picture whose alpha is the shape) - that one is owned (*owned =
+ * 1) and freed by FinishMasked.  Returns 0 to draw unmasked: no mask, or
+ * its bitmap is gone, or the linked sprite's picture is neither. */
+static int SpMask(OpenBGI_t* o, Sprite_t* s, Bmp_t* mask, const Rect_t* local, int* owned)
 {
 	*owned = 0;
 	if(s->maskObj)
@@ -1189,19 +1207,22 @@ static int SpMask(Sprite_t* s, Bmp_t* mask, const Rect_t* local, int* owned)
 		Bmp_t pic;
 		int32_t pos[2], mpos[2];
 		int lw = local->r - local->l + 1, lh = local->b - local->t + 1;
-		if(!SpCurrent(&pic, m->bmp1, m->gen1) || pic.mode != PM_GRAY8)
+		if(!SpCurrent(o, &pic, m->bmp1, m->gen1) || (pic.mode != PM_GRAY8 && pic.mode != PM_ARGB32))
 			return 0;
-		s->obj.vt->getDrawPos(&s->obj, pos);
-		m->obj.vt->getDrawPos(&m->obj, mpos);
+		s->obj.vt->getDrawPos(o, &s->obj, pos);
+		m->obj.vt->getDrawPos(o, &m->obj, mpos);
 		Bmp_Alloc(mask, lw, lh, PM_GRAY8);
 		memset(mask->pixels, 0, (size_t)mask->pitch * (size_t)mask->h);
-		Bmp_Blit(mask, mpos[0] - pos[0] - local->l, mpos[1] - pos[1] - local->t, &pic, 0x80, 0);
+		if(pic.mode == PM_GRAY8)
+			Bmp_Blit(mask, mpos[0] - pos[0] - local->l, mpos[1] - pos[1] - local->t, &pic, 0x80, 0);
+		else
+			SpMaskAlpha(mask, mpos[0] - pos[0] - local->l, mpos[1] - pos[1] - local->t, &pic);
 		*owned = 1;
 		return 1;
 	}
 	if(!s->maskOn)
 		return 0;
-	return SpCurrent(mask, s->maskBmp, s->maskGen);
+	return SpCurrent(o, mask, s->maskBmp, s->maskGen);
 }
 
 /* The shared tail of the masked paths: the part of the mask under the
@@ -1211,7 +1232,7 @@ static int SpMask(Sprite_t* s, Bmp_t* mask, const Rect_t* local, int* owned)
  * mask may be smaller than the screen: only the overlap of the piece and
  * the mask is drawn (the original clips the piece to the mask and skips
  * the blit when nothing is left). */
-static void FinishMasked(Sprite_t* s, Bmp_t* dst, const Rect_t* local, Bmp_t* tmp, Bmp_t* mask, int owned, int effect,
+static void FinishMasked(OpenBGI_t* o, Sprite_t* s, Bmp_t* dst, const Rect_t* local, Bmp_t* tmp, Bmp_t* mask, int owned, int effect,
 	int level)
 {
 	if(owned)
@@ -1223,9 +1244,9 @@ static void FinishMasked(Sprite_t* s, Bmp_t* dst, const Rect_t* local, Bmp_t* tm
 	{
 		Rect_t r = *local;
 		int32_t pos[2];
-		s->obj.vt->getDrawPos(&s->obj, pos);
+		s->obj.vt->getDrawPos(o, &s->obj, pos);
 		Rect_Offset(&r, pos[0], pos[1]); // the piece on the screen
-		if(gEngine->gen >= GEN_1_529)
+		if(o->engine.profile->gen >= GEN_1_529)
 		{
 			Rect_t mr;
 			Bmp_t tv = *tmp, dv = *dst;
@@ -1257,12 +1278,12 @@ static void FinishMasked(Sprite_t* s, Bmp_t* dst, const Rect_t* local, Bmp_t* tm
  * the mode's blitter cannot apply, is rendered into a temporary first.
  * Nothing is drawn when a bitmap the sprite was set with has since been
  * freed or reloaded (its generation changed). */
-static void Sprite_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t minKey)
+static void Sprite_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t* local, uint32_t minKey)
 {
-	Sprite_t* s = (Sprite_t*)o;
-	int effect = DispObj_GetEffect(o);
-	int level = DispObj_EffectiveLevel(o);
-	int prog = DispObj_GetProgressInt(o);
+	Sprite_t* s = (Sprite_t*)obj;
+	int effect = DispObj_GetEffect(obj);
+	int level = DispObj_EffectiveLevel(obj);
+	int prog = DispObj_GetProgressInt(obj);
 	int mode = s->mode;
 	int lw = local->r - local->l + 1, lh = local->b - local->t + 1;
 	Bmp_t a, b, mask, tmp;
@@ -1296,14 +1317,14 @@ static void Sprite_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t 
 	switch(mode)
 	{
 		case 0:
-			if(!SpCurrent(&a, s->bmp1, s->gen1))
+			if(!SpCurrent(o, &a, s->bmp1, s->gen1))
 				return;
-			if(s->mode != 3 && SpMask(s, &mask, local, &maskOwned)) // a finished wipe is never masked
+			if(s->mode != 3 && SpMask(o, s, &mask, local, &maskOwned)) // a finished wipe is never masked
 			{
 				Bmp_Alloc(&tmp, lw, lh, a.mode);
 				Bmp_Crop(&a, local);
 				Blit_Copy(&tmp, &a);
-				FinishMasked(s, dst, local, &tmp, &mask, maskOwned, effect, level);
+				FinishMasked(o, s, dst, local, &tmp, &mask, maskOwned, effect, level);
 				return;
 			}
 			Bmp_Crop(&a, local);
@@ -1311,17 +1332,17 @@ static void Sprite_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t 
 			return;
 
 		case 1:
-			if(!SpGetInfo(&a, s->bmp1) || !SpGetInfo(&b, s->bmp2))
+			if(!SpGetInfo(o, &a, s->bmp1) || !SpGetInfo(o, &b, s->bmp2))
 				return;
-			if(SpGen(s->bmp1) != s->gen1 || SpGen(s->bmp2) != s->gen2)
+			if(SpGen(o, s->bmp1) != s->gen1 || SpGen(o, s->bmp2) != s->gen2)
 				return;
-			if(SpMask(s, &mask, local, &maskOwned))
+			if(SpMask(o, s, &mask, local, &maskOwned))
 			{
 				Bmp_Alloc(&tmp, lw, lh, a.mode);
 				Bmp_Crop(&a, local);
 				Bmp_Crop(&b, local);
 				Blit_CrossfadeTo(&tmp, &a, &b, s->mixRatio);
-				FinishMasked(s, dst, local, &tmp, &mask, maskOwned, effect, level);
+				FinishMasked(o, s, dst, local, &tmp, &mask, maskOwned, effect, level);
 				return;
 			}
 			Bmp_Crop(&a, local);
@@ -1342,13 +1363,13 @@ static void Sprite_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t 
 			// the origin lands `anchor` into the box; the piece starts `local` into it
 			int32_t x16 = (int32_t)((uint32_t)(s->anchorX - local->l) << 16);
 			int32_t y16 = (int32_t)((uint32_t)(s->anchorY - local->t) << 16);
-			if(!SpCurrent(&a, s->bmp1, s->gen1))
+			if(!SpCurrent(o, &a, s->bmp1, s->gen1))
 				return;
-			if(SpMask(s, &mask, local, &maskOwned))
+			if(SpMask(o, s, &mask, local, &maskOwned))
 			{
 				Bmp_Alloc(&tmp, lw, lh, a.mode);
 				Blit_XformCopy(&tmp, x16, y16, &a, s->curOx, s->curOy, s->curAngle, s->curSx, s->curSy, 0, s->smooth);
-				FinishMasked(s, dst, local, &tmp, &mask, maskOwned, effect, level);
+				FinishMasked(o, s, dst, local, &tmp, &mask, maskOwned, effect, level);
 				return;
 			}
 			if(!DirectEffect(effect))
@@ -1364,7 +1385,7 @@ static void Sprite_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t 
 		}
 
 		case 3: // the wipe is never masked
-			if(!SpCurrent(&a, s->bmp1, s->gen1))
+			if(!SpCurrent(o, &a, s->bmp1, s->gen1))
 				return;
 			b = s->wipeGray;
 			Bmp_Crop(&a, local);
@@ -1383,14 +1404,14 @@ static void Sprite_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t 
 		case 4: // the ripple reads the whole bitmap (the displacement may reach outside the piece) and draws with the fade as its level
 		{
 			Bmp_t crop;
-			if(!SpCurrent(&a, s->bmp1, s->gen1))
+			if(!SpCurrent(o, &a, s->bmp1, s->gen1))
 				return;
-			if(!SpCurrent(&b, s->rippleMap, s->rippleMapGen))
+			if(!SpCurrent(o, &b, s->rippleMap, s->rippleMapGen))
 				return;
 			crop = a;
 			Bmp_Crop(&crop, local);
 			Bmp_Crop(&b, local);
-			Blit_RippleLevel(dst, &crop, &a, &b, s->ringTable, o->fade);
+			Blit_RippleLevel(dst, &crop, &a, &b, s->ringTable, obj->fade);
 			return;
 		}
 
@@ -1403,7 +1424,7 @@ static void Sprite_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t 
 			int32_t cx = s->curOx, cy = s->curOy;
 			if(s->skewOn != 0 && s->skewAmount != 0)
 			{
-				if(!SpGetInfo(&a, s->bmp1))
+				if(!SpGetInfo(o, &a, s->bmp1))
 					return;
 				// the skew widened the picture: move the origin by half of it
 				cx += (int32_t)(((uint32_t)(s->skewCache.w - a.w) << 15) & 0xffff0000u);
@@ -1415,17 +1436,17 @@ static void Sprite_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t 
 			}
 			else
 			{
-				if(!SpCurrent(&a, s->bmp1, s->gen1))
+				if(!SpCurrent(o, &a, s->bmp1, s->gen1))
 					return;
 				src = &a;
 			}
 			if(!src->pixels)
 				return; // a cache that could not be built
-			if(SpMask(s, &mask, local, &maskOwned))
+			if(SpMask(o, s, &mask, local, &maskOwned))
 			{
 				Bmp_Alloc(&tmp, lw, lh, src->mode);
 				Blit_XformCopy(&tmp, x16, y16, src, cx, cy, s->curAngle, s->curSx, s->curSy, 0, s->smooth);
-				FinishMasked(s, dst, local, &tmp, &mask, maskOwned, effect, level);
+				FinishMasked(o, s, dst, local, &tmp, &mask, maskOwned, effect, level);
 				return;
 			}
 			if(DirectEffect(effect) && dst->mode == PM_RGB32)

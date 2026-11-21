@@ -5,7 +5,7 @@
  * as.c - the assembler: listing text to a program file (Asm_Assemble);
  *        interface in asm.h
  *
- * Syntax (docs/asm.md): one statement per line, `label:` prefixes, `;`
+ * Syntax (docs/modding/programs.md): one statement per line, `label:` prefixes, `;`
  * comments; mnemonics as the disassembler writes them (`push_i8 -1`,
  * `push_code_off loc_0040`, `sys.yield`, `sys.0x5f`); the directives
  * `.engine NAME`, `.str "text"` (Shift-JIS, NUL-terminated; UTF-8 text
@@ -29,7 +29,7 @@
  * bytes and reports what is out of range.
  */
 #include "bgi/asm.h"
-#include "bgi/os.h"
+#include "bgi/asmout.h"
 
 #include <ctype.h>
 
@@ -109,7 +109,7 @@ typedef struct As
 {
 	EngineGen_t gen;                // the generation assembled for (GEN_COUNT: any); `.engine` changes it
 	const EngineProfile_t* profile; // its pointer layout, for code(label)
-	FILE* log;                      // where messages go
+	AsmOut_t* log;                  // where messages go
 	Stmt_t* stmts;                  // the statements in source order
 	int count, cap;                 // their number and the array's capacity
 	Symbol_t* symbols;              // every label referenced or defined
@@ -125,11 +125,11 @@ typedef struct As
 static void Error(As_t* a, int line, const char* fmt, ...)
 {
 	va_list ap;
-	fprintf(a->log, "%d: error: ", line);
+	AsmOut_Printf(a->log, "%d: error: ", line);
 	va_start(ap, fmt);
-	vfprintf(a->log, fmt, ap);
+	AsmOut_VPrintf(a->log, fmt, ap);
 	va_end(ap);
-	fputc('\n', a->log);
+	AsmOut_Putc(a->log, '\n');
 	a->errors++;
 }
 
@@ -137,11 +137,11 @@ static void Error(As_t* a, int line, const char* fmt, ...)
 static void Warn(As_t* a, int line, const char* fmt, ...)
 {
 	va_list ap;
-	fprintf(a->log, "%d: warning: ", line);
+	AsmOut_Printf(a->log, "%d: warning: ", line);
 	va_start(ap, fmt);
-	vfprintf(a->log, fmt, ap);
+	AsmOut_VPrintf(a->log, fmt, ap);
 	va_end(ap);
-	fputc('\n', a->log);
+	AsmOut_Putc(a->log, '\n');
 	a->warnings++;
 }
 
@@ -391,13 +391,13 @@ static int Eval(As_t* a, const Expr_t* e, int line, int final, int64_t* out)
 /* a string literal at the cursor into bytes (malloc'ed, no NUL added), as
  * Asm_ReadStringLiteral reads it; 1 on success, 0 when no literal starts
  * here or it is unterminated or has a bad escape (reported) */
-static int ParseString(As_t* a, Lex_t* l, uint8_t** outBytes, uint32_t* outLen)
+static int ParseString(OpenBGI_t* o, As_t* a, Lex_t* l, uint8_t** outBytes, uint32_t* outLen)
 {
 	const char* next;
 	const char* err;
 	if(l->p >= l->end || *l->p != '"')
 		return 0;
-	err = Asm_ReadStringLiteral(l->p, l->end, outBytes, outLen, &next);
+	err = Asm_ReadStringLiteral(o, l->p, l->end, outBytes, outLen, &next);
 	if(err)
 	{
 		Error(a, l->line, "%s", err);
@@ -427,11 +427,11 @@ static Stmt_t* NewStmt(As_t* a)
 /* the operand list after a mnemonic or directive into `s`: expressions
  * and string literals separated by commas, up to the end of the line or a
  * comment.  1 on success (an empty list is fine), 0 after an error. */
-static int ParseOperands(As_t* a, Lex_t* l, Stmt_t* s)
+static int ParseOperands(OpenBGI_t* o, As_t* a, Lex_t* l, Stmt_t* s)
 {
 	for(;;)
 	{
-		Operand_t* o;
+		Operand_t* opnd;
 		SkipSpace(l);
 		if(l->p >= l->end || *l->p == ';')
 			return 1;
@@ -440,17 +440,17 @@ static int ParseOperands(As_t* a, Lex_t* l, Stmt_t* s)
 			Error(a, l->line, "too many operands");
 			return 0;
 		}
-		o = &s->opd[s->count];
+		opnd = &s->opd[s->count];
 		if(*l->p == '"')
 		{
-			if(!ParseString(a, l, &o->bytes, &o->len))
+			if(!ParseString(o, a, l, &opnd->bytes, &opnd->len))
 				return 0;
-			o->isString = 1;
+			opnd->isString = 1;
 		}
 		else
 		{
-			o->expr = ParseExpr(a, l);
-			if(!o->expr)
+			opnd->expr = ParseExpr(a, l);
+			if(!opnd->expr)
 				return 0;
 		}
 		s->count++;
@@ -476,7 +476,7 @@ static int ParseOperands(As_t* a, Lex_t* l, Stmt_t* s)
  * statement.  `jmp L`, `call L` and the stack form of `jcc C, L` become
  * ST_JUMP, `push V` ST_PUSH.  Errors are reported and the statement
  * dropped; parsing goes on with the next line. */
-static void ParseLine(As_t* a, const char* text, size_t len)
+static void ParseLine(OpenBGI_t* o, As_t* a, const char* text, size_t len)
 {
 	Lex_t l;
 	const char* s;
@@ -536,7 +536,7 @@ static void ParseLine(As_t* a, const char* text, size_t len)
 		st->kind = ST_INSN;
 		st->fam = 0;
 		st->op = (int)v;
-		if(!ParseOperands(a, &l, st))
+		if(!ParseOperands(o, a, &l, st))
 			a->count--;
 		return;
 	}
@@ -593,7 +593,7 @@ static void ParseLine(As_t* a, const char* text, size_t len)
 			a->count--;
 			return;
 		}
-		if(!ParseOperands(a, &l, st))
+		if(!ParseOperands(o, a, &l, st))
 			a->count--;
 		return;
 	}
@@ -601,7 +601,7 @@ static void ParseLine(As_t* a, const char* text, size_t len)
 	{ // push V: starts as push_i8 and widens in the passes as the value needs
 		st->kind = ST_PUSH;
 		st->wide = 1;
-		if(!ParseOperands(a, &l, st) || st->count != 1 || st->opd[0].isString)
+		if(!ParseOperands(o, a, &l, st) || st->count != 1 || st->opd[0].isString)
 		{
 			Error(a, a->line, "push takes one value");
 			a->count--;
@@ -615,7 +615,7 @@ static void ParseLine(As_t* a, const char* text, size_t len)
 		return;
 	}
 	st->kind = ST_INSN;
-	if(!ParseOperands(a, &l, st))
+	if(!ParseOperands(o, a, &l, st))
 	{
 		a->count--;
 		return;
@@ -704,49 +704,13 @@ static void EmitSleb(As_t* a, int64_t v)
 	}
 }
 
-/* the operand formats of a base opcode as a string of letters, one per
- * operand, the same table as decode.c reads them with (kept in step by the
- * round-trip test): b s8, h s16, w u32, n u16 local offset, c / j s16
- * data / code target from the opcode's offset, z size code, i inline
- * bytes, q count, k condition, L local reference (two source operands:
- * offset and size code), s signed LEB128, S signed LEB128 code target from
- * the end of the instruction, r s16 code target; '?' the optional target
- * of "15" in 1.667+ */
-static const char* Formats(int op, EngineGen_t gen)
-{
-	switch(op)
-	{
-		case 0x00: return "b";
-		case 0x01: return "h";
-		case 0x02: return "w";
-		case 0x04: return "n";
-		case 0x05: return "c";
-		case 0x06: return "j";
-		case 0x08:
-		case 0x09:
-		case 0x0a: return "z";
-		case 0x0b: return "i";
-		case 0x0c: return "zq";
-		case 0x15: return (gen == GEN_COUNT || gen >= GEN_1_667) ? "k?" : "k";
-		case 0x0f:
-		case 0x19:
-		case 0x1d:
-		case 0x1e: return "L";
-		case 0x12: return "S";
-		case 0x18: return "w";
-		case 0x1a:
-		case 0x1b: return "Ls";
-		case 0x1c: return "Lb";
-		case 0x1f:
-		case 0x2c:
-		case 0x2d:
-		case 0x2e:
-		case 0x2f: return "s";
-		case 0x3b: return "kr";
-		case 0x3c: return "b";
-		default: return "";
-	}
-}
+/* The operand formats of a base opcode are Asm_OperandFormats' (decode.c):
+ * a string of letters, one per operand: b s8, h s16, w u32, n u16 local
+ * offset, c / j s16 data / code target from the opcode's offset, z size
+ * code, i inline bytes, q count, k condition, L local reference (two
+ * source operands: offset and size code), s signed LEB128, S signed
+ * LEB128 code target from the end of the instruction, r s16 code target;
+ * '?' the optional target of "15" in 1.667+ */
 
 static int Fits(int64_t v, int64_t lo, int64_t hi)
 {
@@ -798,12 +762,12 @@ static void EncodeInsn(As_t* a, Stmt_t* s, int fam, int op, Operand_t* opd, int 
 	}
 	Emit8(a, op);
 	p = opIP + 1; // the offset of the next operand, for the end-relative 'S'
-	fmt = Formats(op, a->gen);
+	fmt = Asm_OperandFormats(op, a->gen);
 	for(i = 0; fmt[i]; i++)
 	{
 		char c = fmt[i];
 		int64_t v = 0, v2 = 0;
-		Operand_t* o;
+		Operand_t* opnd;
 		if(c == '?')
 		{ // "15" of 1.667+: the inline target only with cc & 8
 			int64_t cc = 0;
@@ -848,13 +812,13 @@ static void EncodeInsn(As_t* a, Stmt_t* s, int fam, int op, Operand_t* opd, int 
 				Error(a, s->line, "operand %d missing", oi + 1);
 			break;
 		}
-		o = &opd[oi++];
-		if(o->isString)
+		opnd = &opd[oi++];
+		if(opnd->isString)
 		{
 			Error(a, s->line, "a string is not a valid operand here");
 			continue;
 		}
-		if(!Eval(a, o->expr, s->line, final, &v))
+		if(!Eval(a, opnd->expr, s->line, final, &v))
 			v = 0;
 		switch(c)
 		{
@@ -1053,7 +1017,7 @@ static void EncodeStmt(As_t* a, Stmt_t* s, int final)
  * generation does not define, size and place the statements until nothing
  * moves, emit the bytes, and wrap them in the 16-byte header.  `*out` is
  * cleared first; its `file` stays NULL when there were errors. */
-void Asm_Assemble(const char* text, size_t len, EngineGen_t gen, FILE* log, AsmResult_t* out)
+void Asm_AssembleTo(OpenBGI_t* o, const char* text, size_t len, EngineGen_t gen, AsmOut_t* log, AsmResult_t* out)
 {
 	As_t a;
 	const char* p = text;
@@ -1065,7 +1029,7 @@ void Asm_Assemble(const char* text, size_t len, EngineGen_t gen, FILE* log, AsmR
 	a.gen = gen;
 	// "any" has no pointer layout of its own: the reference build's serves for code(label)
 	a.profile = Engine_ProfileOfGen(gen == GEN_COUNT ? GEN_1_69_444 : gen);
-	a.log = log ? log : stderr;
+	a.log = log;
 	a.line = 1;
 
 	// parse (lines end with LF or CR LF)
@@ -1075,7 +1039,7 @@ void Asm_Assemble(const char* text, size_t len, EngineGen_t gen, FILE* log, AsmR
 		size_t n = nl ? (size_t)(nl - p) : (size_t)(end - p);
 		if(n && p[n - 1] == '\r')
 			n--;
-		ParseLine(&a, p, n);
+		ParseLine(o, &a, p, n);
 		p = nl ? nl + 1 : end;
 		a.line++;
 	}
@@ -1178,4 +1142,12 @@ done:
 		free(s);
 	}
 	free(a.out);
+}
+
+void Asm_Assemble(OpenBGI_t* o, const char* text, size_t len, EngineGen_t gen, FILE* log, AsmResult_t* out)
+{
+	AsmOut_t w;
+	memset(&w, 0, sizeof w);
+	w.fp = log ? log : stderr;
+	Asm_AssembleTo(o, text, len, gen, &w, out);
 }

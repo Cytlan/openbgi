@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * tiled.c - background type 3: a 2 x 2 tiled view of four bitmaps
- *           ("S mode" scrolling; inc/bgi/gfx/background.h; selected by "90 42")
+ *           ("S mode" scrolling; src/include/bgi/gfx/background.h; selected by "90 42")
  *
  * Four screen-sized bitmaps form a plane of 2W x 2H pixels; the screen
  * shows the W x H window of it whose top-left corner is the origin
@@ -13,47 +13,47 @@
  */
 #include "background_internal.h"
 
-static int Bg3_MatchScreenSize(Background_t* bg);
+static int Bg3_MatchScreenSize(OpenBGI_t* o, Background_t* bg);
 
-static void Bg3_Destroy(DispObj_t* o, int flags)
+static void Bg3_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	Background_Dtor((Background_t*)o);
+	Background_Dtor((Background_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
 // no bitmaps; the quadrants are laid out for the current screen size
-void Bg3_Ctor(Bg3_t* b)
+void Bg3_Ctor(OpenBGI_t* o, Bg3_t* b)
 {
 	int i;
-	Background_Ctor(&b->bg, 3);
+	Background_Ctor(o, &b->bg, 3);
 	b->bg.obj.vt = &Bg3_Vtbl.base;
-	Bg3_MatchScreenSize(&b->bg);
+	Bg3_MatchScreenSize(o, &b->bg);
 	for(i = 0; i < 4; i++)
 		b->bmp[i] = -1;
 }
 
 /* the four bitmaps: top-left, top-right, bottom-left, bottom-right, all
  * screen sized.  1 ok, 0 when one is unusable (nothing is changed). */
-int Bg3_Set(Bg3_t* b, int b0, int b1, int b2, int b3)
+int Bg3_Set(OpenBGI_t* o, Bg3_t* b, int b0, int b1, int b2, int b3)
 {
 	int i;
-	if(!Bg_BitmapUsable(b0) || !Bg_BitmapUsable(b1) || !Bg_BitmapUsable(b2) || !Bg_BitmapUsable(b3))
+	if(!Bg_BitmapUsable(o, b0) || !Bg_BitmapUsable(o, b1) || !Bg_BitmapUsable(o, b2) || !Bg_BitmapUsable(o, b3))
 		return 0;
 	b->bmp[0] = b0;
 	b->bmp[1] = b1;
 	b->bmp[2] = b2;
 	b->bmp[3] = b3;
 	for(i = 0; i < 4; i++)
-		b->gen[i] = BgGen(b->bmp[i]);
+		b->gen[i] = BgGen(o, b->bmp[i]);
 	return 1;
 }
 
 // the origin may run from (0, 0) to (W, H) inclusive; 1 ok, 0 out of range
-int Bg3_SetOrigin(Bg3_t* b, int x, int y)
+int Bg3_SetOrigin(OpenBGI_t* o, Bg3_t* b, int x, int y)
 {
 	Bmp_t back;
-	Gfx_GetBackBmp(&back);
+	Gfx_GetBackBmp(o, &back);
 	if(x < 0 || x > back.w || y < 0 || y > back.h)
 		return 0;
 	b->ox = x;
@@ -62,18 +62,18 @@ int Bg3_SetOrigin(Bg3_t* b, int x, int y)
 }
 
 // the setPos slot moves the origin (an out-of-range position is ignored)
-static void Bg3_SetPos(DispObj_t* o, int x, int y)
+static void Bg3_SetPos(OpenBGI_t* o, DispObj_t* obj, int x, int y)
 {
-	Bg3_SetOrigin((Bg3_t*)o, x, y);
+	Bg3_SetOrigin(o, (Bg3_t*)obj, x, y);
 }
 
 // the quadrants are rebuilt from the back buffer size
-static int Bg3_MatchScreenSize(Background_t* bg)
+static int Bg3_MatchScreenSize(OpenBGI_t* o, Background_t* bg)
 {
 	Bg3_t* b = (Bg3_t*)bg;
 	Bmp_t back;
-	int r = Background_MatchScreenSize(bg), W, H;
-	Gfx_GetBackBmp(&back);
+	int r = Background_MatchScreenSize(o, bg), W, H;
+	Gfx_GetBackBmp(o, &back);
 	W = back.w;
 	H = back.h;
 	b->quad[0].l = 0;
@@ -98,14 +98,14 @@ static int Bg3_MatchScreenSize(Background_t* bg)
 /* the view starts at (ox, oy) in the 2W x 2H plane; the part of every
  * quadrant that intersects the dirty rectangle is copied.  0 once a
  * bitmap has been replaced. */
-static int Bg3_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
+static int Bg3_Render(OpenBGI_t* o, Background_t* bg, Bmp_t* dst, const Rect_t* local)
 {
 	Bg3_t* b = (Bg3_t*)bg;
 	Bmp_t src[4];
 	int i, ok = 1;
 	for(i = 0; i < 4; i++)
 	{
-		ok = BgCurrent(&src[i], b->bmp[i], b->gen[i]);
+		ok = BgCurrent(o, &src[i], b->bmp[i], b->gen[i]);
 		if(!ok)
 			return 0;
 	}

@@ -4,7 +4,7 @@
  *
  * engine.c - the particle engine: the particles of one screen, their
  *            births, motion and projection, and the automatic redraw list
- *            of "C0 09".  Interface: inc/bgi/gfx/screens.h (the
+ *            of "C0 09".  Interface: src/include/bgi/gfx/screens.h (the
  *            ParticleEngine_* functions and Ptcl_SetAuto); the per-pass
  *            services Ptcl_UpdateAll / Ptcl_AutoTick / Ptcl_AutoClear are
  *            declared in bgi/gfx.h.
@@ -17,6 +17,7 @@
  * live particles through the camera into the screen's surface.
  */
 #include "particle_internal.h"
+#include "bgi/core.h"
 
 struct ParticleEngine
 {
@@ -32,22 +33,23 @@ struct ParticleEngine
 	double sinA, cosA, sinB, cosB, sinC, cosC; // the three camera angles
 	int32_t dist;                              // projection distance, > 0
 	Wind_t* wind;                              // owned
-	/* 1.494 on: the per-screen parameters of "C0 29" for the type 1
+	/* 1.492 on: the per-screen parameters of "C0 29" for the type 1
 	 * particles, 14 values per pattern.  That build's type 1 particle is
 	 * driven by them together with the global "C0 2D" pattern; this engine
 	 * keeps the 1.69 type 1 motion, so they are only stored (see
-	 * docs/versions.md). */
+	 * docs/dev/versions.md). */
 	int32_t patternBExtra[PTCL_PATTERNS][14];
+	struct PtclVis* vis; // Render's scratch, PTCL_MAX entries, allocated on the first render (owned)
 };
 
-/* "C0 29" (1.494 on): store the 14 extra values of a type 1 pattern.  The
+/* "C0 29" (1.492 on): store the 14 extra values of a type 1 pattern.  The
  * 1st, 3rd and 13th are 24.8 (>> 8), the 2nd, 5th, 6th and 14th their
  * magnitudes >> 8, the 7th .. 9th magnitudes, the rest as given.  0 ok,
  * 0x80000002 for a pattern out of range. */
-uint32_t ParticleEngine_SetPatternBExtra(ParticleEngine_t* e, int pattern, const int32_t v[14])
+uint32_t ParticleEngine_SetPatternBExtra(OpenBGI_t* o, ParticleEngine_t* e, int pattern, const int32_t v[14])
 {
 	int32_t* d;
-	if((uint32_t)pattern >= PtclPatterns())
+	if((uint32_t)pattern >= PtclPatterns(o))
 		return 0x80000002;
 	d = e->patternBExtra[pattern];
 	d[0] = v[0] >> 8;
@@ -68,25 +70,25 @@ uint32_t ParticleEngine_SetPatternBExtra(ParticleEngine_t* e, int pattern, const
 }
 
 // an empty engine with a 10 ms tick, its clock at the present, no camera and a wind at rest
-ParticleEngine_t* ParticleEngine_New(void)
+ParticleEngine_t* ParticleEngine_New(OpenBGI_t* o)
 {
 	ParticleEngine_t* e = (ParticleEngine_t*)BGI_Alloc(sizeof *e);
 	memset(e, 0, sizeof *e); // slots, counters, camera
 	e->interval = 10;
-	e->lastTick = GetTicks();
+	e->lastTick = GetTicks(o);
 	e->wind = (Wind_t*)BGI_Alloc(sizeof *e->wind);
 	Wind_Ctor(e->wind);
 	return e;
 }
 
 // "C0 0F": destroy every particle and restart the birth schedule of every group; the groups and the camera stay
-void ParticleEngine_Clear(ParticleEngine_t* e)
+void ParticleEngine_Clear(OpenBGI_t* o, ParticleEngine_t* e)
 {
 	int i;
 	for(i = 0; i < PTCL_MAX; i++)
 		if(e->slot[i])
 		{
-			e->slot[i]->vt->destroy(e->slot[i]);
+			e->slot[i]->vt->destroy(o, e->slot[i]);
 			e->slot[i] = NULL;
 		}
 	e->live = 0;
@@ -94,11 +96,13 @@ void ParticleEngine_Clear(ParticleEngine_t* e)
 	memset(e->nextSpawn, 0, sizeof e->nextSpawn);
 }
 
-void ParticleEngine_Delete(ParticleEngine_t* e)
+void ParticleEngine_Delete(OpenBGI_t* o, ParticleEngine_t* e)
 {
-	ParticleEngine_Clear(e);
+	ParticleEngine_Clear(o, e);
 	if(e->wind)
 		BGI_Free(e->wind);
+	if(e->vis)
+		BGI_Free(e->vis);
 	BGI_Free(e);
 }
 
@@ -112,9 +116,9 @@ int ParticleEngine_SetInterval(ParticleEngine_t* e, int ms)
 	return 1;
 }
 
-int ParticleEngine_SetWind(ParticleEngine_t* e, const int32_t args[11]) // "C0 10", see Wind_Set
+int ParticleEngine_SetWind(OpenBGI_t* o, ParticleEngine_t* e, const int32_t args[11]) // "C0 10", see Wind_Set
 {
-	return Wind_Set(e->wind, args);
+	return Wind_Set(o, e->wind, args);
 }
 
 /* "C0 0B": the camera; x, y, z are 16.16 (stored as 24.8), the angles
@@ -143,41 +147,41 @@ int ParticleEngine_SetCamera(ParticleEngine_t* e, int32_t x, int32_t y, int32_t 
  * `spawnEvery` ms.  0 ok, 0x80000001 bad type, 0x80000002 bad pattern,
  * 0x80000003 max < 0 or more particles over all groups than the
  * generation allows (PtclMax: 4096 up to 1.69). */
-static uint32_t ParticleEngine_SetGroup(ParticleEngine_t* e, uint32_t type, uint32_t pattern, int32_t max,
+static uint32_t ParticleEngine_SetGroup(OpenBGI_t* o, ParticleEngine_t* e, uint32_t type, uint32_t pattern, int32_t max,
 	uint32_t spawnEvery)
 {
 	int32_t sum = 0;
 	uint32_t t, p;
 	if(type >= 2)
 		return 0x80000001;
-	if(pattern >= PtclPatterns())
+	if(pattern >= PtclPatterns(o))
 		return 0x80000002;
 	for(t = 0; t < 2; t++)
 		for(p = 0; p < PTCL_PATTERNS; p++)
 			if(t != type || p != pattern)
 				sum += e->maxCount[t][p];
-	if(max < 0 || sum + max > PtclMax())
+	if(max < 0 || sum + max > PtclMax(o))
 		return 0x80000003;
 	e->maxCount[type][pattern] = max;
 	e->spawnEvery[type][pattern] = spawnEvery;
 	return 0;
 }
 
-int ParticleEngine_SetGroupA(ParticleEngine_t* e, int pattern, int max, int spawnEvery) // "C0 20": a type 0 group
+int ParticleEngine_SetGroupA(OpenBGI_t* o, ParticleEngine_t* e, int pattern, int max, int spawnEvery) // "C0 20": a type 0 group
 {
-	return (int)ParticleEngine_SetGroup(e, 0, (uint32_t)pattern, max, (uint32_t)spawnEvery);
+	return (int)ParticleEngine_SetGroup(o, e, 0, (uint32_t)pattern, max, (uint32_t)spawnEvery);
 }
 
-int ParticleEngine_SetGroupB(ParticleEngine_t* e, int pattern, int max, int spawnEvery) // "C0 28": a type 1 group
+int ParticleEngine_SetGroupB(OpenBGI_t* o, ParticleEngine_t* e, int pattern, int max, int spawnEvery) // "C0 28": a type 1 group
 {
-	return (int)ParticleEngine_SetGroup(e, 1, (uint32_t)pattern, max, (uint32_t)spawnEvery);
+	return (int)ParticleEngine_SetGroup(o, e, 1, (uint32_t)pattern, max, (uint32_t)spawnEvery);
 }
 
 // put a particle into the first free slot; 0 when the generation's maximum is reached
-static int ParticleEngine_AddParticle(ParticleEngine_t* e, Particle_t* q)
+static int ParticleEngine_AddParticle(OpenBGI_t* o, ParticleEngine_t* e, Particle_t* q)
 {
 	int i;
-	if(e->live + 1 > PtclMax())
+	if(e->live + 1 > PtclMax(o))
 		return 0;
 	for(i = 0; i < PTCL_MAX; i++)
 		if(!e->slot[i])
@@ -194,7 +198,7 @@ static int ParticleEngine_AddParticle(ParticleEngine_t* e, Particle_t* q)
  * is cleared when the clock was more than 500 ms behind (the engine then
  * restarts from `now` instead of catching up).  0 when the engine is
  * paused. */
-static int ParticleEngine_Tick(ParticleEngine_t* e, int* inSync, uint32_t now)
+static int ParticleEngine_Tick(OpenBGI_t* o, ParticleEngine_t* e, int* inSync, uint32_t now)
 {
 	int i;
 	if(e->interval == 0)
@@ -207,7 +211,7 @@ static int ParticleEngine_Tick(ParticleEngine_t* e, int* inSync, uint32_t now)
 	do
 	{
 		int32_t wv[3];
-		Wind_Step(e->wind);
+		Wind_Step(o, e->wind);
 		Wind_Get(e->wind, wv);
 		for(i = 0; i < PTCL_MAX; i++)
 		{
@@ -217,7 +221,7 @@ static int ParticleEngine_Tick(ParticleEngine_t* e, int* inSync, uint32_t now)
 			if(!q)
 				continue;
 			Particle_ApplyForce(q, wv);
-			alive = q->vt->step(q);
+			alive = q->vt->step(o, q);
 			x = q->x >> 8;
 			y = q->y >> 8;
 			z = q->z >> 8;
@@ -225,7 +229,7 @@ static int ParticleEngine_Tick(ParticleEngine_t* e, int* inSync, uint32_t now)
 			if(alive && x <= 16000 && x >= -16000 && y <= 16000 && y >= 0 && z <= 8000 && z >= -8000)
 				continue;
 			e->liveCount[q->type][q->pattern]--;
-			q->vt->destroy(q);
+			q->vt->destroy(o, q);
 			e->slot[i] = NULL;
 			e->live--;
 		}
@@ -238,10 +242,10 @@ static int ParticleEngine_Tick(ParticleEngine_t* e, int* inSync, uint32_t now)
  * `spawnEvery` ms; `reset` restarts the schedule at `now`.  The group
  * goes idle (nextSpawn 0) when it is full and resumes at the next call
  * that finds room. */
-static void ParticleEngine_Spawn(ParticleEngine_t* e, uint32_t type, uint32_t pattern, uint32_t now, int reset)
+static void ParticleEngine_Spawn(OpenBGI_t* o, ParticleEngine_t* e, uint32_t type, uint32_t pattern, uint32_t now, int reset)
 {
 	uint32_t* next;
-	if(type >= 2 || pattern >= PtclPatterns())
+	if(type >= 2 || pattern >= PtclPatterns(o))
 		return;
 	next = &e->nextSpawn[type][pattern];
 	if(reset)
@@ -254,9 +258,9 @@ static void ParticleEngine_Spawn(ParticleEngine_t* e, uint32_t type, uint32_t pa
 			*next = 0;
 			return;
 		}
-		q = type == 1 ? ParticleB_New((int)pattern) : ParticleA_New((int)pattern);
-		if(!ParticleEngine_AddParticle(e, q))
-			q->vt->destroy(q); // the original leaks the particle when every slot is taken
+		q = type == 1 ? ParticleB_New(o, (int)pattern) : ParticleA_New(o, (int)pattern);
+		if(!ParticleEngine_AddParticle(o, e, q))
+			q->vt->destroy(o, q); // the original leaks the particle when every slot is taken
 		e->liveCount[type][pattern]++;
 		if(*next == 0)
 			*next = now;
@@ -265,28 +269,28 @@ static void ParticleEngine_Spawn(ParticleEngine_t* e, uint32_t type, uint32_t pa
 }
 
 // bring the engine up to `now`: the ticks, then the births of every group
-static void ParticleEngine_UpdateTo(ParticleEngine_t* e, uint32_t now)
+static void ParticleEngine_UpdateTo(OpenBGI_t* o, ParticleEngine_t* e, uint32_t now)
 {
 	int inSync = 1;
 	uint32_t t, p;
-	if(!ParticleEngine_Tick(e, &inSync, now))
+	if(!ParticleEngine_Tick(o, e, &inSync, now))
 		return;
 	for(t = 0; t < 2; t++)
 		for(p = 0; p < PTCL_PATTERNS; p++)
-			ParticleEngine_Spawn(e, t, p, now, !inSync);
+			ParticleEngine_Spawn(o, e, t, p, now, !inSync);
 }
 
 // once per scheduler pass: bring the engine up to the present
-void ParticleEngine_Update(ParticleEngine_t* e)
+void ParticleEngine_Update(OpenBGI_t* o, ParticleEngine_t* e)
 {
-	ParticleEngine_UpdateTo(e, GetTicks());
+	ParticleEngine_UpdateTo(o, e, GetTicks(o));
 }
 
 /* "C0 0D": advance the simulation by `ms` milliseconds one millisecond
  * at a time, then restore the clock and the birth schedule as they were,
  * so that the screen starts out populated.  Nothing happens while the
  * engine is paused. */
-void ParticleEngine_Prerun(ParticleEngine_t* e, int ms)
+void ParticleEngine_Prerun(OpenBGI_t* o, ParticleEngine_t* e, int ms)
 {
 	uint32_t saved[2][PTCL_PATTERNS];
 	uint32_t lastTick, now, i;
@@ -294,9 +298,9 @@ void ParticleEngine_Prerun(ParticleEngine_t* e, int ms)
 		return;
 	lastTick = e->lastTick;
 	memcpy(saved, e->nextSpawn, sizeof saved);
-	now = GetTicks();
+	now = GetTicks(o);
 	for(i = 1; i <= (uint32_t)ms; i++)
-		ParticleEngine_UpdateTo(e, now + i);
+		ParticleEngine_UpdateTo(o, e, now + i);
 	e->lastTick = lastTick;
 	memcpy(e->nextSpawn, saved, sizeof saved);
 }
@@ -316,14 +320,17 @@ typedef struct PtclVis // a projected particle; linked in order from far to near
  * projected point.  The rectangles touched go to outRects (one per blit
  * that succeeded, clipped to `dst`); *outCount and the result are their
  * number. */
-static int ParticleEngine_RenderImpl(ParticleEngine_t* e, Bmp_t* dst, int cx, int cy, int32_t* outCount,
+static int ParticleEngine_RenderImpl(OpenBGI_t* o, ParticleEngine_t* e, Bmp_t* dst, int cx, int cy, int32_t* outCount,
 	Rect_t* outRects)
 {
-	static PtclVis_t vis[PTCL_MAX]; // too large for the stack at 0x8000 entries (the original keeps its 4096 there)
+	PtclVis_t* vis; // too large for the stack at 0x8000 entries (the original keeps its 4096 there)
 	PtclVis_t* head = NULL;
 	Rect_t clip;
 	int n = 0, count = 0, i;
 
+	if(!e->vis)
+		e->vis = (PtclVis_t*)BGI_Alloc(sizeof(PtclVis_t) * PTCL_MAX);
+	vis = e->vis;
 	for(i = 0; i < PTCL_MAX; i++)
 	{
 		Particle_t* q = e->slot[i];
@@ -366,7 +373,7 @@ static int ParticleEngine_RenderImpl(ParticleEngine_t* e, Bmp_t* dst, int cx, in
 		Particle_t* q = head->q;
 		int32_t den = (e->dist << 8) + head->z;
 		int idx = 32 - (e->dist * 32) / ((head->z >> 8) + e->dist); // the scale index: 0 = full size at depth 0
-		const Bmp_t* b = q->vt->bitmap(q, idx);
+		const Bmp_t* b = q->vt->bitmap(o, q, idx);
 		int sx, sy;
 		Rect_t r;
 		if(!b)
@@ -374,7 +381,7 @@ static int ParticleEngine_RenderImpl(ParticleEngine_t* e, Bmp_t* dst, int cx, in
 		// 32-bit products, as the original
 		sx = cx + (int32_t)((uint32_t)head->x * (uint32_t)e->dist) / den - (int)((uint32_t)b->w >> 1);
 		sy = cy - (int32_t)((uint32_t)head->y * (uint32_t)e->dist) / den - (int)((uint32_t)b->h >> 1);
-		if(Bmp_Blit(dst, sx, sy, b, q->effect, q->vt->level(q)) != 0)
+		if(Bmp_Blit(dst, sx, sy, b, q->effect, q->vt->level(o, q)) != 0)
 			continue;
 		Rect_FromBmp(&r, b);
 		Rect_Offset(&r, sx, sy);
@@ -386,9 +393,9 @@ static int ParticleEngine_RenderImpl(ParticleEngine_t* e, Bmp_t* dst, int cx, in
 }
 
 // render for ParticleScreen_Redraw: see ParticleEngine_RenderImpl
-int ParticleEngine_Render(ParticleEngine_t* e, Bmp_t* dst, int cx, int cy, int32_t* outCount, Rect_t* outRects)
+int ParticleEngine_Render(OpenBGI_t* o, ParticleEngine_t* e, Bmp_t* dst, int cx, int cy, int32_t* outCount, Rect_t* outRects)
 {
-	return ParticleEngine_RenderImpl(e, dst, cx, cy, outCount, outRects);
+	return ParticleEngine_RenderImpl(o, e, dst, cx, cy, outCount, outRects);
 }
 
 // ---- the automatic redraw list ------------------------------------------------------------
@@ -401,17 +408,15 @@ typedef struct PtclAuto // a particle screen that redraws itself, 0x10 bytes
 	struct PtclAuto* link; // the next entry
 } PtclAuto_t;
 
-static PtclAuto_t* gPtclAutoHead; // the registered screens, in order of registration
-
 /* "C0 09": redraw the particle screen `handle` every `intervalMs`
  * milliseconds without the script's help; 0 unregisters it.  Returns 0
  * when the handle names no screen. */
-int Ptcl_SetAuto(uint32_t handle, uint32_t intervalMs)
+int Ptcl_SetAuto(OpenBGI_t* o, uint32_t handle, uint32_t intervalMs)
 {
 	PtclAuto_t **link, *n;
-	if(!Gfx_FindParticle(gGfx, handle))
+	if(!Gfx_FindParticle(o->gfx.gfx, handle))
 		return 0;
-	for(link = &gPtclAutoHead; *link && (*link)->handle != handle; link = &(*link)->link)
+	for(link = &o->ptcl.ptclAutoHead; *link && (*link)->handle != handle; link = &(*link)->link)
 		;
 	n = *link;
 	if(intervalMs > 0)
@@ -420,7 +425,7 @@ int Ptcl_SetAuto(uint32_t handle, uint32_t intervalMs)
 		{
 			n = (PtclAuto_t*)BGI_Alloc(sizeof *n);
 			n->handle = handle;
-			n->next = GetTicks();
+			n->next = GetTicks(o);
 			n->link = NULL;
 			*link = n;
 		}
@@ -435,41 +440,41 @@ int Ptcl_SetAuto(uint32_t handle, uint32_t intervalMs)
 }
 
 // unregister every screen (a reboot of the machine, and engine shutdown)
-void Ptcl_AutoClear(void)
+void Ptcl_AutoClear(OpenBGI_t* o)
 {
-	while(gPtclAutoHead)
-		Ptcl_SetAuto(gPtclAutoHead->handle, 0);
+	while(o->ptcl.ptclAutoHead)
+		Ptcl_SetAuto(o, o->ptcl.ptclAutoHead->handle, 0);
 }
 
 /* once per scheduler pass: redraw every registered screen whose time has
  * come, provided it is visible and not below the draw limit of "90 09";
  * screens that no longer exist drop out of the list.  A redraw requests a
  * dirty present. */
-void Ptcl_AutoTick(void)
+void Ptcl_AutoTick(OpenBGI_t* o)
 {
-	uint32_t now = GetTicks();
-	uint32_t drawLimit = Gfx_GetDrawLimit(gGfx);
-	PtclAuto_t** link = &gPtclAutoHead;
+	uint32_t now = GetTicks(o);
+	uint32_t drawLimit = Gfx_GetDrawLimit(o->gfx.gfx);
+	PtclAuto_t** link = &o->ptcl.ptclAutoHead;
 	int dirty = 0;
 	while(*link)
 	{
 		PtclAuto_t* n = *link;
-		DispObj_t* o;
+		DispObj_t* obj;
 		if(n->next > now)
 		{
 			link = &n->link;
 			continue;
 		}
-		o = Gfx_FindParticle(gGfx, n->handle);
-		if(!o)
+		obj = Gfx_FindParticle(o->gfx.gfx, n->handle);
+		if(!obj)
 		{
 			*link = n->link;
 			BGI_Free(n);
 			continue;
 		}
-		if(o->vt->isVisible(o) && drawLimit <= o->vt->sortKey(o))
+		if(obj->vt->isVisible(o, obj) && drawLimit <= obj->vt->sortKey(o, obj))
 		{
-			Gfx_ParticleRedraw(gGfx, n->handle);
+			Gfx_ParticleRedraw(o, o->gfx.gfx, n->handle);
 			dirty = 1;
 		}
 		if(n->next == 0)
@@ -478,11 +483,11 @@ void Ptcl_AutoTick(void)
 		link = &n->link;
 	}
 	if(dirty)
-		Present_RequestDirty();
+		Present_RequestDirty(o);
 }
 
 // once per scheduler pass: bring every particle screen's engine up to the present
-void Ptcl_UpdateAll(void)
+void Ptcl_UpdateAll(OpenBGI_t* o)
 {
-	Gfx_UpdateParticles(gGfx);
+	Gfx_UpdateParticles(o, o->gfx.gfx);
 }

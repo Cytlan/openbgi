@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * wavemaster.c - the life cycle of the "Wave Master" sound library
- *                (inc/bgi/snd/wavemaster.h): start-up and shutdown, the
- *                20 ms fade timer, the lock, and the debugger's view
+ *                (src/include/bgi/snd/wavemaster.h): start-up and shutdown, the
+ *                20 ms fade timer and the debugger's view
  *
  * Structure of the original: one record per music channel (16) and per
  * effect slot (64) holding the voice, the stream, the master and channel
@@ -15,188 +15,154 @@
  * code match the original.
  */
 #include "wm_internal.h"
+#include "bgi/host.h"
+#include "bgi/core.h"
 
-/* BGI_SND_DEBUG in the environment reports music opens (with the file's
- * loop specification) and the pump's restarts / ends on stderr */
-int gSndDebug;
-OsLock_t* gWmLock; // created by the first Wm_Lock
-int gAudioRunning; // OS_AudioStart succeeded: the mixer thread runs
-
-WmRecord_t gBgm[WM_BGM_CHANNELS];
-WmRecord_t gSe[WM_SE_SLOTS];
-Voice_t gBgmVoices[WM_BGM_CHANNELS];
-Voice_t gSeVoices[WM_SE_SLOTS];
-uint32_t gWmFlags;          // bit 0 initialised, bit 1 timer running
-uint32_t gWmNextTick;       // when the 20 ms timer is next due (ms)
-static char gWmVersion[32]; // the buffer Wm_Version formats into
-
-// take the library lock, creating it on first use
-void Wm_Lock(void)
+/* Start the library: every record and voice reset, and the mixer started
+ * (44.1 kHz 16-bit stereo, the original's DirectSound format), which
+ * fills the engine's sound out (bgi/snd/sndout.h).  0 ok, 1 already
+ * started, 5 when the machine has no sound output (Host_AudioAvailable:
+ * the library then stays uninitialised). */
+int Wm_Init(OpenBGI_t* o)
 {
-	if(!gWmLock)
-		gWmLock = OS_LockCreate();
-	OS_LockEnter(gWmLock);
-}
-
-void Wm_Unlock(void)
-{
-	OS_LockLeave(gWmLock);
-}
-
-/* Start the library: every record and voice reset, the audio device
- * opened at 44.1 kHz 16-bit stereo with the mixer as its callback.
- * 0 ok, 1 already started, 5 when there is no audio device or it could
- * not be started (the library then stays uninitialised). */
-int Wm_Init(void)
-{
-	gSndDebug = getenv("BGI_SND_DEBUG") != NULL;
 	int i, r = 0;
-	Wm_Lock();
-	if(gWmFlags & 1)
+	o->snd.sndDebug = getenv("BGI_SND_DEBUG") != NULL; // music opens, the pump's restarts and ends on stderr
+	if(o->snd.wmFlags & 1)
 		r = WM_E_ALREADY_INIT;
 	else
 	{
-		gWmFlags = 0;
+		o->snd.wmFlags = 0;
 		for(i = 0; i < WM_BGM_CHANNELS; i++)
 		{
-			Record_Reset(&gBgm[i]);
-			memset(&gBgmVoices[i], 0, sizeof gBgmVoices[i]);
-			gBgmVoices[i].isBgm = 1;
-			gBgm[i].voice = &gBgmVoices[i];
+			Record_Reset(&o->snd.bgm[i]);
+			memset(&o->snd.bgmVoices[i], 0, sizeof o->snd.bgmVoices[i]);
+			o->snd.bgmVoices[i].isBgm = 1;
+			o->snd.bgm[i].voice = &o->snd.bgmVoices[i];
 		}
 		for(i = 0; i < WM_SE_SLOTS; i++)
 		{
-			Record_Reset(&gSe[i]);
-			memset(&gSeVoices[i], 0, sizeof gSeVoices[i]);
-			gSe[i].voice = &gSeVoices[i];
+			Record_Reset(&o->snd.se[i]);
+			memset(&o->snd.seVoices[i], 0, sizeof o->snd.seVoices[i]);
+			o->snd.se[i].voice = &o->snd.seVoices[i];
 		}
-		// DirectSound at 44.1 kHz, 16-bit stereo
-		if(!OS_AudioAvailable() || !OS_AudioStart(WM_MIX_RATE, Mixer_Fill, NULL))
+		memset(&o->snd.waveVoice, 0, sizeof o->snd.waveVoice);
+		if(!Host_AudioAvailable(o))
 			r = WM_E_NO_DEVICE;
 		else
 		{
-			gAudioRunning = 1;
-			gWmFlags |= 1;
+			SndOut_Start(o);
+			o->snd.audioRunning = 1;
+			o->snd.wmFlags |= 1;
 		}
 	}
-	Wm_Unlock();
 	return r;
 }
 
 // start the 20 ms fade timer; 0, or 0x14 when the library is not started
-int Wm_StartTimer(void)
+int Wm_StartTimer(OpenBGI_t* o)
 {
 	int r = 0;
-	Wm_Lock();
-	if(!(gWmFlags & 1))
+	if(!(o->snd.wmFlags & 1))
 		r = WM_E_NOT_RUNNING;
 	else
 	{
-		gWmFlags |= 2;
-		gWmNextTick = OS_TicksMs() + 20;
+		o->snd.wmFlags |= 2;
+		o->snd.wmNextTick = Clock_HostMs(o) + 20;
 	}
-	Wm_Unlock();
 	return r;
 }
 
 // stop the fade timer; 0, or 0x14 when the library or the timer is not running
-int Wm_StopTimer(void)
+int Wm_StopTimer(OpenBGI_t* o)
 {
 	int r = 0;
-	Wm_Lock();
-	if((gWmFlags & 3) != 3)
+	if((o->snd.wmFlags & 3) != 3)
 		r = WM_E_NOT_RUNNING;
 	else
-		gWmFlags &= ~2u;
-	Wm_Unlock();
+		o->snd.wmFlags &= ~2u;
 	return r;
 }
 
-// drop the stream of a music channel (the caller holds the lock); 0, 0x14 not running, 0x15 bad channel
-int Wm_BgmRelease(int ch)
+// drop the stream of a music channel; 0, 0x14 not running, 0x15 bad channel
+int Wm_BgmRelease(OpenBGI_t* o, int ch)
 {
-	if(!Wm_Running())
+	if(!Wm_Running(o))
 		return WM_E_NOT_RUNNING;
 	if((uint32_t)ch >= WM_BGM_CHANNELS)
 		return WM_E_BAD_CHANNEL;
-	Voice_Detach(gBgm[ch].voice);
-	gBgm[ch].stream = NULL;
-	gBgm[ch].active = 0;
+	Voice_Detach(o->snd.bgm[ch].voice);
+	o->snd.bgm[ch].stream = NULL;
+	o->snd.bgm[ch].active = 0;
 	return 0;
 }
 
 /* Stop the library: the timer flag is cleared, every effect slot
- * released (the music channels' streams are left to the process exit,
- * see below), the flags zeroed, and the audio device stopped outside
- * the lock (the mixer thread takes it).  Always 0, also when the library
- * was not started. */
-int Wm_Shutdown(void)
+ * released, the music channels' streams let go (the original's release
+ * call does nothing by then, see below, and its streams go with the
+ * process), the flags zeroed, and the mixer stopped (the sound out then
+ * stays silent).  Always 0, also when the library was not started. */
+int Wm_Shutdown(OpenBGI_t* o)
 {
 	int i;
-	Wm_Lock();
-	if(gWmFlags & 1)
+	if(o->snd.wmFlags & 1)
 	{
-		if((gWmFlags & 3) == 3)
-			gWmFlags &= ~2u;
+		if((o->snd.wmFlags & 3) == 3)
+			o->snd.wmFlags &= ~2u;
 		// answers 0x14 now that the timer flag is gone, so the music streams are not released
 		// here (the original frees its voice objects directly instead)
 		for(i = 0; i < WM_BGM_CHANNELS; i++)
-			Wm_BgmRelease(i);
+		{
+			Wm_BgmRelease(o, i);
+			Voice_Detach(o->snd.bgm[i].voice); // (an engine that is stopped keeps nothing)
+			o->snd.bgm[i].stream = NULL;
+			o->snd.bgm[i].active = 0;
+		}
 		for(i = 0; i < WM_SE_SLOTS; i++)
 		{
-			Voice_Detach(gSe[i].voice);
-			gSe[i].stream = NULL;
-			gSe[i].active = 0;
+			Voice_Detach(o->snd.se[i].voice);
+			o->snd.se[i].stream = NULL;
+			o->snd.se[i].active = 0;
 		}
-		gWmFlags = 0;
+		o->snd.wmFlags = 0;
 	}
-	Wm_Unlock();
-	if(gAudioRunning)
+	if(o->snd.audioRunning)
 	{
-		OS_AudioStop();
-		gAudioRunning = 0;
+		SndOut_Stop(o);
+		Voice_Detach(&o->snd.waveVoice);
+		o->snd.audioRunning = 0;
 	}
 	return 0;
 }
 
 /* Run the 20 ms fade tick when it is due (the message pump calls this
- * when its queue is empty, in place of the original's WM_TIMER); 1 when
- * it ran, 0 when the timer is not running or the tick is not due yet.
- * The fades of every record are stepped under the lock. */
-int Wm_TimerPoll(void)
+ * when its queue is empty, in place of the original's WM_TIMER, and so
+ * does OpenBGI_RunAudio while a request holds the engine - a modal loop
+ * of the original dispatches the timer); 1 when it ran, 0 when the timer
+ * is not running or the tick is not due yet. */
+int Wm_TimerPoll(OpenBGI_t* o)
 {
 	uint32_t now;
-	if((gWmFlags & 3) != 3)
+	if((o->snd.wmFlags & 3) != 3)
 		return 0;
-	now = OS_TicksMs();
-	if((int32_t)(now - gWmNextTick) < 0)
+	now = Clock_HostMs(o);
+	if((int32_t)(now - o->snd.wmNextTick) < 0)
 		return 0;
-	gWmNextTick = now + 20;
-	Wm_Lock(); // the original's timer procedure does not take the lock; the mixer thread here does
-	Records_Tick(gBgm, WM_BGM_CHANNELS, now);
-	Records_Tick(gSe, WM_SE_SLOTS, now);
-	Wm_Unlock();
+	o->snd.wmNextTick = now + 20;
+	Records_Tick(o, o->snd.bgm, WM_BGM_CHANNELS, now);
+	Records_Tick(o, o->snd.se, WM_SE_SLOTS, now);
 	return 1;
-}
-
-// the version string "%d.%04dDS%d" of version 2.10 and DirectSound 8: "2.0010DS8"
-const char* Wm_Version(void)
-{
-	sprintf(gWmVersion, "%d.%04dDS%d", 2, 10, 8);
-	return gWmVersion;
 }
 
 /* The debugger's view of voice `index` of the music channels (`bgm`) or
  * the effect slots: its state, format, length, position and levels into
- * *out (zeroed first); 1, or 0 for an index out of range.  No lock is
- * taken: the view is a snapshot. */
-int Wm_DebugVoice(int bgm, int index, WmVoiceInfo_t* out)
+ * *out (zeroed first); 1, or 0 for an index out of range. */
+int Wm_DebugVoice(OpenBGI_t* o, int bgm, int index, WmVoiceInfo_t* out)
 {
 	const Voice_t* v;
 	memset(out, 0, sizeof *out);
 	if(bgm ? (index < 0 || index >= WM_BGM_CHANNELS) : (index < 0 || index >= WM_SE_SLOTS))
 		return 0;
-	v = bgm ? &gBgmVoices[index] : &gSeVoices[index];
+	v = bgm ? &o->snd.bgmVoices[index] : &o->snd.seVoices[index];
 	out->loaded = v->stream != NULL;
 	out->playing = v->playing;
 	out->paused = v->paused;
@@ -206,6 +172,6 @@ int Wm_DebugVoice(int bgm, int index, WmVoiceInfo_t* out)
 	out->pos = v->pos;
 	out->dsVolume = v->dsVolume;
 	out->pan = v->pan;
-	out->loops = v->stream && bgm ? WmStream_LoopCount(v->stream) : 0;
+	out->loops = v->stream && bgm ? WmStream_LoopCount(o, v->stream) : 0;
 	return 1;
 }

@@ -5,7 +5,7 @@
  * vecmaps.c - the generators of the vector maps (the displacement fields the
  * effectors, backgrounds and "90 1A" read through) and of the vector +
  * distance maps of the ripples and wipes, plus the loader of the "bwef"
- * files.  Interface in inc/bgi/gfx/bmpops.h.
+ * files.  Interface in src/include/bgi/gfx/bmpops.h.
  *
  * A PM_VECTOR map holds a 12.4 fixed-point (dx, dy) pair per pixel (hence
  * the factor 16 in the formulas below): the displacement the blitter adds
@@ -31,7 +31,8 @@
 #include "bgi/codec.h"
 #include "bgi/strutil.h"
 #include "bgi/msg.h"
-#include "bgi/os.h"
+#include "bgi/vm.h"
+#include "bgi/core.h"
 
 // ---- vector map generators ---------------------------------------------------------------------
 
@@ -75,10 +76,10 @@ int Vec_StretchRange(Bmp_t* b, int ox, int oy, int rw, int rh)
 	return 0;
 }
 
-int BmpOp_VecStretchRange(int slot, int ox, int oy, int rw, int rh)
+int BmpOp_VecStretchRange(OpenBGI_t* o, int slot, int ox, int oy, int rw, int rh)
 {
 	Bmp_t b;
-	if(!BmpMgr_GetInfo(gBmpMgr, &b, slot))
+	if(!BmpMgr_GetInfo(o->gfx.bmpMgr, &b, slot))
 		return (int)0x80000001;
 	return Vec_StretchRange(&b, ox, oy, rw, rh);
 }
@@ -86,7 +87,7 @@ int BmpOp_VecStretchRange(int slot, int ox, int oy, int rw, int rh)
 /* "91 11": every component uniformly random in -amplitude..amplitude (whole
  * map units, not pixels); two 15-bit draws of BGI_Rand make one 30-bit
  * number per component */
-int Vec_Random(Bmp_t* b, int amplitude)
+int Vec_Random(OpenBGI_t* o, Bmp_t* b, int amplitude)
 {
 	int x, y;
 	uint32_t range = (uint32_t)(2 * amplitude + 1);
@@ -97,23 +98,23 @@ int Vec_Random(Bmp_t* b, int amplitude)
 		int16_t* p = VecRow(b, y);
 		for(x = 0; x < b->w; x++)
 		{
-			uint32_t hi = (uint32_t)BGI_Rand() << 15, r;
-			r = hi | (uint32_t)BGI_Rand();
+			uint32_t hi = (uint32_t)BGI_Rand(o) << 15, r;
+			r = hi | (uint32_t)BGI_Rand(o);
 			p[2 * x] = (int16_t)(amplitude - (int)(r % range));
-			hi = (uint32_t)BGI_Rand() << 15;
-			r = hi | (uint32_t)BGI_Rand();
+			hi = (uint32_t)BGI_Rand(o) << 15;
+			r = hi | (uint32_t)BGI_Rand(o);
 			p[2 * x + 1] = (int16_t)(amplitude - (int)(r % range));
 		}
 	}
 	return 0;
 }
 
-int BmpOp_VecRandom(int slot, int amplitude)
+int BmpOp_VecRandom(OpenBGI_t* o, int slot, int amplitude)
 {
 	Bmp_t b;
-	if(!BmpMgr_GetInfo(gBmpMgr, &b, slot))
+	if(!BmpMgr_GetInfo(o->gfx.bmpMgr, &b, slot))
 		return (int)0x80000001;
-	return Vec_Random(&b, amplitude);
+	return Vec_Random(o, &b, amplitude);
 }
 
 // one component: (hi^2 - lo^2) / (2 * scale), saturated to 15 bits, negative when the first sample is the higher one
@@ -191,10 +192,10 @@ int Vec_Ripple(Bmp_t* b, int cx, int cy, int period, int phase, int amplitude)
 	return r;
 }
 
-int BmpOp_VecRipple(int slot, int cx, int cy, int period, int phase, int amplitude)
+int BmpOp_VecRipple(OpenBGI_t* o, int slot, int cx, int cy, int period, int phase, int amplitude)
 {
 	Bmp_t b;
-	if(!BmpMgr_GetInfo(gBmpMgr, &b, slot))
+	if(!BmpMgr_GetInfo(o->gfx.bmpMgr, &b, slot))
 		return (int)0x80000001;
 	return Vec_Ripple(&b, cx, cy, period, phase, amplitude);
 }
@@ -249,10 +250,10 @@ int Vec_Polar(Bmp_t* b, int cx, int cy, int32_t angle16, int k)
 	return 0;
 }
 
-int BmpOp_VecPolar(int slot, int cx, int cy, int32_t angle16, int k)
+int BmpOp_VecPolar(OpenBGI_t* o, int slot, int cx, int cy, int32_t angle16, int k)
 {
 	Bmp_t b;
-	if(!BmpMgr_GetInfo(gBmpMgr, &b, slot))
+	if(!BmpMgr_GetInfo(o->gfx.bmpMgr, &b, slot))
 		return (int)0x80000001;
 	return Vec_Polar(&b, cx, cy, angle16, k);
 }
@@ -302,10 +303,10 @@ int Vec_BendAngle(Bmp_t* b, int cx, int cy, int32_t angle16, int radius)
 	return 0;
 }
 
-int BmpOp_VecBendAngle(int slot, int cx, int cy, int32_t angle16, int radius)
+int BmpOp_VecBendAngle(OpenBGI_t* o, int slot, int cx, int cy, int32_t angle16, int radius)
 {
 	Bmp_t b;
-	if(!BmpMgr_GetInfo(gBmpMgr, &b, slot))
+	if(!BmpMgr_GetInfo(o->gfx.bmpMgr, &b, slot))
 		return (int)0x80000001;
 	return Vec_BendAngle(&b, cx, cy, angle16, radius);
 }
@@ -342,7 +343,7 @@ int Vec_Bend(Bmp_t* b, int cx, int cy, int radius, int height)
 	return r;
 }
 
-/* "91 16" (1.494 on): a sine-wave vector field - the x displacement of row
+/* "91 16" (1.492 on): a sine-wave vector field - the x displacement of row
  * y is 16 sin(2 pi (y + phaseY) / periodY) ampY, the y displacement of
  * column x is 16 sin(2 pi (x + phaseX) / periodX) ampX (truncated); a zero
  * period counts as 1 with the amplitude dropped. */
@@ -382,18 +383,18 @@ int Vec_Sine(Bmp_t* b, int periodX, int phaseX, int ampX, int periodY, int phase
 	return 0;
 }
 
-int BmpOp_VecSine(int slot, int periodX, int phaseX, int ampX, int periodY, int phaseY, int ampY)
+int BmpOp_VecSine(OpenBGI_t* o, int slot, int periodX, int phaseX, int ampX, int periodY, int phaseY, int ampY)
 {
 	Bmp_t b;
-	if(!BmpMgr_GetInfo(gBmpMgr, &b, slot))
+	if(!BmpMgr_GetInfo(o->gfx.bmpMgr, &b, slot))
 		return (int)0x80000001;
 	return Vec_Sine(&b, periodX, phaseX, ampX, periodY, phaseY, ampY);
 }
 
-int BmpOp_VecBend(int slot, int cx, int cy, int radius, int height)
+int BmpOp_VecBend(OpenBGI_t* o, int slot, int cx, int cy, int radius, int height)
 {
 	Bmp_t b;
-	if(!BmpMgr_GetInfo(gBmpMgr, &b, slot))
+	if(!BmpMgr_GetInfo(o->gfx.bmpMgr, &b, slot))
 		return (int)0x80000001;
 	return Vec_Bend(&b, cx, cy, radius, height);
 }
@@ -432,10 +433,10 @@ int VecDist_Radial(Bmp_t* b, int type, int cx, int cy, int range)
 	return 0;
 }
 
-int BmpOp_VecDistRadial(int slot, int type, int cx, int cy, int range)
+int BmpOp_VecDistRadial(OpenBGI_t* o, int slot, int type, int cx, int cy, int range)
 {
 	Bmp_t b;
-	if(!BmpMgr_GetInfo(gBmpMgr, &b, slot))
+	if(!BmpMgr_GetInfo(o->gfx.bmpMgr, &b, slot))
 		return (int)0x80000001;
 	return VecDist_Radial(&b, type, cx, cy, range);
 }
@@ -466,10 +467,10 @@ int VecDist_Linear(Bmp_t* b, int type)
 	return 0;
 }
 
-int BmpOp_VecDistLinear(int slot, int type)
+int BmpOp_VecDistLinear(OpenBGI_t* o, int slot, int type)
 {
 	Bmp_t b;
-	if(!BmpMgr_GetInfo(gBmpMgr, &b, slot))
+	if(!BmpMgr_GetInfo(o->gfx.bmpMgr, &b, slot))
 		return (int)0x80000001;
 	return VecDist_Linear(&b, type);
 }
@@ -502,17 +503,17 @@ int ParseBwef(BwefEntry_t* out, int32_t* outCount, const void* data, uint32_t si
 }
 
 // load `name` from archive `arc` and parse it; the ParseBwef codes, 0x80000001 for a missing or empty file
-int LoadBwef(const char* arc, const char* name, BwefEntry_t* out, int32_t* outCount, uint32_t base)
+int LoadBwef(OpenBGI_t* o, const char* arc, const char* name, BwefEntry_t* out, int32_t* outCount, uint32_t base)
 {
-	uint32_t size = GetFileSize_(arc, name), n;
+	uint32_t size = GetFileSize_(o, arc, name), n;
 	uint8_t* buf;
 	int r;
 
 	if(size == 0)
 		return (int)0x80000001;
-	buf = (uint8_t*)BGI_Alloc(size);
-	n = LoadFile(buf, arc, name);
+	buf = (uint8_t*)Vm_TempAlloc(o, size); // the load may ask for the disc
+	n = LoadFile(o, buf, arc, name);
 	r = ParseBwef(out, outCount, buf, n, base);
-	BGI_Free(buf);
+	Vm_TempFree(o, buf);
 	return r;
 }

@@ -4,7 +4,7 @@
  *
  * path.c - the motion path of "90 29": up to 100 control points in 16.16
  * coordinates, interpolated per axis by a natural cubic spline.  Interface
- * in inc/bgi/gfx/path.h.
+ * in src/include/bgi/gfx/path.h.
  *
  * The path tween (wait/wait_tween.c) clears the path, adds the object's
  * current fixed position and the script's points, sets the parameter range

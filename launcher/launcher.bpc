@@ -1,0 +1,3142 @@
+// This file is part of OpenBGI (https://openbgi.net).
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// launcher.bpc - OpenBGI's launcher, a Buriko program.
+//
+// The engine runs it when it is started without a game (docs/dev/launcher.md).  It lists the
+// games in the folders the player added - a folder of games, a game's own folder, a .zip or
+// an .iso - with a picture of each from the last time it was played, when that was and for
+// how long, and starts the one chosen.  Everything on the screen is made by the program
+// itself - out of gray patterns (paint.inc) and the engine's built-in font - and laid out
+// again whenever the window changes its size, over a stage of moving light (stage.inc).
+//
+// Screens:
+//   Select Game   the games, each with a play button, and a panel about the selected one;
+//                 Folders, Edit game, the order of the list, the look of the stage, Start game
+//   Game folders  the places that are searched for games; Add folder, Remove, Back
+//   Add folder    a folder browser ("../", "dir/", "file.ext"); Add this folder, Cancel
+//                 (also "Add patch", for the patches of a game: a .zip or a folder)
+//   Edit game     the name, the compatibility (the engine profile), the options and the
+//                 patches of a game; Add patch, Remove patch, Remove game, Cancel, Save
+//
+// Input: the mouse (a double click opens a row), a touch screen (taps; a double tap opens),
+// the keyboard (arrows, Enter, Escape, Tab, Page Up / Down, Home, End, Backspace, F5) and a
+// pad, whose controls the program gives the same keys (pad_keys).  A folder, a .zip, an .iso
+// or one of a game's .arc files dropped on the window is added to the places (drops).
+//
+// Build: none.  OpenBGI compiles this file itself at every start, from the folder "launcher"
+// of the user's data folder, where it writes these sources when they are not there yet.
+// To check a change by hand: openbgi bpc launcher.bpc -o launcher._bp
+//
+// The program is written with the engine's own instructions.  The few of OpenBGI's that it
+// needs - a folder's listing, whether a folder is a game, starting one, the settings in
+// openbgi.json, gray patterns - are named in obgi_launcher.inc and described in docs/modding/obgi.md.
+
+#engine 1.669
+#encoding utf-8
+
+#include "obgi_launcher.inc"
+
+// ---- sizes and limits -------------------------------------------------------------------
+
+#define BASE_W          1280        // the picture the layout is drawn for at a scale of 100
+#define BASE_H          720
+#define MIN_W           800         // a smaller window gets a picture this size, scaled down by the host
+#define MIN_H           480
+#define MAX_GAMES       400
+#define MAX_FOLDERS     64
+#define MAX_PATCHES     16
+#define MAX_PROFILES    48
+#define MAX_ROWS        40          // rows on the screen at once
+#define MAX_BUTTONS     8
+#define FIELDS          3           // the fields of "Edit game": name, compatibility, options
+#define PATH_LEN        1024        // a native path, UTF-8, with its terminator
+#define NAME_LEN        128
+#define DOUBLE_MS       400         // two clicks on a row within this time open it
+#define FONT_FACE       "ＭＳ Ｐゴシック"  // the interface face: MS PGothic, else the engine's built-in BIZ UDPGothic
+
+// ---- the engine's numbers ---------------------------------------------------------------
+
+#define PM_RGB          1           // pixel modes of "90 11": B G R x, the picture's
+#define PM_ARGB         2           // B G R A
+#define PRIO_LAYER      8           // the input layer the program reads ("80 18")
+#define FX_BLEND        1           // a sprite's blend mode: over what is below, its level how transparent (0 .. 0x100)
+#define FX_ADD          2           // added to what is below, its level how much (0 .. 0x100)
+
+#define VK_LBUTTON      1
+#define VK_RBUTTON      2
+#define VK_BACK         8
+#define VK_TAB          9
+#define VK_RETURN       13
+#define VK_SHIFT        16
+#define VK_ESCAPE       27
+#define VK_SPACE        32
+#define VK_PRIOR        33
+#define VK_NEXT         34
+#define VK_END          35
+#define VK_HOME         36
+#define VK_LEFT         37
+#define VK_UP           38
+#define VK_RIGHT        39
+#define VK_DOWN         40
+#define VK_F5           116
+#define VK_WHEEL_UP     14          // the engine's virtual keys of the wheel (input.h)
+#define VK_WHEEL_DOWN   15
+
+// ---- bitmap slots and display priorities -------------------------------------------------
+
+#define BMP_BG          16          // the background: the whole picture
+#define BMP_TOP         17          // the bar at the top, with the title and what the screen is
+#define BMP_BOTTOM      18          // the bar at the bottom, under the buttons
+#define BMP_EMPTY       20          // what an empty list says
+#define BMP_PATCHHDR    21
+#define BMP_SPIN        19          // the ring that turns while games are looked for
+#define BMP_TRACK       22          // the scroll bar
+#define BMP_THUMB       23
+#define BMP_PLAY        24          // the play button of the rows
+#define BMP_PLAY_HOVER  25
+#define BMP_FIELD       26          // + 0 name, + 1 compatibility, + 2 options
+#define BMP_CURSOR      30          // the light on the selected row
+#define BMP_BTN         32          // + button
+#define BMP_PANEL       40          // the panel beside the list, with what it says of the selected game:
+#define BMP_PANELBOX    41          // .. its box alone,
+#define BMP_PANELTXT    44          // .. what it says alone, while that appears,
+#define BMP_PANELWIPE   45          // .. and the pattern it appears through
+#define BMP_PICTURE     42          // a game's picture as it was read,
+#define BMP_HALF        43          // .. and at half that size
+#define BMP_PANELPIC    46          // .. and as the panel shows it
+#define BMP_ROW         96          // + row
+#define BMP_PIC         1000        // + game: its small picture for the list
+
+#define PRIO_BAR        90
+#define PRIO_ROW        100
+#define PRIO_CURSOR     104
+#define PRIO_PLAY       110
+#define PRIO_UI         120
+#define PRIO_SB         130
+
+// ---- colours ------------------------------------------------------------------------------
+// 0xAARRGGBB for what is drawn as boxes (they let the stage shine through), 0xRRGGBB for text
+
+#define COL_BAR_TOP         0xd0080b12
+#define COL_BAR_FADE        0x78080b12
+#define COL_ROW             0xa60e131c
+#define COL_ROW_ALT         0xa6121824
+#define COL_ROW_HOVER       0xc41c2535
+#define COL_FIELD           0xb0101622
+#define COL_PANEL           0xb00c111a
+#define COL_BTN             0xd0262d3d
+#define COL_BTN_HOVER       0xe8384258
+#define COL_BTN_OFF         0x901a1e28
+#define COL_TRACK           0x80141a26
+#define COL_KNOB            0xe06a7488
+#define COL_PIC_FRAME       0x60ffffff
+#define COL_PIC_NONE        0x70202838
+#define COL_TEXT            0xf2f4f8
+#define COL_TEXT_DIM        0xa6aebc
+#define COL_TEXT_OFF        0x687080
+#define COL_FOCUS           0xffffffff
+
+// ---- the screens and their parts ---------------------------------------------------------
+
+#define SCR_GAMES       0
+#define SCR_FOLDERS     1
+#define SCR_BROWSE      2
+#define SCR_EDIT        3
+
+#define BR_FOLDER       0           // the browser adds a place to search
+#define BR_PATCH        1           // the browser adds a patch to the edited game
+
+#define SORT_NAME       0
+#define SORT_RECENT     1
+
+// the buttons
+#define B_FOLDERS       1
+#define B_EDIT          2
+#define B_START         3
+#define B_ADD_FOLDER    4
+#define B_REMOVE_FOLDER 5
+#define B_BACK          6
+#define B_ADD_CURRENT   7
+#define B_CANCEL        8
+#define B_ADD_PATCH     9
+#define B_REMOVE_PATCH  10
+#define B_REMOVE_GAME   11
+#define B_SAVE          12
+#define B_SORT          13
+#define B_LOOK          14
+
+// what the pointer is on
+#define H_NONE          0
+#define H_ROW           1
+#define H_PLAY          2
+#define H_BTN           3
+#define H_FIELD         4
+#define H_TRACK         5
+#define H_THUMB         6
+
+// where the keyboard focus is, top to bottom
+#define Z_FIELDS        0
+#define Z_LIST          1
+#define Z_BUTTONS       2
+
+// how a row's text is drawn (row_text)
+#define ROW_DIM         1           // an entry that cannot be chosen
+#define ROW_PATH        2           // a path: cut at its start when it is too long
+
+// a game's small picture
+#define PIC_UNKNOWN     0           // not looked for yet
+#define PIC_THERE       1
+#define PIC_NONE        2
+
+// ---- the records --------------------------------------------------------------------------
+
+struct Game {
+    char path[1024];        // where it is: a folder, a .zip or an .iso (native, UTF-8)
+    char name[128];         // the name shown: the player's, else probed
+    char probed[128];       // the name the engine found for it, else its file name
+    char label[320];        // the row's text: name, or "name (n : file)" when several share it
+    char base[128];         // its file name: "TAYUTAMA.ISO", "TAYUTAMA/"
+    char detected[16];      // the profile the detection chose
+    char profile[16];       // the profile the player chose, "" for automatic
+    char played[20];        // when it was started last, "2026-11-17 21:30"; "" for never
+    int seconds;            // how long it ran, all in all
+    int kind;               // GAME_FOLDER, GAME_ZIP, GAME_ISO
+    int pic;                // PIC_...: its small picture,
+    int picW;               // .. and that picture's size
+    int picH;
+};
+
+struct Btn {
+    int x; int y; int w; int h;
+    int id;                 // B_...
+    int enabled;
+    int right;              // in the group at the right end of the bar
+    int primary;            // drawn in the accent colour
+    char text[64];
+};
+
+// ---- the program's memory (the engine's global memory, 2 MB: "80 70" 9) ------------------
+
+#define G_VARS      0x1000
+global int gW @ G_VARS + 0;             // the picture's size
+global int gH @ G_VARS + 4;
+global int gScale @ G_VARS + 8;         // the interface scale in percent (px)
+global int gScreen @ G_VARS + 12;
+global int gBrMode @ G_VARS + 16;
+global int gNeedScan @ G_VARS + 20;     // the folders changed: look for games again
+global int gScanning @ G_VARS + 24;
+global int gMx @ G_VARS + 28;           // the pointer
+global int gMy @ G_VARS + 32;
+global int gMouseSeen @ G_VARS + 36;
+global int gKeyMode @ G_VARS + 40;      // the keyboard (or a pad) was used last: the focus is drawn
+global int gLastKind @ G_VARS + 44;     // the last click, for double clicks
+global int gLastIdx @ G_VARS + 48;
+global int gLastTime @ G_VARS + 52;
+global int gHitKind @ G_VARS + 56;      // what the pointer is on (hit)
+global int gHitIdx @ G_VARS + 60;
+global int gMargin @ G_VARS + 64;       // the layout (layout)
+global int gTopH @ G_VARS + 68;         // the bars
+global int gBotH @ G_VARS + 72;
+global int gInfoShown @ G_VARS + 76;
+global int gBarY @ G_VARS + 80;         // the buttons
+global int gBtnH @ G_VARS + 84;
+global int gFieldCount @ G_VARS + 88;
+global int gFieldY @ G_VARS + 92;
+global int gFieldH @ G_VARS + 96;
+global int gPatchHdrY @ G_VARS + 100;
+global int gLstX @ G_VARS + 104;        // the list: its area
+global int gLstY @ G_VARS + 108;
+global int gLstW @ G_VARS + 112;
+global int gLstH @ G_VARS + 116;
+global int gRowH @ G_VARS + 120;        // a row's height, and how far it is to the next one
+global int gRowPitch @ G_VARS + 124;
+global int gRowLines @ G_VARS + 128;
+global int gLstN @ G_VARS + 132;        // rows on the screen
+global int gLstPlay @ G_VARS + 136;     // the rows have play buttons
+global int gLstCount @ G_VARS + 140;    // its items
+global int gLstTop @ G_VARS + 144;      // the first item on the screen
+global int gLstSel @ G_VARS + 148;      // the selected item, -1 for none
+global int gLstHover @ G_VARS + 152;    // the item under the pointer, -1 for none
+global int gPlayHover @ G_VARS + 156;   // the item whose play button is under the pointer
+global int gPlayD @ G_VARS + 160;       // the play button's size
+global int gPlayMade @ G_VARS + 164;    // the size and the colour its bitmaps were made with
+global int gPlayCol @ G_VARS + 168;
+global int gSbShown @ G_VARS + 172;     // the scroll bar
+global int gSbX @ G_VARS + 176;
+global int gSbY @ G_VARS + 180;
+global int gSbW @ G_VARS + 184;
+global int gSbH @ G_VARS + 188;
+global int gThumbH @ G_VARS + 192;
+global int gKnob @ G_VARS + 196;
+global int gBtnCount @ G_VARS + 200;
+global int gBtnHover @ G_VARS + 204;
+global int gFieldHover @ G_VARS + 208;
+global int gFocusZone @ G_VARS + 212;
+global int gFocusBtn @ G_VARS + 216;
+global int gFocusField @ G_VARS + 220;
+global int gGameCount @ G_VARS + 224;
+global int gFolderCount @ G_VARS + 228;
+global int gProfCount @ G_VARS + 232;
+global int gEdit @ G_VARS + 236;        // the game being edited (an index of gGames)
+global int gEditProf @ G_VARS + 240;    // its profile: an index of gProfiles, -1 for automatic
+global int gEditPatchCount @ G_VARS + 244;
+global int gEditSel @ G_VARS + 248;     // the selected patch while the browser is open
+global int gBrHandle @ G_VARS + 252;    // the browser's listing (OBGI_DIR_OPEN)
+global int gBrHasUp @ G_VARS + 256;     // its first row is "../"
+global int gBrEntries @ G_VARS + 260;
+global int gBrBad @ G_VARS + 264;       // the folder could not be read
+global int gTopSpr @ G_VARS + 268;      // the sprites that are not in a table
+global int gBottomSpr @ G_VARS + 272;
+global int gEmptySpr @ G_VARS + 276;
+global int gPatchHdrSpr @ G_VARS + 280;
+global int gTrackSpr @ G_VARS + 284;
+global int gThumbSpr @ G_VARS + 288;
+global int gCursorSpr @ G_VARS + 292;
+global int gPanelSpr @ G_VARS + 296;
+global int gPanelTxtSpr @ G_VARS + 300;
+global int gLDown @ G_VARS + 304;       // the mouse buttons were down last frame
+global int gRDown @ G_VARS + 308;
+global int gFont @ G_VARS + 312;        // the interface font's number ("B0 C0")
+global int gSort @ G_VARS + 316;        // SORT_...
+global int gPicScale @ G_VARS + 320;    // the scale the games' small pictures were read at
+global int gPicW @ G_VARS + 324;        // the box of a small picture in a row
+global int gPicH @ G_VARS + 328;
+global int gPanelShown @ G_VARS + 332;  // the panel beside the list
+global int gPanelX @ G_VARS + 336;
+global int gPanelW @ G_VARS + 340;
+global int gPanelGame @ G_VARS + 344;   // the game it shows (an index of gGames), -1 for none
+global int gPanelDue @ G_VARS + 348;    // when it is drawn for the selection (0: it is)
+global int gPanelWipe @ G_VARS + 352;   // when what it says began to appear (0: it is there)
+global int gCascade @ G_VARS + 356;     // when the rows began to come in (0: they are in)
+global int gCurY @ G_VARS + 360;        // the light on the selected row: where it is, in 1/16 pixel
+global int gCurOn @ G_VARS + 364;
+global int gNow @ G_VARS + 368;         // the clock at the start of the frame
+global int gLang @ G_VARS + 372;        // the language of the texts: 0 English, 1 Japanese
+global int gSep @ G_VARS + 376;         // what stands between the names of a path: '/' or '\\'
+global int gPreviews @ G_VARS + 380;    // the first pictures the host has made so far (previews)
+global int gPanelPic @ G_VARS + 384;    // the panel shows its game's picture
+global int gScanAsk @ G_VARS + 388;     // the games are to be looked for (again): scan_thread's word
+global int gScanEnd @ G_VARS + 392;     // .. it is through: the list is to be drawn a last time
+global int gScanShown @ G_VARS + 396;   // the number of games the list was drawn with
+global int gSpinSpr @ G_VARS + 400;     // the ring that turns meanwhile,
+global int gSpinOn @ G_VARS + 404;      // .. shown,
+global int gSpinAt @ G_VARS + 408;      // .. and when it was drawn last
+global int gBusy @ G_VARS + 412;        // since when the program's own thread waits for the engine to read (0: it does not)
+global int gSubW @ G_VARS + 416;        // how wide the bar's line of what the screen is came out
+global int gDropSel @ G_VARS + 420;     // the game at gDropLast is to be selected when the search brings it
+
+global int gRowSpr[MAX_ROWS] @ 0x1800;
+global int gPlaySpr[MAX_ROWS] @ 0x1900;
+global int gFieldSpr[FIELDS] @ 0x1b00;
+global int gBtnSpr[MAX_BUTTONS] @ 0x1b10;
+global Btn gBtn[MAX_BUTTONS] @ 0x2000;
+global GameInfo gInfo @ 0x2800;
+global GameInfo gScanInfo @ 0x2900;     // scan_thread's own (it waits for the engine while the rest goes on)
+global char gProfiles[MAX_PROFILES][16] @ 0x3000;
+
+global char gBrPath[1024] @ 0x4000;     // the browser's folder, "" for the computer (Windows' drives)
+global char gSelPath[1024] @ 0x4400;    // the path of the selected game, kept across scans
+global char gEditName[256] @ 0x4800;
+global char gTmp1[1024] @ 0x4900;       // scratch: a setting, a dialog's answer
+global char gTmp2[1024] @ 0x4d00;       // scratch: the info line, the compatibility text
+global char gTmp3[1024] @ 0x5100;       // scratch: the browser's entries (row_text)
+global char gLine1[1024] @ 0x5500;      // a row's text (row_text)
+global char gLine2[1024] @ 0x5900;
+global char gFit[1024] @ 0x5d00;        // a text cut to fit (fit_end, fit_start)
+global char gMsg[1024] @ 0x6100;        // a message box's text
+global char gPathBuf[1024] @ 0x6500;    // a path being built
+global char gParent[1024] @ 0x6900;
+global char gChild[1024] @ 0x6d00;
+global char gScanPath[1024] @ 0x7100;
+global char gEditOptions[256] @ 0x7500;
+global char gWhen[64] @ 0x7600;         // scratch: a time as text (time_text)
+global int gBmpInfo[8] @ 0x7700;        // scratch: "90 16"
+global char gPicPath[96] @ 0x7740;      // scratch: a picture's file
+global char gCfgTmp[16] @ 0x77a0;       // scratch: the start of a setting's value (cfg_n)
+global char gDrop[1024] @ 0x7800;       // a path that was dropped on the window (drops),
+global char gDropLast[1024] @ 0x7c00;   // .. and the last place that came of a drop
+
+global char gFolders[MAX_FOLDERS][1024] @ 0x8000;
+global char gEditPatches[MAX_PATCHES][1024] @ 0x18000;
+global char gPatchBlock[0x4400] @ 0x1c000;     // the patches for OBGI_LAUNCH_GAME: strings, then ""
+global Game gGames[MAX_GAMES] @ 0x48000;       // 400 x 1800 bytes
+global int gOrder[MAX_GAMES] @ 0x100000;       // the list's order: indices of gGames
+global int gT[128] @ 0x101000;                 // the texts (strings.inc)
+
+// The engine starts a program at its first function: this one, before the files below
+// bring theirs.
+main() {
+    run();
+}
+
+#include "strings.inc"
+#include "strings_ja.inc"
+#include "paint.inc"
+#include "stage.inc"
+
+// ==========================================================================================
+// The program
+// ==========================================================================================
+
+run() {
+    init();
+    go_games();
+    while (1) {
+        gNow = sys.get_ticks();
+        resize_check();
+        input();
+        drops();
+        scan_watch();
+        previews();
+        animate();
+        gfx0.present(0);
+        nap(14);        // about sixty turns a second
+    }
+}
+
+// Set the engine up: memory, text, the window, the sprites, the picture, the settings.
+init() { int i; int w; int h; int desk[2]; int now[4];
+    sys.set_gmem_size(9);
+    sys81.set_text_encoding(1);
+    obgi.text_direction(2);
+    sys.set_close_mode(1);
+    gfx0.set_fps(30);               // the pictures a second, until the stage sets its look's (stage_build)
+    gfx0.wait_present_mode(0, 0);   // .. and only when the program says so, not at every step of a tween
+    sys.set_idle_sleep(4);          // the machine rests between the pictures
+    gfx0.set_antialias(1);
+    strings_en();
+    gLang = 0;                              // the texts are in the language of the engine's own messages
+    if (OBGI_CFG_GET("", "language", 0, gTmp1, 8) > 0 && streq(gTmp1, "ja")) gLang = 1;
+    if (gLang == 1) strings_ja();
+    gSep = 47;
+    if (OBGI_CFG_GET("", "separator", 0, gTmp1, 8) > 0) gSep = gTmp1[0] & 255;
+    sys.set_title(TXT_WINDOW_TITLE);
+    gFont = ext0.font_register(FONT_FACE);
+    sys81.set_resizable(1);
+    sys.dragdrop_enable(1);                 // folders and games can be dropped on the window (drops)
+    pad_keys();
+    sys.input_layer_push(PRIO_LAYER);
+    sys.get_localtime(now);                 // another stage at every start
+    sys.srand(now[0] ^ now[1] ^ now[2] ^ now[3] ^ sys.get_ticks());
+
+    gMx = -1;
+    gMy = -1;
+    gLstSel = -1;
+    gLstHover = -1;
+    gPlayHover = -1;
+    gBtnHover = -1;
+    gFieldHover = -1;
+    gPanelGame = -1;
+    gLastTime = -100000;
+    for (i = 0; i < MAX_ROWS; i = i + 1) {
+        gRowSpr[i] = new_sprite();
+        gPlaySpr[i] = new_sprite();
+    }
+    for (i = 0; i < MAX_BUTTONS; i = i + 1) {
+        gBtnSpr[i] = new_sprite();
+    }
+    for (i = 0; i < FIELDS; i = i + 1) {
+        gFieldSpr[i] = new_sprite();
+    }
+    gTopSpr = new_sprite();
+    gBottomSpr = new_sprite();
+    gEmptySpr = new_sprite();
+    gSpinSpr = new_sprite();
+    gPatchHdrSpr = new_sprite();
+    gTrackSpr = new_sprite();
+    gThumbSpr = new_sprite();
+    gCursorSpr = new_sprite();
+    gPanelSpr = new_sprite();
+    gPanelTxtSpr = new_sprite();
+    canvas(BMP_THUMB, 8, 40);
+    gfx0.sprite_set(gThumbSpr, 0, 0, BMP_THUMB, 0, 0, PRIO_SB + 1);
+    gKnob = gfx0.knob_create(gThumbSpr);
+    gfx0.knob_show(gKnob, 0);
+    stage_init();
+    sys81.spawn_borrower(0x200, 0x100, 0x4000, scan_thread);
+    sys81.spawn_borrower(0x100, 0x100, 0x1000, busy_thread);
+
+    // the picture: as large as it was left, when the desktop has room for that
+    w = BASE_W;
+    h = BASE_H;
+    if (OBGI_CFG_GET("", "width", 0, gTmp1, 16) > 0) w = to_int(gTmp1);
+    if (OBGI_CFG_GET("", "height", 0, gTmp1, 16) > 0) h = to_int(gTmp1);
+    sys81.desktop_size(desk);
+    if (w < MIN_W || h < MIN_H || w > desk[0] || h > desk[1] - 60) {
+        w = BASE_W;
+        h = BASE_H;
+    }
+    picture_size(w, h);
+    stage_build();
+
+    profiles_load();
+    gSort = SORT_NAME;
+    if (OBGI_CFG_GET("", "sort", 0, gTmp1, 16) > 0 && streq(gTmp1, "recent")) gSort = SORT_RECENT;
+    if (OBGI_CFG_GET("", "last", 0, gSelPath, PATH_LEN) <= 0) {
+        gSelPath[0] = 0;
+    }
+    places_seed();
+    gNeedScan = 1;
+    curtain_black();                        // the launcher appears out of black
+    curtain(PRIO_VEIL, 0x100, 0, 700);
+    sys.show_window(1);
+}
+
+// A pad's controls type keys ("81 1B"): the D-pad and the stick the arrows, the lower face
+// button Enter, the right one and START Escape, L1 and R1 Page Up and Page Down.
+pad_keys() {
+    sys81.pad_key(32, VK_UP);
+    sys81.pad_key(33, VK_DOWN);
+    sys81.pad_key(34, VK_LEFT);
+    sys81.pad_key(35, VK_RIGHT);
+    sys81.pad_key(0, VK_RETURN);
+    sys81.pad_key(1, VK_ESCAPE);
+    sys81.pad_key(7, VK_ESCAPE);
+    sys81.pad_key(4, VK_PRIOR);
+    sys81.pad_key(5, VK_NEXT);
+}
+
+// A sprite, hidden until it is given a bitmap.
+new_sprite() { int h;
+    h = gfx0.sprite_create();
+    gfx0.sprite_show(h, 0);
+    return h;
+}
+
+// The picture becomes w x h: the size table's entry 0, the display mode, a new background.
+// The stage's pieces follow when the size has stayed for a moment.
+picture_size(w, h) {
+    if (gCurtainAt) {                           // a curtain of the old size goes at once
+        gCurtainAt = 0;
+        gfx0.sprite_show(gCurtainSpr, 0);
+    }
+    gW = w;
+    gH = h;
+    gScale = scale_for(w, h);
+    sys81.set_size_entry(0, w, h);
+    sys.set_display_mode(0, 1, 0);
+    gfx0.bmp_create(BMP_BG, w, h, PM_RGB);      // a background is in the picture's own mode
+    stage_bg(BMP_BG);
+    gfx0.bg_bitmap(BMP_BG);
+    gfx0.bg_show(1, 1);
+    gStageDue = sys.get_ticks() + 250;
+}
+
+// Follow the window: when its client area changed its size, the picture takes that size and
+// the screen is laid out again ("81 66" made the window resizable).
+resize_check() { int ws[2]; int w; int h;
+    sys81.get_window_size(ws);
+    w = imax(ws[0], MIN_W);
+    h = imax(ws[1], MIN_H);
+    if (w != gW || h != gH) {
+        picture_size(w, h);
+        build();
+        if (gLstSel >= 0) {
+            list_select(gLstSel, 1);
+        }
+    }
+    if (gStageDue && gNow - gStageDue >= 0) {
+        stage_build();
+    }
+}
+
+// The settings that say how the launcher was left.  (The engine writes the file.)
+settings_save() {
+    sprintf(gTmp1, "%d", gW);
+    OBGI_CFG_SET("", "width", 0, gTmp1);
+    sprintf(gTmp1, "%d", gH);
+    OBGI_CFG_SET("", "height", 0, gTmp1);
+}
+
+// The number of values a setting has.
+cfg_n(char* path, char* key) { int n;
+    n = 0;
+    while (OBGI_CFG_GET(path, key, n, gCfgTmp, 16) >= 0) {
+        n = n + 1;
+    }
+    return n;
+}
+
+// ==========================================================================================
+// Small helpers
+//
+// A word on calls inside expressions.  Every statement leaves its value on the machine's
+// stack (a ring that is never cleared), and a function returns with whatever its statements
+// left there, under its result.  A call is therefore safe only where nothing waits on the
+// stack below it - first in an expression, as an assignment's whole value, in a condition -
+// or when the function is "clean": a body of conditions and `return expr` only, which leaves
+// nothing but its result.  The clean ones here: imin, imax, iclamp, px, lower, char_start,
+// in_rect, text_w, row_w, list_max_top, zone_ok, rgb_mix, argb, is_sep, drive_root.  Anything else is called on
+// its own (n = f(x);) before its value is used.  The engine's instructions are not
+// functions in this sense: they may stand anywhere.
+// ==========================================================================================
+
+imin(a, b) { if (a < b) return a; return b; }
+imax(a, b) { if (a > b) return a; return b; }
+iclamp(v, lo, hi) { if (v < lo) return lo; if (v > hi) return hi; return v; }
+
+// A length of the layout (drawn for 1280 x 720) at the current scale.
+px(v) { return v * gScale / 100; }
+
+// The interface scale for a picture of w x h: 100 up to 1280 x 720, then in steps of 25.
+scale_for(w, h) { int s;
+    s = imin(w * 100 / BASE_W, h * 100 / BASE_H);
+    s = s / 25 * 25;
+    return iclamp(s, 100, 300);
+}
+
+in_rect(x, y, rx, ry, rw, rh) {
+    return x >= rx && y >= ry && x < rx + rw && y < ry + rh;
+}
+
+// The colour between a and b (0xRRGGBB), t of 256 of the way to b.
+rgb_mix(a, b, t) {
+    return ((((a >> 16) & 255) * (256 - t) + ((b >> 16) & 255) * t) >> 8 << 16)
+        | ((((a >> 8) & 255) * (256 - t) + ((b >> 8) & 255) * t) >> 8 << 8)
+        | (((a & 255) * (256 - t) + (b & 255) * t) >> 8);
+}
+
+// A colour with an alpha.
+argb(alpha, rgb) { return (alpha << 24) | rgb; }
+
+// An ASCII letter in lower case, anything else as it is.
+lower(c) { if (c >= 65 && c <= 90) return c + 32; return c; }
+
+// Compare two strings, ASCII letters without regard to case: below 0, 0 or above 0.
+str_cmp_ci(char* a, char* b) { int i; int ca; int cb;
+    i = 0;
+    while (1) {
+        ca = lower(a[i] & 255);
+        cb = lower(b[i] & 255);
+        if (ca != cb) return ca - cb;
+        if (ca == 0) return 0;
+        i = i + 1;
+    }
+}
+
+// Whether s ends with suffix (ASCII letters without regard to case).
+ends_ci(char* s, char* suffix) { int n; int m;
+    n = strlen(s);
+    m = strlen(suffix);
+    if (m > n) return 0;
+    return str_cmp_ci(s + n - m, suffix) == 0;
+}
+
+// Whether a file of that name can be a game by itself: a zip archive or a disc image.
+is_archive(char* name) { int r;
+    r = ends_ci(name, ".zip");
+    if (r) return 1;
+    r = ends_ci(name, ".iso");
+    return r;
+}
+
+// Whether s starts with prefix.
+starts_with(char* s, char* prefix) { int i;
+    i = 0;
+    while (prefix[i] != 0) {
+        if (s[i] != prefix[i]) return 0;
+        i = i + 1;
+    }
+    return 1;
+}
+
+// The number a string of digits says.
+to_int(char* s) { int i; int v; int c;
+    v = 0;
+    for (i = 0; i < 9; i = i + 1) {
+        c = s[i] & 255;
+        if (c < 48 || c > 57) break;
+        v = v * 10 + c - 48;
+    }
+    return v;
+}
+
+// The last part of a native path - after its last / or \, separators at its end left out -
+// into dst.
+base_name(char* dst, char* path) { int n; int start; int c;
+    n = strlen(path);
+    while (n > 1) {
+        c = path[n - 1] & 255;
+        if (c != 47 && c != 92) break;
+        n = n - 1;
+    }
+    start = n;
+    while (start > 0) {
+        c = path[start - 1] & 255;
+        if (c == 47 || c == 92) break;
+        start = start - 1;
+    }
+    memcpy(dst, path + start, n - start);
+    dst[n - start] = 0;
+}
+
+// Whether character c stands between the names of a path.
+is_sep(c) {
+    if (c == 47) return 1;
+    if (c == 92 && gSep == 92) return 1;
+    return 0;
+}
+
+// Whether the first n bytes of p are a drive's root, "C:" or "C:\\", where paths have drives.
+drive_root(char* p, n) {
+    if (gSep != 92) return 0;
+    if (n < 2 || n > 3) return 0;
+    if ((p[1] & 255) != 58) return 0;
+    if (n == 2) return 1;
+    return is_sep(p[2] & 255);
+}
+
+// The folder above `dir` into dst: the root's is the root; a drive's root has "" above it,
+// the computer, and so has a name alone.
+path_parent(char* dst, char* dir) { int n; int k; int r;
+    n = strlen(dir);
+    memcpy(dst, dir, n);
+    while (n > 1) {                 // separators at its end do not count
+        r = is_sep(dst[n - 1] & 255);
+        if (!r) break;
+        r = drive_root(dst, n);
+        if (r) break;
+        n = n - 1;
+    }
+    dst[n] = 0;
+    r = drive_root(dst, n);
+    if (n == 0 || r) {
+        dst[0] = 0;
+        return;
+    }
+    k = n;
+    while (k > 0) {
+        r = is_sep(dst[k - 1] & 255);
+        if (r) break;
+        k = k - 1;
+    }
+    if (k == 0) {
+        dst[0] = 0;
+        return;
+    }
+    r = drive_root(dst, k);
+    if (k == 1 || r) {              // the root, with its separator
+        dst[k] = 0;
+        return;
+    }
+    dst[k - 1] = 0;
+}
+
+// dir + the separator + name into dst (PATH_LEN bytes; "" when that is too long).  The name
+// ".." gives the folder above, "" the folder with a separator at its end.
+path_join(char* dst, char* dir, char* name) { int n; int r;
+    if (streq(name, "..")) {
+        path_parent(dst, dir);
+        return;
+    }
+    n = strlen(dir);
+    if (n + strlen(name) + 2 > PATH_LEN) {
+        dst[0] = 0;
+        return;
+    }
+    if (n == 0) {                   // in the computer: a drive
+        strcpy(dst, name);
+        return;
+    }
+    strcpy(dst, dir);
+    r = is_sep(dir[n - 1] & 255);
+    if (!r) {
+        dst[n] = gSep;
+        n = n + 1;
+    }
+    strcpy(dst + n, name);
+}
+
+// s without its extension (".zip", ".iso").
+strip_ext(char* s) { int n;
+    n = strlen(s);
+    while (n > 1) {
+        n = n - 1;
+        if ((s[n] & 255) == 46) {
+            s[n] = 0;
+            return;
+        }
+    }
+}
+
+// Whether byte b starts a character of UTF-8 (is not a continuation byte).
+char_start(b) { return (b & 192) != 128; }
+
+// How long a game ran, as text, into gWhen.
+time_text(seconds) { int m;
+    m = seconds / 60;
+    if (m >= 60) {
+        sprintf(gWhen, TXT_TIME_HM, m / 60, m % 60);
+    } else if (m >= 1) {
+        sprintf(gWhen, TXT_TIME_M, m);
+    } else {
+        strcpy(gWhen, TXT_TIME_SHORT);
+    }
+}
+
+// ==========================================================================================
+// Drawing
+// ==========================================================================================
+
+// The width of a string in the interface font.
+text_w(char* s, size, bold) {
+    return obgi.text_width(s, gFont, size, 100, bold, 1);
+}
+
+// Text into a bitmap at (x, y): the top of its line.
+text(bmp, x, y, char* s, size, bold, col) {
+    return gfx2.text(bmp, x, y, s, gFont, size, 100, bold, 1, col);
+}
+
+// s cut at its end to fit maxw pixels, "…" where it was cut, into dst.
+fit_end(char* dst, char* s, size, bold, maxw) { int n; int lo; int hi; int mid; int k;
+    if (text_w(s, size, bold) <= maxw) {
+        strcpy(dst, s);
+        return;
+    }
+    n = strlen(s);
+    lo = 0;
+    hi = n;
+    while (hi - lo > 1) {
+        mid = (lo + hi) / 2;
+        k = mid;
+        while (k > lo && !char_start(s[k] & 255)) k = k - 1;
+        if (k == lo) {
+            k = mid;
+            while (k < hi && !char_start(s[k] & 255)) k = k + 1;
+            if (k == hi) break;
+        }
+        memcpy(dst, s, k);
+        strcpy(dst + k, TXT_ELLIPSIS);
+        if (text_w(dst, size, bold) <= maxw) {
+            lo = k;
+        } else {
+            hi = k;
+        }
+    }
+    memcpy(dst, s, lo);
+    strcpy(dst + lo, TXT_ELLIPSIS);
+}
+
+// s cut at its start to fit maxw pixels - for paths, whose end says the most - into dst.
+fit_start(char* dst, char* s, size, bold, maxw) { int n; int lo; int hi; int mid; int k;
+    if (text_w(s, size, bold) <= maxw) {
+        strcpy(dst, s);
+        return;
+    }
+    n = strlen(s);
+    lo = 0;
+    hi = n;
+    while (hi - lo > 1) {
+        mid = (lo + hi) / 2;
+        k = mid;
+        while (k < hi && !char_start(s[k] & 255)) k = k + 1;
+        if (k == hi) {
+            k = mid;
+            while (k > lo && !char_start(s[k] & 255)) k = k - 1;
+            if (k == lo) break;
+        }
+        strcat2(dst, TXT_ELLIPSIS, s + k);
+        if (text_w(dst, size, bold) <= maxw) {
+            hi = k;
+        } else {
+            lo = k;
+        }
+    }
+    strcat2(dst, TXT_ELLIPSIS, s + hi);
+}
+
+// A new, empty bitmap of w x h with an alpha channel (at least 2 x 2).
+canvas(bmp, w, h) {
+    gfx0.bmp_create(bmp, imax(w, 2), imax(h, 2), PM_ARGB);
+    gfx0.bmp_clear(bmp, 0);
+}
+
+// Show a sprite with a bitmap.  The bitmap is always set anew: re-creating a bitmap's slot
+// makes it a new bitmap for the sprites that showed the old one.
+show(spr, x, y, bmp, prio) {
+    gfx0.sprite_set(spr, x, y, bmp, FX_BLEND, 0, prio);
+    gfx0.sprite_show(spr, 1);
+}
+
+hide(spr) { gfx0.sprite_show(spr, 0); }
+
+// The play button: a disc in a colour with a white triangle, d x d pixels.
+make_play(bmp, d, col) {
+    canvas(bmp, d, d);
+    box(bmp, 0, 0, d, d, d / 2, col);
+    gPts[0] = d * 100;       // the triangle, in 1/256 pixel: (0.39, 0.29), (0.39, 0.71), (0.73, 0.5) of d
+    gPts[1] = d * 74;
+    gPts[2] = d * 100;
+    gPts[3] = d * 182;
+    gPts[4] = d * 187;
+    gPts[5] = d * 128;
+    poly(bmp, 3, 0xffffffff);
+}
+
+// ==========================================================================================
+// The layout
+// ==========================================================================================
+
+// Place the parts of the current screen in the picture.
+layout() { int top; int content; int col;
+    gScale = scale_for(gW, gH);
+    gMargin = px(32);
+    gInfoShown = gScreen == SCR_BROWSE || gScreen == SCR_EDIT;
+    gTopH = gInfoShown ? px(116) : px(92);
+    gBotH = px(76);
+    gBtnH = px(44);
+    gBarY = gH - gBotH + (gBotH - gBtnH) / 2;
+    gLstX = gMargin;
+    content = gW - 2 * gMargin;
+    gPanelShown = gScreen == SCR_GAMES && gW >= px(1060);
+    if (gPanelShown) {
+        gLstW = content * 56 / 100;
+        gPanelX = gLstX + gLstW + px(20);
+        gPanelW = gW - gMargin - gPanelX;
+    } else {
+        gLstW = content;
+    }
+    top = gTopH + px(16);
+    gFieldCount = 0;
+    if (gScreen == SCR_EDIT) {
+        gFieldCount = FIELDS;
+        gFieldY = top;
+        gFieldH = px(52);
+        top = top + FIELDS * gFieldH + px(4);
+        gPatchHdrY = top;
+        top = top + px(30);
+    }
+    gLstY = top;
+    gLstH = gH - gBotH - px(16) - top;
+    gRowLines = gScreen == SCR_GAMES ? 2 : 1;
+    if (gRowLines == 2) {
+        gRowH = px(68);
+        gRowPitch = gRowH + px(6);
+    } else {
+        gRowH = px(44);
+        gRowPitch = gRowH + px(4);
+    }
+    gLstN = iclamp((gLstH + gRowPitch - gRowH) / gRowPitch, 1, MAX_ROWS);
+    gLstPlay = gScreen == SCR_GAMES;
+    gPlayD = px(40);
+    gSbW = imax(px(8), 4);
+    gPicW = px(100);
+    gPicH = px(56);
+    col = rgb_mix(gAccent, 0x101828, 40);
+    if (gPlayMade != gPlayD || gPlayCol != col) {
+        make_play(BMP_PLAY, gPlayD, argb(0xe6, col));
+        make_play(BMP_PLAY_HOVER, gPlayD, argb(0xff, rgb_mix(gAccent, 0xffffff, 70)));
+        gPlayMade = gPlayD;
+        gPlayCol = col;
+    }
+    if (gPicScale != gScale) {      // the small pictures are of another size now
+        pics_forget();
+        gPicScale = gScale;
+    }
+}
+
+// Lay the current screen out and draw all of it.
+build() {
+    layout();
+    gSbShown = gLstCount > gLstN;
+    gLstTop = iclamp(gLstTop, 0, list_max_top());
+    btn_layout();
+    bars_draw();
+    btn_draw_all();
+    fields_draw();
+    patchhdr_draw();
+    cursor_make();
+    list_draw();
+    panel_box();
+    panel_request(1);
+}
+
+// The bars at the top and the bottom.  The top one carries the title, what the screen is,
+// and on two screens a line under that: the browser's folder, the edited game's path.
+bars_draw() { int sz; char* sub;
+    shade(BMP_TOP, gW, gTopH, 90, COL_BAR_TOP >>> 24, COL_BAR_FADE >>> 24, COL_BAR_TOP & 0xffffff);
+    box(BMP_TOP, 0, gTopH - imax(px(2), 2), gW, imax(px(2), 2), 0, argb(0xc0, gAccent));
+    sz = px(34);
+    text(BMP_TOP, gMargin, px(12), TXT_TITLE, sz, 1, COL_TEXT);
+    if (gScreen == SCR_GAMES) {
+        sub = TXT_SUB_GAMES;
+    } else if (gScreen == SCR_FOLDERS) {
+        sub = TXT_SUB_FOLDERS;
+    } else if (gScreen == SCR_EDIT) {
+        sub = TXT_SUB_EDIT;
+    } else if (gBrMode == BR_PATCH) {
+        sub = TXT_SUB_ADD_PATCH;
+    } else {
+        sub = TXT_SUB_ADD_FOLDER;
+    }
+    text(BMP_TOP, gMargin + px(2), px(54), sub, px(19), 0, gAccentHi);
+    gSubW = text_w(sub, px(19), 0);
+    if (gInfoShown) {
+        if (gScreen == SCR_BROWSE) {
+            if (gBrPath[0]) {
+                strcpy(gTmp2, gBrPath);
+            } else {
+                strcpy(gTmp2, TXT_COMPUTER);
+            }
+        } else {
+            strcpy(gTmp2, gGames[gEdit].path);
+        }
+        sz = px(15);
+        fit_start(gFit, gTmp2, sz, 0, gW - 2 * gMargin);
+        text(BMP_TOP, gMargin + px(2), px(84), gFit, sz, 0, COL_TEXT_DIM);
+    }
+    show(gTopSpr, 0, 0, BMP_TOP, PRIO_BAR);
+    shade(BMP_BOTTOM, gW, gBotH, 90, COL_BAR_FADE >>> 24, COL_BAR_TOP >>> 24, COL_BAR_TOP & 0xffffff);
+    show(gBottomSpr, 0, gH - gBotH, BMP_BOTTOM, PRIO_BAR);
+}
+
+// The heading of the patch list (Edit game).
+patchhdr_draw() { int sz; int w;
+    if (gScreen != SCR_EDIT) {
+        hide(gPatchHdrSpr);
+        return;
+    }
+    sz = px(15);
+    w = text_w(TXT_PATCHES, sz, 0) + px(24);
+    canvas(BMP_PATCHHDR, w, sz + px(10));
+    box(BMP_PATCHHDR, 0, 0, w, sz + px(10), px(8), COL_PANEL);
+    text(BMP_PATCHHDR, px(12), px(4), TXT_PATCHES, sz, 0, COL_TEXT_DIM);
+    show(gPatchHdrSpr, gLstX, gPatchHdrY, BMP_PATCHHDR, PRIO_UI);
+}
+
+// What an empty list says, in the middle of it; the browser says it under "../".
+empty_draw() { char* s; char* hint; int sz; int w; int w2; int y; int h;
+    s = 0;
+    hint = 0;
+    if (gScanning && gScreen == SCR_GAMES) {
+        if (gLstCount == 0) s = TXT_SCANNING;
+    } else if (gScreen == SCR_BROWSE) {
+        if (gBrBad) {
+            s = TXT_BAD_FOLDER;
+        } else if (gBrEntries == 0) {
+            s = TXT_EMPTY_FOLDER;
+        }
+    } else if (gLstCount == 0) {
+        if (gScreen == SCR_GAMES) {
+            s = TXT_NO_GAMES;
+            hint = TXT_NO_GAMES_HINT;
+        } else if (gScreen == SCR_FOLDERS) {
+            s = TXT_NO_FOLDERS;
+        } else {
+            s = TXT_NO_PATCHES;
+        }
+    }
+    if (!s) {
+        hide(gEmptySpr);
+        return;
+    }
+    sz = px(22);
+    w = text_w(s, sz, 0);
+    h = sz + px(28);
+    if (hint) {
+        w2 = text_w(hint, px(15), 0);
+        w = imax(w, w2);
+        h = h + px(26);
+    }
+    w = w + px(56);
+    canvas(BMP_EMPTY, w, h);
+    box(BMP_EMPTY, 0, 0, w, h, px(14), COL_PANEL);
+    text(BMP_EMPTY, (w - text_w(s, sz, 0)) / 2, px(13), s, sz, 0, COL_TEXT);
+    if (hint) {
+        text(BMP_EMPTY, (w - w2) / 2, px(15) + sz + px(6), hint, px(15), 0, COL_TEXT_DIM);
+    }
+    if (gLstCount > 0) {
+        y = gLstY + gLstCount * gRowPitch + px(20);
+    } else {
+        y = gLstY + (gLstH - h) / 2;
+    }
+    show(gEmptySpr, gLstX + (gLstW - w) / 2, y, BMP_EMPTY, PRIO_UI);
+}
+
+// ==========================================================================================
+// The list
+// ==========================================================================================
+
+list_max_top() { return imax(0, gLstCount - gLstN); }
+
+// The width of a row: the list's, less the scroll bar's when it is shown.
+row_w() {
+    if (gSbShown) return gLstW - gSbW - px(8);
+    return gLstW;
+}
+
+// Draw the rows, the scroll bar and the empty-list message, and tell the engine what can be
+// clicked.
+list_draw() {
+    gSbShown = gLstCount > gLstN;
+    rows_draw();
+    sb_draw();
+    empty_draw();
+    targets_update();
+}
+
+rows_draw() { int r;
+    for (r = 0; r < MAX_ROWS; r = r + 1) {
+        row_draw(r);
+    }
+}
+
+// Show the list from item t on.
+list_set_top(t) {
+    t = iclamp(t, 0, list_max_top());
+    if (t == gLstTop) return;
+    gLstTop = t;
+    rows_draw();
+    if (gSbShown) {
+        gfx0.knob_set_value(gKnob, 0, gLstTop);
+    }
+    targets_update();
+}
+
+// Select item i (-1: none); with `reveal`, scroll it into view.
+list_select(i, reveal) { int old; int t;
+    if (gLstCount == 0) {
+        i = -1;
+    } else {
+        i = iclamp(i, -1, gLstCount - 1);
+    }
+    old = gLstSel;
+    gLstSel = i;
+    if (reveal && i >= 0) {
+        t = gLstTop;
+        if (i < t) t = i;
+        if (i >= t + gLstN) t = i - gLstN + 1;
+        t = iclamp(t, 0, list_max_top());
+        if (t != gLstTop) {
+            gLstTop = t;
+            rows_draw();
+            if (gSbShown) {
+                gfx0.knob_set_value(gKnob, 0, gLstTop);
+            }
+            targets_update();
+            on_select();
+            return;
+        }
+    }
+    if (old != i) {
+        row_draw_item(old);
+        row_draw_item(i);
+    }
+    on_select();
+}
+
+// Redraw item i when it is on the screen.
+row_draw_item(i) {
+    if (i >= gLstTop && i < gLstTop + gLstN) {
+        row_draw(i - gLstTop);
+    }
+}
+
+// Draw row r of the screen (item gLstTop + r), or hide it.
+row_draw(r) { int item; int w; int h; int bg; int x; int y; int maxw; int style; int sz; int bmp; Game* g;
+    item = gLstTop + r;
+    if (r >= gLstN || item >= gLstCount) {
+        hide(gRowSpr[r]);
+        hide(gPlaySpr[r]);
+        return;
+    }
+    bmp = BMP_ROW + r;
+    w = row_w();
+    h = gRowH;
+    if (item == gLstSel) {
+        bg = argb(0xd8, rgb_mix(0x0e131c, gAccent, 96));
+    } else if (item == gLstHover) {
+        bg = COL_ROW_HOVER;
+    } else if (item & 1) {
+        bg = COL_ROW_ALT;
+    } else {
+        bg = COL_ROW;
+    }
+    canvas(bmp, w, h);
+    box(bmp, 0, 0, w, h, px(10), bg);
+    if (item == gLstSel) {
+        box(bmp, px(3), px(10), imax(px(4), 2), h - px(20), px(2), argb(0xff, gAccentHi));
+        if (gKeyMode && gFocusZone == Z_LIST) {
+            ring(bmp, w, h, px(10), imax(px(2), 2), COL_FOCUS);
+        }
+    }
+    style = row_text(item);
+    x = px(18);
+    if (gScreen == SCR_GAMES) {
+        g = &gGames[gOrder[item]];
+        pic_load(gOrder[item]);
+        box(bmp, px(12), (h - gPicH) / 2, gPicW, gPicH, px(4), COL_PIC_NONE);
+        if (g->pic == PIC_THERE) {
+            gfx0.bmp_blit(bmp, px(12) + (gPicW - g->picW) / 2, (h - gPicH) / 2 + (gPicH - g->picH) / 2, BMP_PIC + gOrder[item], 0, 0);
+        } else {
+            gPts[0] = px(12) * 256 + gPicW * 108;     // a small triangle where there is no picture yet
+            gPts[1] = (h - gPicH) * 128 + gPicH * 77;
+            gPts[2] = px(12) * 256 + gPicW * 108;
+            gPts[3] = (h - gPicH) * 128 + gPicH * 179;
+            gPts[4] = px(12) * 256 + gPicW * 158;
+            gPts[5] = h * 128;
+            poly(bmp, 3, 0x50ffffff);
+        }
+        x = px(12) + gPicW + px(14);
+    }
+    maxw = w - x - px(16);
+    if (gLstPlay) maxw = maxw - gPlayD - px(16);
+    if (gRowLines == 2) {
+        sz = px(20);
+        fit_end(gFit, gLine1, sz, 0, maxw);
+        text(bmp, x, px(12), gFit, sz, 0, COL_TEXT);
+        sz = px(14);
+        fit_end(gFit, gLine2, sz, 0, maxw);
+        text(bmp, x, px(41), gFit, sz, 0, COL_TEXT_DIM);
+    } else {
+        sz = px(17);
+        if (style & ROW_PATH) {
+            fit_start(gFit, gLine1, sz, 0, maxw);
+        } else {
+            fit_end(gFit, gLine1, sz, 0, maxw);
+        }
+        text(bmp, x, (h - sz) / 2 - px(1), gFit, sz, 0, (style & ROW_DIM) ? COL_TEXT_OFF : COL_TEXT);
+    }
+    y = gLstY + r * gRowPitch;
+    show(gRowSpr[r], gLstX, y, bmp, PRIO_ROW);
+    if (gLstPlay) {
+        show(gPlaySpr[r], gLstX + w - px(16) - gPlayD, y + (h - gPlayD) / 2,
+            item == gPlayHover ? BMP_PLAY_HOVER : BMP_PLAY, PRIO_PLAY);
+    } else {
+        hide(gPlaySpr[r]);
+    }
+}
+
+// The text of item `item` of the current list into gLine1 (and gLine2 for the games); the
+// result says how it is drawn (ROW_...).
+row_text(item) { Game* g; int k;
+    gLine2[0] = 0;
+    if (gScreen == SCR_GAMES) {
+        g = &gGames[gOrder[item]];
+        strcpy(gLine1, g->label);
+        if (g->played[0]) {
+            time_text(g->seconds);
+            sprintf(gLine2, TXT_ROW_PLAYED, g->profile[0] ? g->profile : g->detected, g->played, gWhen);
+        } else {
+            sprintf(gLine2, "%s  ·  %s", g->profile[0] ? g->profile : g->detected, TXT_NEVER_PLAYED);
+        }
+        return 0;
+    }
+    if (gScreen == SCR_FOLDERS) {
+        strcpy(gLine1, gFolders[item]);
+        return ROW_PATH;
+    }
+    if (gScreen == SCR_EDIT) {
+        strcpy(gLine1, gEditPatches[item]);
+        return ROW_PATH;
+    }
+    if (gBrHasUp) {
+        if (item == 0) {
+            strcpy(gLine1, TXT_UP);
+            return 0;
+        }
+        item = item - 1;
+    }
+    k = OBGI_DIR_ENTRY(gBrHandle, item, gTmp3, PATH_LEN);
+    if (k == ENTRY_FOLDER) {
+        strcat2(gLine1, gTmp3, "/");
+        return 0;
+    }
+    strcpy(gLine1, gTmp3);
+    if (gBrMode == BR_PATCH) {
+        k = ends_ci(gTmp3, ".zip");
+    } else {
+        k = is_archive(gTmp3);
+    }
+    if (k) return 0;
+    return ROW_DIM;
+}
+
+// The picture kept of game g - what it showed when it was last played, a file the engine
+// wrote into "pictures" and named in the game's settings - into bitmap bmp, fitted into
+// w x h with its aspect kept and nothing beside it; 0 when there is none.  The file is
+// halved until it is near that size ("90 C3"), then fitted ("90 CA").
+picture_load(Game* g, bmp, w, h) { int src; int other; int t;
+    if (OBGI_CFG_GET(g->path, "picture", 0, gTmp1, 64) <= 0) return 0;
+    sprintf(gPicPath, "pictures\\%s", gTmp1);
+    if (gfx0.bmp_load_picture(BMP_PICTURE, gPicPath, PM_ARGB) != 0) return 0;
+    src = BMP_PICTURE;
+    other = BMP_HALF;
+    while (1) {
+        gfx0.bmp_info(gBmpInfo, src);
+        if (gBmpInfo[2] < 2 * w || gBmpInfo[3] < 2 * h) break;
+        gfx0.half_size(other, src);
+        t = src;
+        src = other;
+        other = t;
+    }
+    canvas(bmp, w, h);
+    gfx0.fit_bicubic(bmp, src);
+    gfx0.bmp_free(BMP_PICTURE);
+    gfx0.bmp_free(BMP_HALF);
+    return 1;
+}
+
+// The small picture of game i for the list, read when it is first wanted.
+pic_load(i) { Game* g; int r;
+    g = &gGames[i];
+    if (g->pic != PIC_UNKNOWN) return;
+    g->pic = PIC_NONE;
+    r = picture_load(g, BMP_PIC + i, gPicW, gPicH);
+    if (r) {
+        g->pic = PIC_THERE;
+        g->picW = gPicW;
+        g->picH = gPicH;
+    }
+}
+
+// The small pictures are read again when they are next wanted (another size, another list).
+pics_forget() { int i;
+    for (i = 0; i < gGameCount; i = i + 1) {
+        gGames[i].pic = PIC_UNKNOWN;
+    }
+}
+
+// The scroll bar: a track and a thumb the engine lets the player drag (a knob, "90 D0"), one
+// step of the knob for every position of the list.
+sb_draw() {
+    if (!gSbShown) {
+        hide(gTrackSpr);
+        gfx0.knob_show(gKnob, 0);
+        return;
+    }
+    gSbX = gLstX + gLstW - gSbW;
+    gSbY = gLstY;
+    gSbH = gLstN * gRowPitch - (gRowPitch - gRowH);
+    gThumbH = iclamp(gSbH * gLstN / gLstCount, imin(px(40), gSbH), gSbH);
+    canvas(BMP_TRACK, gSbW, gSbH);
+    box(BMP_TRACK, 0, 0, gSbW, gSbH, gSbW / 2, COL_TRACK);
+    show(gTrackSpr, gSbX, gSbY, BMP_TRACK, PRIO_SB);
+    canvas(BMP_THUMB, gSbW, gThumbH);
+    box(BMP_THUMB, 0, 0, gSbW, gThumbH, gSbW / 2, COL_KNOB);
+    gfx0.sprite_change_bitmap(gThumbSpr, BMP_THUMB);
+    gfx0.knob_set_range(gKnob, gSbW, gSbH);
+    gfx0.knob_set_steps(gKnob, 0, list_max_top() + 1);
+    gfx0.knob_set_pos(gKnob, gSbX, gSbY);
+    gfx0.knob_set_value(gKnob, 0, gLstTop);
+    gfx0.knob_show(gKnob, 1);
+}
+
+// Where the thumb is.
+thumb_y() { int m;
+    m = list_max_top();
+    if (m <= 0) return gSbY;
+    return gSbY + gLstTop * (gSbH - gThumbH) / m;
+}
+
+// Follow the thumb when the player drags it.
+knob_poll() { int vx; int vy;
+    if (!gSbShown) return;
+    gfx0.knob_get_value(gKnob);
+    vy <- __pop;
+    vx <- __pop;
+    vy = iclamp(vy, 0, list_max_top());
+    if (vy != gLstTop) {
+        gLstTop = vy;
+        rows_draw();
+        targets_update();
+    }
+}
+
+// Tell the engine what can be clicked (the input mapper snaps taps to these): the buttons,
+// the fields, the rows on the screen and their play buttons, the scroll bar's track.
+targets_update() { int i; int n;
+    gfx0.target_clear();
+    for (i = 0; i < gBtnCount; i = i + 1) {
+        if (gBtn[i].enabled) gfx0.target_add(gBtnSpr[i]);
+    }
+    for (i = 0; i < gFieldCount; i = i + 1) {
+        gfx0.target_add(gFieldSpr[i]);
+    }
+    n = imin(gLstN, gLstCount - gLstTop);
+    for (i = 0; i < n; i = i + 1) {
+        if (gLstPlay) gfx0.target_add(gPlaySpr[i]);
+        gfx0.target_add(gRowSpr[i]);
+    }
+    if (gSbShown) gfx0.target_add(gTrackSpr);
+}
+
+// ==========================================================================================
+// What moves: the rows coming in, the light on the selected row, the panel, the curtain
+// ==========================================================================================
+
+// The rows of a new list come in from the right, one after the other.
+cascade_start() {
+    gCascade = sys.get_ticks();
+    if (gCascade == 0) gCascade = 1;
+}
+
+// The light on the selected row: a bar as large as a row, bright at its left end.
+cursor_make() { int w;
+    w = row_w();
+    shade(BMP_CURSOR, w, gRowH, 0, 0x50, 0, 0xffffff);
+    gfx0.sprite_set(gCursorSpr, gLstX, gLstY, BMP_CURSOR, FX_ADD, 0x80, PRIO_CURSOR);
+    gfx0.sprite_show(gCursorSpr, 0);
+    gCurOn = 0;
+}
+
+// One frame of everything that moves by the program's own doing.
+animate() { int r; int t; int n; int e; int dx; int w; int y; int target; int lvl; int done;
+    // the rows: each slides in over 220 ms, 24 ms after the one above it
+    if (gCascade) {
+        n = imin(gLstN, gLstCount - gLstTop);
+        w = row_w();
+        done = 1;
+        for (r = 0; r < n; r = r + 1) {
+            t = gNow - gCascade - r * 24;
+            if (t < 220) done = 0;
+            t = iclamp(t, 0, 220);
+            e = 256 - (220 - t) * (220 - t) * 256 / (220 * 220);     // eases out
+            dx = px(48) * (256 - e) / 256;
+            y = gLstY + r * gRowPitch;
+            gfx0.obj_set_pos(gRowSpr[r], gLstX + dx, y);
+            gfx0.obj_set_level(gRowSpr[r], 256 - e);
+            if (gLstPlay) {
+                gfx0.obj_set_pos(gPlaySpr[r], gLstX + dx + w - px(16) - gPlayD, y + (gRowH - gPlayD) / 2);
+                gfx0.obj_set_level(gPlaySpr[r], 256 - e);
+            }
+        }
+        if (done) gCascade = 0;
+    }
+    // the light: it glides to the selected row and breathes
+    if (gLstSel >= gLstTop && gLstSel < gLstTop + gLstN && !gCascade) {
+        target = (gLstY + (gLstSel - gLstTop) * gRowPitch) * 16;
+        if (!gCurOn) {
+            gCurY = target;
+            gCurOn = 1;
+            gfx0.sprite_show(gCursorSpr, 1);
+        }
+        gCurY = gCurY + (target - gCurY) * 5 / 16;
+        if (target - gCurY < 16 && gCurY - target < 16) gCurY = target;
+        lvl = 0x70 + ((0x48 * sin((gNow % 2400) * 9830)) >> 16);    // 2.4 seconds a breath
+        gfx0.obj_set_pos(gCursorSpr, gLstX, gCurY / 16);
+        gfx0.obj_set_level(gCursorSpr, lvl);
+    } else if (gCurOn) {
+        gCurOn = 0;
+        gfx0.sprite_show(gCursorSpr, 0);
+    }
+    // the panel: drawn a moment after the selection settled; what it says appears within 240 ms
+    if (gPanelDue && gNow - gPanelDue >= 0) {
+        panel_draw();
+    }
+    if (gPanelWipe) {
+        t = sys.get_ticks() - gPanelWipe;
+        if (t >= 240) {
+            panel_merge();
+        } else {
+            gfx0.obj_set_progress(gPanelTxtSpr, imax(t, 0) * 256 / 240);
+        }
+    }
+    curtain_step();
+}
+
+// ==========================================================================================
+// The panel beside the list: the selected game's picture and what is known of it
+// ==========================================================================================
+
+// The panel is there on this screen, or not.
+panel_box() {
+    if (!gPanelShown) {
+        hide(gPanelSpr);
+        hide(gPanelTxtSpr);
+        gPanelWipe = 0;
+    }
+}
+
+// The panel is to show the selection: at once, or when it has stayed for a moment (reading
+// a picture takes a few milliseconds, and a held arrow key passes many games).
+panel_request(now) {
+    if (!gPanelShown) {
+        gPanelDue = 0;
+        return;
+    }
+    gPanelDue = sys.get_ticks() + (now ? 0 : 110);
+    if (gPanelDue == 0) gPanelDue = 1;
+}
+
+// A line of the panel: what it is, and the value.
+panel_line(y, char* key, char* value, maxw) { int sz;
+    sz = px(14);
+    text(BMP_PANELTXT, px(20), y, key, sz, 0, COL_TEXT_DIM);
+    sz = px(16);
+    fit_start(gFit, value, sz, 0, maxw - px(120));
+    text(BMP_PANELTXT, px(20) + px(120), y - px(1), gFit, sz, 0, COL_TEXT);
+}
+
+// The panel as one bitmap: its box with what it says on it.
+panel_merge() {
+    gPanelWipe = 0;
+    canvas(BMP_PANEL, gPanelW, gLstH);
+    gfx0.bmp_blit(BMP_PANEL, 0, 0, BMP_PANELBOX, 0, 0);
+    if (gPanelGame >= 0) gfx0.bmp_blit(BMP_PANEL, 0, 0, BMP_PANELTXT, 0, 0);
+    show(gPanelSpr, gPanelX, gLstY, BMP_PANEL, PRIO_ROW);
+    hide(gPanelTxtSpr);
+}
+
+// Draw the panel for the selection.  What it says of another game than before appears
+// through a soft wipe over the box (animate moves it, then the two become one bitmap).
+panel_draw() { Game* g; int w; int h; int pw; int ph; int y; int n; int sz; int game; int pad; int was; int r;
+    gPanelDue = 0;
+    if (!gPanelShown) return;
+    game = -1;
+    if (gLstSel >= 0 && gLstSel < gGameCount) game = gOrder[gLstSel];
+    w = gPanelW;
+    h = gLstH;
+    canvas(BMP_PANELBOX, w, h);
+    box(BMP_PANELBOX, 0, 0, w, h, px(14), COL_PANEL);
+    was = gPanelGame;
+    gPanelGame = game;
+    if (game < 0) {
+        panel_merge();
+        return;
+    }
+    canvas(BMP_PANELTXT, w, h);
+    g = &gGames[game];
+    pad = px(20);
+    pw = w - 2 * pad;
+    ph = imin(pw * 9 / 16, h * 55 / 100);
+    box(BMP_PANELTXT, pad, pad, pw, ph, px(8), COL_PIC_NONE);
+    r = picture_load(g, BMP_PANELPIC, pw, ph);
+    gPanelPic = r;
+    if (r) {
+        gfx0.bmp_blit(BMP_PANELTXT, pad, pad, BMP_PANELPIC, 0, 0);
+        gfx0.bmp_free(BMP_PANELPIC);
+    } else {
+        sz = px(15);
+        fit_end(gFit, TXT_NO_PICTURE, sz, 0, pw - px(24));
+        text(BMP_PANELTXT, pad + (pw - text_w(gFit, sz, 0)) / 2, pad + (ph - sz) / 2, gFit, sz, 0, COL_TEXT_DIM);
+    }
+    y = pad + ph + px(16);
+    sz = px(24);
+    fit_end(gFit, g->name, sz, 0, pw);
+    text(BMP_PANELTXT, pad, y, gFit, sz, 0, COL_TEXT);
+    y = y + sz + px(18);
+    if (g->profile[0]) {
+        sprintf(gTmp2, TXT_ENGINE_CHOSEN, g->profile);
+    } else {
+        strcpy(gTmp2, g->detected);
+    }
+    panel_line(y, TXT_INFO_ENGINE, gTmp2, pw);
+    y = y + px(27);
+    if (g->played[0]) {
+        panel_line(y, TXT_INFO_PLAYED, g->played, pw);
+        y = y + px(27);
+        time_text(g->seconds);
+        panel_line(y, TXT_INFO_TIME, gWhen, pw);
+        y = y + px(27);
+    } else {
+        panel_line(y, TXT_INFO_PLAYED, TXT_NEVER_PLAYED, pw);
+        y = y + px(27);
+    }
+    n = cfg_n(g->path, "patches");
+    if (n > 0) {
+        sprintf(gTmp2, "%d", n);
+        panel_line(y, TXT_INFO_PATCHES, gTmp2, pw);
+        y = y + px(27);
+    }
+    if (g->kind == GAME_ZIP) {
+        panel_line(y, TXT_INFO_WHERE, TXT_KIND_ZIP, pw);
+    } else if (g->kind == GAME_ISO) {
+        panel_line(y, TXT_INFO_WHERE, TXT_KIND_ISO, pw);
+    } else {
+        panel_line(y, TXT_INFO_WHERE, TXT_KIND_FOLDER, pw);
+    }
+    y = y + px(25);
+    if (y + px(20) < h) {
+        sz = px(13);
+        fit_start(gFit, g->path, sz, 0, pw);
+        text(BMP_PANELTXT, pad, y, gFit, sz, 0, COL_TEXT_DIM);
+    }
+    if (game == was) {
+        panel_merge();
+        return;
+    }
+    mask_in(BMP_PANELWIPE, w, h);
+    pat_linear(PAT_SET, 20, 0, 255, 1, 0);
+    show(gPanelSpr, gPanelX, gLstY, BMP_PANELBOX, PRIO_ROW);
+    gfx0.sprite_set_wipe(gPanelTxtSpr, gPanelX, gLstY, BMP_PANELTXT, BMP_PANELWIPE, 1, 0, FX_BLEND, 0, PRIO_ROW + 1);
+    gfx0.sprite_show(gPanelTxtSpr, 1);
+    gPanelWipe = sys.get_ticks();
+    if (gPanelWipe == 0) gPanelWipe = 1;
+}
+
+// ==========================================================================================
+// The buttons
+// ==========================================================================================
+
+btn_clear() {
+    gBtnCount = 0;
+    gBtnHover = -1;
+    gFocusBtn = 0;
+}
+
+// A button of the bar: at its left end, or with `right` in the group at its right end.
+btn_add(id, char* s, right, primary) { Btn* b;
+    b = &gBtn[gBtnCount];
+    b->id = id;
+    strcpy(b->text, s);
+    b->right = right;
+    b->primary = primary;
+    b->enabled = 1;
+    gBtnCount = gBtnCount + 1;
+}
+
+btn_index(id) { int i;
+    for (i = 0; i < gBtnCount; i = i + 1) {
+        if (gBtn[i].id == id) return i;
+    }
+    return -1;
+}
+
+// Another text on a button.
+btn_text(id, char* s) { int i;
+    i = btn_index(id);
+    if (i < 0) return;
+    strcpy(gBtn[i].text, s);
+}
+
+// Enable or disable a button.
+btn_enable(id, on) { int i;
+    i = btn_index(id);
+    if (i < 0) return;
+    if (gBtn[i].enabled == on) return;
+    gBtn[i].enabled = on;
+    btn_draw(i);
+    if (!on && gFocusBtn == i) {
+        gFocusBtn = btn_usable(i);
+        if (gFocusZone == Z_BUTTONS) btn_draw_all();
+    }
+    targets_update();
+}
+
+// Button i when it is enabled, else the first one that is.
+btn_usable(i) { int j;
+    if (i >= 0 && i < gBtnCount && gBtn[i].enabled) return i;
+    for (j = 0; j < gBtnCount; j = j + 1) {
+        if (gBtn[j].enabled) return j;
+    }
+    return 0;
+}
+
+// The buttons' places: the left group from the left margin, the right group up to the right
+// margin; narrower than they would like when the window is narrow.
+btn_layout() { int i; int sz; int gap; int total; int avail; int x; Btn* b;
+    sz = px(17);
+    gap = px(10);
+    total = px(24);
+    for (i = 0; i < gBtnCount; i = i + 1) {
+        b = &gBtn[i];
+        b->w = imax(px(120), text_w(b->text, sz, 0) + 2 * px(24));
+        total = total + b->w + gap;
+    }
+    avail = gW - 2 * gMargin;
+    if (total > avail) {
+        for (i = 0; i < gBtnCount; i = i + 1) {
+            gBtn[i].w = gBtn[i].w * avail / total;
+        }
+    }
+    x = gMargin;
+    for (i = 0; i < gBtnCount; i = i + 1) {
+        b = &gBtn[i];
+        if (!b->right) {
+            b->x = x;
+            x = x + b->w + gap;
+        }
+    }
+    x = gW - gMargin;
+    for (i = gBtnCount - 1; i >= 0; i = i - 1) {
+        b = &gBtn[i];
+        if (b->right) {
+            x = x - b->w;
+            b->x = x;
+            x = x - gap;
+        }
+    }
+    for (i = 0; i < gBtnCount; i = i + 1) {
+        gBtn[i].y = gBarY;
+        gBtn[i].h = gBtnH;
+    }
+}
+
+btn_draw(i) { Btn* b; int bg; int fg; int sz; int tw; int bmp;
+    b = &gBtn[i];
+    bmp = BMP_BTN + i;
+    fg = COL_TEXT;
+    if (!b->enabled) {
+        bg = COL_BTN_OFF;
+        fg = COL_TEXT_OFF;
+    } else if (b->primary) {
+        bg = argb(0xff, i == gBtnHover ? rgb_mix(gAccent, 0xffffff, 56) : rgb_mix(gAccent, 0x101828, 30));
+    } else {
+        bg = i == gBtnHover ? COL_BTN_HOVER : COL_BTN;
+    }
+    canvas(bmp, b->w, b->h);
+    box(bmp, 0, 0, b->w, b->h, b->h / 2, bg);
+    if (gKeyMode && gFocusZone == Z_BUTTONS && gFocusBtn == i) {
+        ring(bmp, b->w, b->h, b->h / 2, imax(px(2), 2), COL_FOCUS);
+    }
+    sz = px(17);
+    fit_end(gFit, b->text, sz, 0, b->w - 2 * px(12));
+    tw = text_w(gFit, sz, 0);
+    text(bmp, (b->w - tw) / 2, (b->h - sz) / 2 - px(1), gFit, sz, 0, fg);
+    show(gBtnSpr[i], b->x, b->y, bmp, PRIO_UI);
+}
+
+btn_draw_all() { int i;
+    for (i = 0; i < MAX_BUTTONS; i = i + 1) {
+        if (i < gBtnCount) {
+            btn_draw(i);
+        } else {
+            hide(gBtnSpr[i]);
+        }
+    }
+}
+
+// ==========================================================================================
+// The fields of "Edit game"
+// ==========================================================================================
+
+fields_draw() { int i;
+    for (i = 0; i < FIELDS; i = i + 1) {
+        if (i < gFieldCount) {
+            field_draw(i);
+        } else {
+            hide(gFieldSpr[i]);
+        }
+    }
+}
+
+// Field 0, the name; 1, the compatibility: "<  value  >"; 2, the options.
+field_draw(i) { int w; int h; int bmp; int sz; int vx; int bg; int y; char* label;
+    bmp = BMP_FIELD + i;
+    w = gLstW;
+    h = gFieldH - px(6);
+    bg = i == gFieldHover ? COL_ROW_HOVER : COL_FIELD;
+    canvas(bmp, w, h);
+    box(bmp, 0, 0, w, h, px(10), bg);
+    if (gKeyMode && gFocusZone == Z_FIELDS && gFocusField == i) {
+        ring(bmp, w, h, px(10), imax(px(2), 2), COL_FOCUS);
+    }
+    sz = px(16);
+    if (i == 0) {
+        label = TXT_FIELD_NAME;
+    } else if (i == 1) {
+        label = TXT_FIELD_COMPAT;
+    } else {
+        label = TXT_FIELD_OPTIONS;
+    }
+    text(bmp, px(18), (h - sz) / 2 - px(1), label, sz, 0, COL_TEXT_DIM);
+    vx = px(200);
+    sz = px(18);
+    y = (h - sz) / 2 - px(1);
+    if (i == 0) {
+        fit_end(gFit, gEditName, sz, 0, w - vx - px(16));
+        text(bmp, vx, y, gFit, sz, 0, COL_TEXT);
+    } else if (i == 1) {
+        compat_text(gTmp2);
+        fit_end(gFit, gTmp2, sz, 0, w - vx - px(96));
+        arrow(bmp, vx + px(4), h / 2, -1);
+        text(bmp, vx + px(32), y, gFit, sz, 0, COL_TEXT);
+        arrow(bmp, w - px(28), h / 2, 1);
+    } else if (gEditOptions[0]) {
+        fit_end(gFit, gEditOptions, sz, 0, w - vx - px(16));
+        text(bmp, vx, y, gFit, sz, 0, COL_TEXT);
+    } else {
+        text(bmp, vx, y, TXT_OPTIONS_NONE, sz, 0, COL_TEXT_OFF);
+    }
+    show(gFieldSpr[i], gLstX, gFieldY + i * gFieldH, bmp, PRIO_UI);
+}
+
+// A small arrow head at (x, y) pointing left (dir -1) or right, in the accent colour.
+arrow(bmp, x, y, dir) { int s;
+    s = px(7);
+    gPts[0] = (x - dir * s) * 256;
+    gPts[1] = (y - s) * 256;
+    gPts[2] = (x + dir * s) * 256;
+    gPts[3] = y * 256;
+    gPts[4] = (x - dir * s) * 256;
+    gPts[5] = (y + s) * 256;
+    line(bmp, 3, imax(px(3), 2) * 256, argb(0xff, gAccentHi), 0);
+}
+
+// The compatibility as it is shown: the chosen profile, or "Automatic (detected)".
+compat_text(char* dst) { Game* g;
+    g = &gGames[gEdit];
+    if (gEditProf >= 0) {
+        strcpy(dst, gProfiles[gEditProf]);
+    } else if (g->detected[0]) {
+        sprintf(dst, TXT_COMPAT_AUTO, g->detected);
+    } else {
+        strcpy(dst, TXT_COMPAT_AUTO_ONLY);
+    }
+}
+
+// A click into field i, x pixels from its left edge.
+field_click(i, x) {
+    if (i == 0) {
+        rename();
+    } else if (i == 2) {
+        options_edit();
+    } else if (x < px(200) + px(28)) {
+        compat_cycle(-1);
+    } else {
+        compat_cycle(1);
+    }
+}
+
+// Enter on field i.
+field_activate(i) {
+    if (i == 0) {
+        rename();
+    } else if (i == 2) {
+        options_edit();
+    } else {
+        compat_cycle(1);
+    }
+}
+
+// Ask for the game's name; an empty answer gives it back the name the engine found.
+rename() {
+    if (!ext0.dialog_input1(gTmp1, TXT_RENAME_TITLE, gEditName, 64)) return;
+    if (gTmp1[0]) {
+        strcpy(gEditName, gTmp1);
+    } else {
+        strcpy(gEditName, gGames[gEdit].probed);
+    }
+    field_draw(0);
+}
+
+// Ask for the game's options of the command line ("--overlay", "--stand-in-font=mincho", ...).
+options_edit() {
+    if (!ext0.dialog_input1(gTmp1, TXT_OPTIONS_TITLE, gEditOptions, 200)) return;
+    strcpy(gEditOptions, gTmp1);
+    field_draw(2);
+}
+
+// The next (n 1) or previous (n -1) compatibility: automatic, then the profiles in turn.
+compat_cycle(n) { int size;
+    size = gProfCount + 1;
+    gEditProf = (gEditProf + 1 + n + size * 64) % size - 1;
+    field_draw(1);
+}
+
+profiles_load() { int n; int i;
+    n = cfg_n("", "profiles");
+    gProfCount = 0;
+    for (i = 0; i < n && gProfCount < MAX_PROFILES; i = i + 1) {
+        if (OBGI_CFG_GET("", "profiles", i, gProfiles[gProfCount], 16) > 0) {
+            gProfCount = gProfCount + 1;
+        }
+    }
+}
+
+// The index of a profile in gProfiles; -1 for "" (automatic) and for one that is not there.
+profile_index(char* name) { int i;
+    if (!name[0]) return -1;
+    for (i = 0; i < gProfCount; i = i + 1) {
+        if (streq(gProfiles[i], name)) return i;
+    }
+    return -1;
+}
+
+// ==========================================================================================
+// Input
+// ==========================================================================================
+
+// The presses of a key (or a mouse button, or wheel notches) since the last frame.
+trig(vk) { int v;
+    v = sys.key_trigger(PRIO_LAYER, vk);
+    if (v == 0) return 0;
+    v = v & 0x7fffffff;
+    if (v == 0) v = 1;
+    return v;
+}
+
+// One frame of input: the pointer, the clicks, the wheel, the keys, the scroll bar.
+input() { int x; int y; int n;
+    sys.get_mouse_pos();
+    y <- __pop;
+    x <- __pop;
+    if (x != gMx || y != gMy) {
+        if (gMouseSeen) set_key_mode(0);
+        gMouseSeen = 1;
+        gMx = x;
+        gMy = y;
+    }
+    hit(gMx, gMy);
+    if (!gKeyMode) hover_update();
+    // The buttons are read as they are held ("80 11") and a press is the change from up to
+    // down: a click on a sprite the engine knows as a click target ("90 FA") is taken by
+    // the targets' own sampling and never reaches the program's input layer.
+    n = sys.key_down(VK_LBUTTON);
+    if (n && !gLDown) {
+        set_key_mode(0);
+        hover_update();
+        click();
+    }
+    gLDown = n;
+    n = sys.key_down(VK_RBUTTON);
+    if (n && !gRDown) cancel();
+    gRDown = n;
+    n = trig(VK_WHEEL_UP);
+    if (n) list_set_top(gLstTop - n);
+    n = trig(VK_WHEEL_DOWN);
+    if (n) list_set_top(gLstTop + n);
+    keys();
+    knob_poll();
+}
+
+// What is under (x, y): gHitKind and gHitIdx.
+hit(x, y) { int i; int n; int w; int r; int py;
+    gHitKind = H_NONE;
+    gHitIdx = -1;
+    for (i = 0; i < gBtnCount; i = i + 1) {
+        if (in_rect(x, y, gBtn[i].x, gBtn[i].y, gBtn[i].w, gBtn[i].h)) {
+            gHitKind = H_BTN;
+            gHitIdx = i;
+            return;
+        }
+    }
+    for (i = 0; i < gFieldCount; i = i + 1) {
+        if (in_rect(x, y, gLstX, gFieldY + i * gFieldH, gLstW, gFieldH - px(6))) {
+            gHitKind = H_FIELD;
+            gHitIdx = i;
+            return;
+        }
+    }
+    if (gSbShown && in_rect(x, y, gSbX, gSbY, gSbW, gSbH)) {
+        py = thumb_y();
+        if (y >= py && y < py + gThumbH) {
+            gHitKind = H_THUMB;
+        } else {
+            gHitKind = H_TRACK;
+        }
+        return;
+    }
+    n = imin(gLstN, gLstCount - gLstTop);
+    w = row_w();
+    if (!in_rect(x, y, gLstX, gLstY, w, n * gRowPitch)) return;
+    r = (y - gLstY) / gRowPitch;
+    if (y - gLstY - r * gRowPitch >= gRowH) return;     // between two rows
+    gHitIdx = gLstTop + r;
+    gHitKind = H_ROW;
+    if (gLstPlay && in_rect(x, y, gLstX + w - px(16) - gPlayD, gLstY + r * gRowPitch + (gRowH - gPlayD) / 2, gPlayD, gPlayD)) {
+        gHitKind = H_PLAY;
+    }
+}
+
+// Light up what the pointer is on.
+hover_update() { int row; int play; int btn; int fld; int old;
+    row = -1;
+    play = -1;
+    btn = -1;
+    fld = -1;
+    if (gHitKind == H_ROW || gHitKind == H_PLAY) row = gHitIdx;
+    if (gHitKind == H_PLAY) play = gHitIdx;
+    if (gHitKind == H_BTN) btn = gHitIdx;
+    if (gHitKind == H_FIELD) fld = gHitIdx;
+    if (row != gLstHover) {
+        old = gLstHover;
+        gLstHover = row;
+        row_draw_item(old);
+        row_draw_item(row);
+    }
+    if (play != gPlayHover) {
+        old = gPlayHover;
+        gPlayHover = play;
+        row_draw_item(old);
+        row_draw_item(play);
+    }
+    if (btn != gBtnHover) {
+        old = gBtnHover;
+        gBtnHover = btn;
+        if (old >= 0 && old < gBtnCount) btn_draw(old);
+        if (btn >= 0) btn_draw(btn);
+    }
+    if (fld != gFieldHover) {
+        old = gFieldHover;
+        gFieldHover = fld;
+        if (old >= 0 && old < gFieldCount) field_draw(old);
+        if (fld >= 0) field_draw(fld);
+    }
+}
+
+// The keyboard (or the pad) was used (on 1) or the mouse (0): the focus is drawn only for the
+// keyboard, the lights under the pointer only for the mouse.
+set_key_mode(on) { int a; int b;
+    if (gKeyMode == on) return;
+    gKeyMode = on;
+    if (on) {
+        a = gLstHover;
+        b = gPlayHover;
+        gLstHover = -1;
+        gPlayHover = -1;
+        gBtnHover = -1;
+        gFieldHover = -1;
+        row_draw_item(a);
+        row_draw_item(b);
+    }
+    redraw_focus();
+}
+
+// Draw what shows the focus anew: the selected row, the buttons, the fields.
+redraw_focus() {
+    row_draw_item(gLstSel);
+    btn_draw_all();
+    fields_draw();
+}
+
+// A click on what the pointer is on.
+click() { int now; int dbl; int kind; int idx;
+    kind = gHitKind;
+    idx = gHitIdx;
+    now = sys.get_ticks();
+    dbl = kind == H_ROW && gLastKind == H_ROW && idx == gLastIdx && now - gLastTime < DOUBLE_MS;
+    gLastKind = kind;
+    gLastIdx = idx;
+    gLastTime = dbl ? now - 100000 : now;
+    if (kind == H_BTN) {
+        if (gBtn[idx].enabled) {
+            gFocusZone = Z_BUTTONS;
+            gFocusBtn = idx;
+            on_button(gBtn[idx].id);
+        }
+        return;
+    }
+    if (kind == H_PLAY) {
+        list_select(idx, 0);
+        launch(idx);
+        return;
+    }
+    if (kind == H_ROW) {
+        gFocusZone = Z_LIST;
+        list_select(idx, 0);
+        if (dbl) activate_row(idx);
+        return;
+    }
+    if (kind == H_TRACK) {
+        if (thumb_y() > gMy) {
+            list_set_top(gLstTop - gLstN);
+        } else {
+            list_set_top(gLstTop + gLstN);
+        }
+        return;
+    }
+    if (kind == H_FIELD) {
+        gFocusZone = Z_FIELDS;
+        gFocusField = idx;
+        field_click(idx, gMx - gLstX);
+    }
+}
+
+// The keys of a frame.  A pad types the same (pad_keys): the D-pad the arrows,
+// confirm Enter, cancel Escape.
+keys() { int n;
+    n = trig(VK_UP);
+    if (n) nav_vert(0 - n);
+    n = trig(VK_DOWN);
+    if (n) nav_vert(n);
+    n = trig(VK_LEFT);
+    if (n) nav_horz(0 - n);
+    n = trig(VK_RIGHT);
+    if (n) nav_horz(n);
+    n = trig(VK_PRIOR);
+    if (n) nav_page(0 - n);
+    n = trig(VK_NEXT);
+    if (n) nav_page(n);
+    if (trig(VK_HOME)) nav_end(0);
+    if (trig(VK_END)) nav_end(1);
+    if (trig(VK_TAB)) nav_zone(sys.key_down(VK_SHIFT) ? -1 : 1);
+    n = trig(VK_RETURN);
+    if (trig(VK_SPACE)) n = 1;
+    if (n) {
+        set_key_mode(1);
+        activate();
+    }
+    if (trig(VK_ESCAPE)) cancel();
+    if (trig(VK_BACK) && gScreen == SCR_BROWSE) br_up();
+    if (trig(VK_F5) && gScreen == SCR_GAMES) {
+        gNeedScan = 1;
+        go_games();
+    }
+}
+
+// Whether the focus can go to zone z of the current screen.
+zone_ok(z) {
+    if (z == Z_FIELDS) return gFieldCount > 0;
+    if (z == Z_LIST) return gLstCount > 0;
+    return gBtnCount > 0;
+}
+
+// The next zone from z in direction d that the focus can go to, -1 for none.
+zone_next(z, d) {
+    z = z + d;
+    while (z >= Z_FIELDS && z <= Z_BUTTONS && !zone_ok(z)) z = z + d;
+    if (z < Z_FIELDS || z > Z_BUTTONS) return -1;
+    return z;
+}
+
+// Put the focus into zone z, coming from above (d > 0) or from below (d < 0).
+zone_enter(z, d) {
+    gFocusZone = z;
+    if (z == Z_FIELDS) {
+        gFocusField = d > 0 ? 0 : gFieldCount - 1;
+    } else if (z == Z_BUTTONS) {
+        gFocusBtn = btn_usable(gFocusBtn);
+    } else if (gLstSel < 0) {
+        list_select(d > 0 ? gLstTop : imin(gLstTop + gLstN, gLstCount) - 1, 1);
+    }
+    redraw_focus();
+}
+
+// The focus at the start of a screen: the fields (Edit game), else the list when it has items,
+// else the buttons.  (Called before the screen is laid out: gFieldCount may be the last
+// screen's.)
+zone_default() {
+    if (gScreen == SCR_EDIT) {
+        gFocusZone = Z_FIELDS;
+        gFocusField = 0;
+    } else if (gLstCount > 0) {
+        gFocusZone = Z_LIST;
+    } else {
+        gFocusZone = Z_BUTTONS;
+        gFocusBtn = btn_usable(gFocusBtn);
+    }
+}
+
+// Up (n < 0) or down n rows.
+nav_vert(n) { int t; int z;
+    set_key_mode(1);
+    if (!zone_ok(gFocusZone)) {
+        z = zone_next(gFocusZone, n > 0 ? 1 : -1);
+        if (z < 0) z = zone_next(gFocusZone, n > 0 ? -1 : 1);
+        if (z >= 0) zone_enter(z, n);
+        return;
+    }
+    if (gFocusZone == Z_LIST) {
+        if (gLstSel < 0) {
+            list_select(gLstTop, 1);
+            redraw_focus();
+            return;
+        }
+        t = gLstSel + n;
+        if (t < 0) {
+            z = zone_next(Z_LIST, -1);
+            if (z >= 0 && gLstSel == 0) {
+                zone_enter(z, -1);
+                return;
+            }
+            t = 0;
+        }
+        if (t >= gLstCount) {
+            z = zone_next(Z_LIST, 1);
+            if (z >= 0 && gLstSel == gLstCount - 1) {
+                zone_enter(z, 1);
+                return;
+            }
+            t = gLstCount - 1;
+        }
+        list_select(t, 1);
+        return;
+    }
+    if (gFocusZone == Z_FIELDS) {
+        t = gFocusField + n;
+        if (t < 0) t = 0;
+        if (t >= gFieldCount) {
+            z = zone_next(Z_FIELDS, 1);
+            if (z >= 0) {
+                zone_enter(z, 1);
+                return;
+            }
+            t = gFieldCount - 1;
+        }
+        gFocusField = t;
+        redraw_focus();
+        return;
+    }
+    if (n < 0) {
+        z = zone_next(Z_BUTTONS, -1);
+        if (z >= 0) zone_enter(z, -1);
+    }
+}
+
+// Left (n < 0) or right: along the buttons, through the compatibility, up and into folders.
+nav_horz(n) { int i; int j; int step; int k;
+    set_key_mode(1);
+    if (gFocusZone == Z_BUTTONS) {
+        step = n > 0 ? 1 : -1;
+        k = n > 0 ? n : 0 - n;
+        i = btn_usable(gFocusBtn);
+        while (k > 0) {
+            j = i + step;
+            while (j >= 0 && j < gBtnCount && !gBtn[j].enabled) j = j + step;
+            if (j < 0 || j >= gBtnCount) break;
+            i = j;
+            k = k - 1;
+        }
+        gFocusBtn = i;
+        redraw_focus();
+        return;
+    }
+    if (gFocusZone == Z_FIELDS && gFocusField == 1) {
+        compat_cycle(n > 0 ? 1 : -1);
+        return;
+    }
+    if (gFocusZone == Z_LIST && gScreen == SCR_BROWSE) {
+        if (n < 0) {
+            br_up();
+        } else if (gLstSel >= 0 && !(gBrHasUp && gLstSel == 0)) {
+            br_activate(gLstSel);
+        }
+    }
+}
+
+// A page up (n < 0) or down.
+nav_page(n) {
+    set_key_mode(1);
+    if (gFocusZone == Z_LIST && gLstCount > 0) {
+        list_select(imax(gLstSel, 0) + n * gLstN, 1);
+    }
+}
+
+// The first (e 0) or the last item.
+nav_end(e) {
+    set_key_mode(1);
+    if (gFocusZone == Z_LIST && gLstCount > 0) {
+        list_select(e ? gLstCount - 1 : 0, 1);
+    }
+}
+
+// Tab: the next zone (d 1) or the previous one, round.
+nav_zone(d) { int z;
+    set_key_mode(1);
+    z = zone_next(gFocusZone, d);
+    if (z < 0) z = zone_next(d > 0 ? Z_FIELDS - 1 : Z_BUTTONS + 1, d);
+    if (z >= 0) zone_enter(z, d);
+}
+
+// Enter: what the focus is on.
+activate() {
+    if (!zone_ok(gFocusZone)) return;
+    if (gFocusZone == Z_BUTTONS) {
+        gFocusBtn = btn_usable(gFocusBtn);
+        if (gBtn[gFocusBtn].enabled) on_button(gBtn[gFocusBtn].id);
+        return;
+    }
+    if (gFocusZone == Z_FIELDS) {
+        field_activate(gFocusField);
+        return;
+    }
+    if (gLstSel >= 0) activate_row(gLstSel);
+}
+
+// A row opened (double click, Enter): a game starts, a folder of the browser opens.
+activate_row(item) {
+    if (gScreen == SCR_GAMES) {
+        launch(item);
+    } else if (gScreen == SCR_BROWSE) {
+        br_activate(item);
+    }
+}
+
+// Escape, the right button, the pad's cancel: back.
+cancel() {
+    if (gScreen == SCR_FOLDERS) {
+        go_games();
+    } else if (gScreen == SCR_BROWSE) {
+        br_cancel();
+    } else if (gScreen == SCR_EDIT) {
+        go_games();
+    }
+}
+
+on_button(id) {
+    if (id == B_FOLDERS) {
+        go_folders(-1);
+    } else if (id == B_EDIT) {
+        if (gLstSel >= 0) go_edit(gLstSel);
+    } else if (id == B_START) {
+        if (gLstSel >= 0) launch(gLstSel);
+    } else if (id == B_SORT) {
+        sort_toggle();
+    } else if (id == B_LOOK) {
+        look_next();
+    } else if (id == B_ADD_FOLDER) {
+        go_browse(BR_FOLDER);
+    } else if (id == B_REMOVE_FOLDER) {
+        folder_remove_selected();
+    } else if (id == B_BACK) {
+        go_games();
+    } else if (id == B_ADD_CURRENT) {
+        br_add_current();
+    } else if (id == B_CANCEL) {
+        cancel();
+    } else if (id == B_ADD_PATCH) {
+        gEditSel = gLstSel;
+        go_browse(BR_PATCH);
+    } else if (id == B_REMOVE_PATCH) {
+        patch_remove_selected();
+    } else if (id == B_REMOVE_GAME) {
+        edit_remove();
+    } else if (id == B_SAVE) {
+        edit_save();
+    }
+}
+
+// The selection changed: the buttons that need one follow it, the panel shows it.
+on_select() {
+    if (gScreen == SCR_GAMES) {
+        btn_enable(B_EDIT, gLstSel >= 0);
+        btn_enable(B_START, gLstSel >= 0);
+        if (gLstSel >= 0) strcpy(gSelPath, gGames[gOrder[gLstSel]].path);
+        panel_request(0);
+    } else if (gScreen == SCR_FOLDERS) {
+        btn_enable(B_REMOVE_FOLDER, gLstSel >= 0);
+    } else if (gScreen == SCR_EDIT) {
+        btn_enable(B_REMOVE_PATCH, gLstSel >= 0);
+    }
+}
+
+// ==========================================================================================
+// Select Game
+// ==========================================================================================
+
+go_games() {
+    gScreen = SCR_GAMES;
+    if (gNeedScan) {            // scan_thread looks for them; the list grows as they come (scan_watch)
+        gNeedScan = 0;
+        gGameCount = 0;
+        gScanEnd = 0;
+        gScanning = 1;
+        gScanAsk = 1;
+    }
+    gScanShown = gGameCount;
+    btn_clear();
+    btn_add(B_FOLDERS, TXT_BTN_FOLDERS, 0, 0);
+    btn_add(B_EDIT, TXT_BTN_EDIT, 0, 0);
+    btn_add(B_SORT, gSort == SORT_RECENT ? TXT_BTN_SORT_RECENT : TXT_BTN_SORT_NAME, 0, 0);
+    btn_add(B_LOOK, look_text(), 0, 0);
+    btn_add(B_START, TXT_BTN_START, 1, 1);
+    gLstCount = gGameCount;
+    gLstTop = 0;
+    gLstSel = game_row(gSelPath);
+    if (gLstSel < 0 && gGameCount > 0 && !gScanning) gLstSel = 0;       // nothing chosen before: the first game
+    gLstHover = -1;
+    gPlayHover = -1;
+    gPanelGame = -1;
+    zone_default();
+    build();
+    cascade_start();
+    list_select(gLstSel, 1);
+}
+
+// The row of the game at `path`, -1 when it is not in the list.
+game_row(char* path) { int i;
+    if (!path[0]) return -1;
+    for (i = 0; i < gGameCount; i = i + 1) {
+        if (streq(gGames[gOrder[i]].path, path)) return i;
+    }
+    return -1;
+}
+
+// The other order of the list.
+sort_toggle() {
+    gSort = gSort == SORT_NAME ? SORT_RECENT : SORT_NAME;
+    if (gSort == SORT_RECENT) {
+        OBGI_CFG_SET("", "sort", 0, "recent");
+    } else {
+        OBGI_CFG_SET("", "sort", 0, 0);
+    }
+    settings_save();
+    games_sort();
+    gFocusBtn = btn_index(B_SORT);
+    go_games();
+    gFocusZone = Z_BUTTONS;
+    gFocusBtn = btn_index(B_SORT);
+    redraw_focus();
+}
+
+// What the "Look" button says.
+look_text() {
+    if (gThemeSet == 1) return TXT_BTN_BG_WAVES;
+    if (gThemeSet == 2) return TXT_BTN_BG_SHAPES;
+    return TXT_BTN_BG_RANDOM;
+}
+
+// The next look of the stage; the launcher takes the colours of it.
+look_next() { int i; char* s;
+    stage_cycle();
+    i = btn_index(B_LOOK);
+    s = look_text();
+    btn_text(B_LOOK, s);
+    build();
+    gFocusZone = Z_BUTTONS;
+    gFocusBtn = i;
+    redraw_focus();
+}
+
+// Start the game of row `item` with its compatibility, its patches and its options.
+launch(item) { Game* g; int n; int i; int len; int used;
+    g = &gGames[gOrder[item]];
+    used = 0;
+    n = cfg_n(g->path, "patches");
+    for (i = 0; i < n && i < MAX_PATCHES; i = i + 1) {
+        len = OBGI_CFG_GET(g->path, "patches", i, gPatchBlock + used, PATH_LEN);
+        if (len > 0) used = used + len + 1;
+    }
+    gPatchBlock[used] = 0;
+    if (OBGI_CFG_GET(g->path, "options", 0, gTmp2, PATH_LEN) < 0) {
+        gTmp2[0] = 0;
+    }
+    OBGI_CFG_SET("", "last", 0, g->path);
+    settings_save();
+    curtain_black();                // the launcher leaves through a pattern, to black
+    curtain(PRIO_VEIL, 0, 0x100, 420);
+    while (1) {
+        i = curtain_step();
+        gfx0.present(0);
+        nap(14);
+        if (!i) break;
+    }
+    if (!OBGI_LAUNCH_GAME(g->path, g->profile, gPatchBlock, gTmp2)) {
+        gfx0.sprite_show(gCurtainSpr, 0);
+        sprintf(gMsg, TXT_LAUNCH_FAILED, g->label);
+        ext0.msg_box_notice(gMsg);
+    }
+}
+
+// ---- looking for games -------------------------------------------------------------------
+
+// The games: what the added places hold.  A place is a folder - its games are the .zip and
+// .iso files in it, itself when it has system.arc (or ipl._bp), and the same one level
+// below - or a single .zip or .iso.
+//
+// Reading a folder and looking at a game can take a while - a disk that has to spin up
+// first, a share - and where the host does that reading beside the frames, the thread that
+// asks waits for it.  So the search has a thread of its own, scan_thread, which go_games
+// sets off (gScanAsk); the list is drawn anew as games come in (scan_watch), and a ring
+// turns in the bar at the top until the search is through.  A search that is asked for
+// while one runs takes its place.
+scan() { int n; int i;
+    gGameCount = 0;
+    n = cfg_n("", "folders");
+    for (i = 0; i < n && !gScanAsk; i = i + 1) {
+        if (OBGI_CFG_GET("", "folders", i, gScanPath, PATH_LEN) > 0) {
+            if (is_archive(gScanPath)) {
+                game_add(gScanPath);
+            } else {
+                scan_folder(gScanPath, 1);
+            }
+        }
+    }
+    games_sort();
+}
+
+scan_thread() {
+    while (1) {
+        if (!gScanAsk) {
+            nap(20);
+            continue;
+        }
+        gScanAsk = 0;
+        scan();
+        if (!gScanAsk) {
+            gScanning = 0;
+            gScanEnd = 1;
+        }
+    }
+}
+
+// The list as the search has it now: in order, with the game that was selected still
+// selected wherever it went - or the game that was just dropped on the window, once it is
+// there; the first game when none was chosen before, or - at the end - when the one chosen
+// before is not among them.
+scan_show(ended) { int row;
+    games_sort();
+    gScanShown = gGameCount;
+    if (gScreen != SCR_GAMES) return;       // (go_games draws it when the screen comes back)
+    gLstCount = gGameCount;
+    row = -1;
+    if (gDropSel) row = game_row(gDropLast);
+    if (row >= 0 || ended) gDropSel = 0;
+    if (row < 0) row = game_row(gSelPath);
+    if (row < 0 && gGameCount > 0 && (ended || !gSelPath[0])) row = 0;      // (a game chosen before may still come)
+    gLstSel = row;
+    gLstHover = -1;
+    gPlayHover = -1;
+    gLstTop = iclamp(gLstTop, 0, list_max_top());
+    list_draw();
+    if (ended) {
+        list_select(gLstSel, 1);
+    } else {
+        on_select();
+    }
+}
+
+// Once a turn of the program: the ring, and the list when the search brought something.
+scan_watch() {
+    spin_step();
+    if (gScanEnd) {
+        gScanEnd = 0;
+        scan_show(1);
+    } else if (gScanning && gGameCount != gScanShown) {
+        scan_show(0);
+    }
+}
+
+// The ring that turns while games are looked for, and while the program's own thread has
+// waited a moment for a folder or a game to be read (busy_thread): beside what the screen
+// is, in the bar at the top.  A circle's line, fading around from where a hand stands that
+// goes round once in 1.2 seconds; drawn twenty times a second.
+spin_step() { int d; int i; int r; int a;
+    if (gBusy) {
+        if (!gSpinOn && gNow - gBusy < 200) return;
+    } else if (!gScanning || gScreen != SCR_GAMES) {
+        if (gSpinOn) {
+            gSpinOn = 0;
+            hide(gSpinSpr);
+        }
+        return;
+    }
+    if (gSpinOn && gNow - gSpinAt >= 0 && gNow - gSpinAt < 50) return;
+    gSpinAt = gNow;
+    d = px(22);
+    r = (d / 2 - px(3)) * 256;
+    for (i = 0; i < 24; i = i + 1) {
+        a = i * 15;
+        gPts[2 * i] = d * 128 + ((r >> 4) * (sin((a + 90) * 65536) >> 4) >> 8);
+        gPts[2 * i + 1] = d * 128 + ((r >> 4) * (sin(a * 65536) >> 4) >> 8);
+    }
+    mask_new(d, d);
+    pat_line(PAT_SET, 255, imax(px(3), 2) * 256, 1, 24);
+    pat_sweep(PAT_MULTIPLY, d / 2, d / 2, (gNow % 1200) * 360 / 1200, 16, 255, 1, 0);
+    ink_to(BMP_SPIN, gAccentHi & 0xffffff);
+    show(gSpinSpr, gMargin + px(2) + gSubW + px(12), px(54), BMP_SPIN, PRIO_UI);
+    gSpinOn = 1;
+}
+
+// The program's own thread asks for a folder's listing, or for a look at a game (the
+// browser, what was dropped): where the host reads beside the frames it waits for the
+// answer, and nothing of the program goes on.  So these two say that they wait (gBusy), and
+// busy_thread shows the picture meanwhile: the stage keeps moving, and the ring turns when
+// the wait is longer than a moment.
+dir_open_wait(char* path, flags) { int h;
+    gBusy = sys.get_ticks() | 1;
+    h = OBGI_DIR_OPEN(path, flags);
+    gBusy = 0;
+    return h;
+}
+
+// .. the look at the game at `path`, into gInfo
+game_probe_wait(char* path) { int found;
+    gBusy = sys.get_ticks() | 1;
+    found = OBGI_GAME_PROBE(path, gInfo);
+    gBusy = 0;
+    return found;
+}
+
+busy_thread() {
+    while (1) {
+        nap(14);
+        if (gBusy) {
+            gNow = sys.get_ticks();
+            spin_step();
+            gfx0.present(0);
+        }
+    }
+}
+
+// The games in folder `dir`; with `deeper`, also those in its folders.
+scan_folder(char* dir, deeper) { int h; int n; int i; int k; char name[1024]; char sub[1024];
+    h = OBGI_DIR_OPEN(dir, deeper ? DIR_GAMES | DIR_DEEPER : DIR_GAMES);
+    if (!h) return;
+    n = OBGI_DIR_COUNT(h);
+    for (i = 0; i < n && !gScanAsk; i = i + 1) {
+        k = OBGI_DIR_ENTRY(h, i, name, 1024);
+        if (k == ENTRY_FILE) {
+            scan_file(dir, name);
+        } else if (k == ENTRY_FOLDER && deeper) {
+            path_join(sub, dir, name);
+            scan_folder(sub, 0);
+        }
+    }
+    OBGI_DIR_CLOSE(h);
+}
+
+// A file of a folder: a game's archive or disc image, or what makes the folder a game.
+scan_file(char* dir, char* name) { char path[1024];
+    if (is_archive(name)) {
+        path_join(path, dir, name);
+        game_add(path);
+    } else if (str_cmp_ci(name, "system.arc") == 0 || str_cmp_ci(name, "ipl._bp") == 0) {
+        game_add(dir);
+    }
+}
+
+// Add the game at `path` to the list, unless it is there already, the player removed it, or
+// the engine finds no game there.
+game_add(char* path) { Game* g; char removed[16]; char num[16]; int n;
+    if (game_find(path) >= 0) return;
+    if (gGameCount >= MAX_GAMES) return;
+    if (OBGI_CFG_GET(path, "removed", 0, removed, 16) > 0) return;
+    if (!OBGI_GAME_PROBE(path, gScanInfo)) return;
+    if (gScanAsk) return;                   // (the search begins anew)
+    g = &gGames[gGameCount];
+    strcpy(g->path, path);
+    g->kind = gScanInfo.kind;
+    g->pic = PIC_UNKNOWN;
+    strcpy(g->detected, gScanInfo.profile);
+    base_name(g->base, path);
+    if (gScanInfo.name[0]) {
+        strcpy(g->probed, gScanInfo.name);
+    } else {
+        strcpy(g->probed, g->base);
+        if (g->kind != GAME_FOLDER) strip_ext(g->probed);
+    }
+    if (g->kind == GAME_FOLDER) {
+        n = strlen(g->base);
+        g->base[n] = 47;
+        g->base[n + 1] = 0;
+    }
+    if (OBGI_CFG_GET(path, "name", 0, g->name, NAME_LEN) <= 0) {
+        strcpy(g->name, g->probed);
+    }
+    if (OBGI_CFG_GET(path, "profile", 0, g->profile, 16) <= 0) {
+        g->profile[0] = 0;
+    }
+    if (OBGI_CFG_GET(path, "played", 0, g->played, 20) <= 0) {
+        g->played[0] = 0;
+    }
+    g->seconds = 0;
+    if (OBGI_CFG_GET(path, "seconds", 0, num, 16) > 0) {
+        g->seconds = to_int(num);
+    }
+    gGameCount = gGameCount + 1;
+    OBGI_CFG_SET("", "preview", 0, path);       // the engine asks the host for its icon and a first picture
+}
+
+game_find(char* path) { int i;
+    for (i = 0; i < gGameCount; i = i + 1) {
+        if (streq(gGames[i].path, path)) return i;
+    }
+    return -1;
+}
+
+// Forget game i of gGames.
+game_delete(i) {
+    while (i + 1 < gGameCount) {
+        memcpy(&gGames[i], &gGames[i + 1], sizeof(Game));
+        i = i + 1;
+    }
+    gGameCount = gGameCount - 1;
+    pics_forget();
+}
+
+// The list's order - by name, or the last played first; then file name, then path - and the
+// rows' texts: a name that several games share gets a number and the file name, "Tayutama
+// (1 : TAYUTAMA.ISO)".
+games_sort() { int i; int j; int k; int run; int c; Game* g;
+    for (i = 0; i < gGameCount; i = i + 1) {
+        gOrder[i] = i;
+        strcpy(gGames[i].label, gGames[i].name);
+    }
+    // the names that are shared, by the order of the names
+    for (i = 1; i < gGameCount; i = i + 1) {
+        k = gOrder[i];
+        j = i - 1;
+        while (j >= 0) {
+            c = game_cmp(gOrder[j], k, SORT_NAME);
+            if (c <= 0) break;
+            gOrder[j + 1] = gOrder[j];
+            j = j - 1;
+        }
+        gOrder[j + 1] = k;
+    }
+    i = 0;
+    while (i < gGameCount) {
+        run = 1;
+        while (i + run < gGameCount) {
+            c = str_cmp_ci(gGames[gOrder[i]].name, gGames[gOrder[i + run]].name);
+            if (c != 0) break;
+            run = run + 1;
+        }
+        for (j = 0; j < run && run > 1; j = j + 1) {
+            g = &gGames[gOrder[i + j]];
+            sprintf(g->label, TXT_DUPLICATE, g->name, j + 1, g->base);
+        }
+        i = i + run;
+    }
+    if (gSort == SORT_NAME) return;
+    for (i = 1; i < gGameCount; i = i + 1) {
+        k = gOrder[i];
+        j = i - 1;
+        while (j >= 0) {
+            c = game_cmp(gOrder[j], k, gSort);
+            if (c <= 0) break;
+            gOrder[j + 1] = gOrder[j];
+            j = j - 1;
+        }
+        gOrder[j + 1] = k;
+    }
+}
+
+// Which of games a and b comes first in an order: below 0 a, above 0 b.
+game_cmp(a, b, order) { int c;
+    if (order == SORT_RECENT) {
+        c = str_cmp_ci(gGames[b].played, gGames[a].played);     // the later date first; never played last
+        if (c != 0) return c;
+    }
+    c = str_cmp_ci(gGames[a].name, gGames[b].name);
+    if (c != 0) return c;
+    c = str_cmp_ci(gGames[a].base, gGames[b].base);
+    if (c != 0) return c;
+    return str_cmp_ci(gGames[a].path, gGames[b].path);
+}
+
+// ==========================================================================================
+// Game folders
+// ==========================================================================================
+
+// The folders screen, with `sel` selected (-1: none).
+go_folders(sel) {
+    gScreen = SCR_FOLDERS;
+    folders_load();
+    btn_clear();
+    btn_add(B_ADD_FOLDER, TXT_BTN_ADD_FOLDER, 0, 0);
+    btn_add(B_REMOVE_FOLDER, TXT_BTN_REMOVE_FOLDER, 0, 0);
+    btn_add(B_BACK, TXT_BTN_BACK, 1, 0);
+    gLstCount = gFolderCount;
+    gLstTop = 0;
+    gLstSel = -1;
+    gLstHover = -1;
+    zone_default();
+    build();
+    cascade_start();
+    list_select(sel, 1);
+}
+
+folders_load() { int n; int i;
+    n = cfg_n("", "folders");
+    gFolderCount = 0;
+    for (i = 0; i < n && gFolderCount < MAX_FOLDERS; i = i + 1) {
+        if (OBGI_CFG_GET("", "folders", i, gFolders[gFolderCount], PATH_LEN) > 0) {
+            gFolderCount = gFolderCount + 1;
+        }
+    }
+}
+
+// The index of `path` in the setting "folders", -1 when it is not there.
+folder_setting(char* path) { int n; int i;
+    n = cfg_n("", "folders");
+    for (i = 0; i < n; i = i + 1) {
+        if (OBGI_CFG_GET("", "folders", i, gTmp1, PATH_LEN) > 0 && streq(gTmp1, path)) return i;
+    }
+    return -1;
+}
+
+// Add a place to search (when it is not there yet).  The games in it that the player
+// removed from the list come back: a place is added again only after it was removed.
+folder_add(char* path) { int n; int i; int at;
+    at = folder_setting(path);
+    if (at >= 0) return;
+    n = cfg_n("", "folders");
+    OBGI_CFG_SET("", "folders", n, path);
+    path_join(gParent, path, "");
+    n = cfg_n("", "games");
+    for (i = 0; i < n; i = i + 1) {
+        if (OBGI_CFG_GET("", "games", i, gTmp1, PATH_LEN) > 0) {
+            if (streq(gTmp1, path) || starts_with(gTmp1, gParent)) {
+                OBGI_CFG_SET(gTmp1, "removed", 0, 0);
+            }
+        }
+    }
+    gNeedScan = 1;
+}
+
+// The first time the launcher runs: the games an earlier OpenBGI started from its "Select
+// game" dialog are places, so that they are listed as before.
+places_seed() { int n; int i;
+    if (OBGI_CFG_GET("", "seeded", 0, gTmp2, 16) > 0) return;
+    n = cfg_n("", "games");
+    for (i = 0; i < n; i = i + 1) {
+        if (OBGI_CFG_GET("", "games", i, gPathBuf, PATH_LEN) > 0) {
+            folder_add(gPathBuf);
+        }
+    }
+    OBGI_CFG_SET("", "seeded", 0, "1");
+}
+
+// Remove the selected place: its games leave the list.
+folder_remove_selected() { int i; int sel;
+    sel = gLstSel;
+    if (sel < 0) return;
+    i = folder_setting(gFolders[sel]);
+    if (i >= 0) OBGI_CFG_SET("", "folders", i, 0);
+    settings_save();
+    gNeedScan = 1;
+    go_folders(imin(sel, gFolderCount - 2));
+}
+
+// ---- what is dropped on the window -------------------------------------------------------
+
+// The place the dropped path gDrop stands for, into gPathBuf: 1 when it joined the places.
+// A folder is a place to search, whatever is in it.  A .zip or an .iso is a place when the
+// engine finds a game in it; an .arc file stands for the folder it is in, which is a place
+// when that folder is a game's (system.arc with its ipl._bp).  Anything else is nothing.
+drop_place() { int h; int a;
+    h = dir_open_wait(gDrop, 0);
+    if (h) {
+        OBGI_DIR_CLOSE(h);
+        strcpy(gPathBuf, gDrop);
+        folder_add(gPathBuf);
+        return 1;
+    }
+    a = is_archive(gDrop);
+    if (a) {
+        strcpy(gPathBuf, gDrop);
+    } else {
+        a = ends_ci(gDrop, ".arc");
+        if (!a) return 0;
+        path_parent(gPathBuf, gDrop);
+        if (!gPathBuf[0]) return 0;
+    }
+    if (!game_probe_wait(gPathBuf)) return 0;
+    if (OBGI_CFG_GET(gPathBuf, "removed", 0, gTmp2, 16) > 0) {
+        OBGI_CFG_SET(gPathBuf, "removed", 0, 0);    // taken out of the list once, and wanted again
+        gNeedScan = 1;
+    }
+    if (gNeedScan || game_find(gPathBuf) < 0) folder_add(gPathBuf);     // (not when a place has it in the list already)
+    return 1;
+}
+
+// Take what was dropped on the window since the last turn (the engine keeps the paths as
+// the setting "dropped", and deleting one takes it).  The places that came of it are kept
+// and shown; then one box says what was no game, for the first such path.
+drops() { int added; int bad;
+    if (OBGI_CFG_GET("", "dropped", 0, gDrop, PATH_LEN) <= 0) return;
+    added = 0;
+    bad = 0;
+    while (OBGI_CFG_GET("", "dropped", 0, gDrop, PATH_LEN) > 0) {
+        OBGI_CFG_SET("", "dropped", 0, 0);
+        if (drop_place()) {
+            added = added + 1;
+            strcpy(gDropLast, gPathBuf);
+        } else if (!bad) {
+            bad = 1;
+            base_name(gChild, gDrop);
+            sprintf(gMsg, TXT_NOT_A_GAME, gChild);
+        }
+    }
+    if (added) {
+        settings_save();
+        drops_show();
+    }
+    if (bad) {
+        gfx0.present(1);        // (the screen as it is now behind the box)
+        sys.yield();
+        ext0.msg_box_notice(gMsg);
+    }
+}
+
+// The first pictures: a host that can runs each game without one out of sight for a few
+// seconds and keeps what it showed at the end ("previews" counts them).  When one came in,
+// the games that had no picture are looked at again.
+previews() { int n; int i;
+    if (OBGI_CFG_GET("", "previews", 0, gCfgTmp, 16) <= 0) return;
+    n = to_int(gCfgTmp);
+    if (n == gPreviews) return;
+    gPreviews = n;
+    for (i = 0; i < gGameCount; i = i + 1) {
+        if (gGames[i].pic == PIC_NONE) gGames[i].pic = PIC_UNKNOWN;
+    }
+    if (gScreen != SCR_GAMES) return;
+    rows_draw();
+    if (gPanelShown && gPanelGame >= 0 && !gPanelPic) panel_request(1);
+}
+
+// The screen after a drop that brought places: the games again, with a dropped game
+// selected, or the places with the last one selected.  While a game is edited the screen
+// stays as it is, and the list is new when it comes back.
+drops_show() {
+    if (gScreen == SCR_EDIT) return;
+    if (gScreen == SCR_BROWSE) {
+        if (gBrMode == BR_PATCH) return;
+        br_close();
+    }
+    if (gScreen == SCR_GAMES) {
+        gDropSel = 1;       // (scan_show selects it)
+        go_games();
+        return;
+    }
+    folders_load();
+    go_folders(folder_row(gDropLast));
+}
+
+// ==========================================================================================
+// The folder browser (Add folder, Add patch)
+// ==========================================================================================
+
+// The browser from the folder it was in last, else the home folder.
+go_browse(mode) {
+    gScreen = SCR_BROWSE;
+    gBrMode = mode;
+    btn_clear();
+    btn_add(B_ADD_CURRENT, mode == BR_PATCH ? TXT_BTN_USE_CURRENT : TXT_BTN_ADD_CURRENT, 0, 1);
+    btn_add(B_CANCEL, TXT_BTN_CANCEL, 1, 0);
+    if (OBGI_CFG_GET("", "browse", 0, gPathBuf, PATH_LEN) <= 0) {
+        if (OBGI_CFG_GET("", "home", 0, gPathBuf, PATH_LEN) < 0) gPathBuf[0] = 0;
+    }
+    br_open(gPathBuf, 0);
+}
+
+// Show folder `path`; select its folder named `child` (where we came up from), else the first
+// row.  An unreadable folder shows only "../".
+br_open(char* path, char* child) { int e; int k;
+    if (gBrHandle) OBGI_DIR_CLOSE(gBrHandle);
+    strcpy(gBrPath, path);
+    gBrHandle = dir_open_wait(gBrPath, DIR_HIDDEN);
+    gBrBad = !gBrHandle;
+    gBrEntries = 0;
+    if (gBrHandle) gBrEntries = OBGI_DIR_COUNT(gBrHandle);
+    path_join(gTmp3, gBrPath, "..");
+    gBrHasUp = !streq(gTmp3, gBrPath);
+    gLstCount = gBrHasUp + gBrEntries;
+    gLstTop = 0;
+    gLstSel = gLstCount > 0 ? 0 : -1;
+    gLstHover = -1;
+    if (child) {
+        for (e = 0; e < gBrEntries; e = e + 1) {
+            k = OBGI_DIR_ENTRY(gBrHandle, e, gTmp3, PATH_LEN);
+            if (k == ENTRY_FOLDER && streq(gTmp3, child)) {
+                gLstSel = e + gBrHasUp;
+                break;
+            }
+        }
+    }
+    OBGI_CFG_SET("", "browse", 0, gBrPath);
+    gFocusZone = gLstCount > 0 ? Z_LIST : Z_BUTTONS;
+    gFocusBtn = 0;
+    build();
+    btn_enable(B_ADD_CURRENT, gBrPath[0] != 0);
+    list_select(gLstSel, 1);
+}
+
+br_close() {
+    if (gBrHandle) OBGI_DIR_CLOSE(gBrHandle);
+    gBrHandle = 0;
+}
+
+// Open a row: "../" goes up, a folder opens; a .zip or an .iso is added as a game by itself
+// (Add folder), a .zip becomes a patch (Add patch).
+br_activate(item) { int k; int a;
+    if (gBrHasUp && item == 0) {
+        br_up();
+        return;
+    }
+    k = OBGI_DIR_ENTRY(gBrHandle, item - gBrHasUp, gChild, PATH_LEN);
+    path_join(gPathBuf, gBrPath, gChild);
+    if (k == ENTRY_FOLDER) {
+        br_open(gPathBuf, 0);
+        return;
+    }
+    if (k != ENTRY_FILE) return;
+    if (gBrMode == BR_PATCH) {
+        a = ends_ci(gChild, ".zip");
+        if (a) patch_chosen(gPathBuf);
+        return;
+    }
+    a = is_archive(gChild);
+    if (!a) return;
+    if (!game_probe_wait(gPathBuf)) {
+        sprintf(gMsg, TXT_NOT_A_GAME, gChild);
+        ext0.msg_box_notice(gMsg);
+        return;
+    }
+    place_chosen();
+}
+
+// Up a folder, with the folder we came from selected.
+br_up() {
+    path_join(gParent, gBrPath, "..");
+    if (streq(gParent, gBrPath)) return;
+    base_name(gChild, gBrPath);
+    strcpy(gPathBuf, gParent);
+    br_open(gPathBuf, gChild);
+}
+
+br_add_current() {
+    if (!gBrPath[0]) return;
+    strcpy(gPathBuf, gBrPath);
+    if (gBrMode == BR_PATCH) {
+        patch_chosen(gPathBuf);
+        return;
+    }
+    place_chosen();
+}
+
+// The place in gPathBuf - a folder, or a game's file - joins the places; back to their list.
+place_chosen() { int row;
+    br_close();
+    folder_add(gPathBuf);
+    settings_save();
+    folders_load();
+    row = folder_row(gPathBuf);
+    go_folders(row);
+}
+
+br_cancel() {
+    br_close();
+    if (gBrMode == BR_PATCH) {
+        go_edit_resume(Z_LIST);
+    } else {
+        go_folders(-1);
+    }
+}
+
+// The row of a folder in gFolders, -1 for none.
+folder_row(char* path) { int i;
+    for (i = 0; i < gFolderCount; i = i + 1) {
+        if (streq(gFolders[i], path)) return i;
+    }
+    return -1;
+}
+
+// ==========================================================================================
+// Edit game
+// ==========================================================================================
+
+// Edit the game of row `item`: its settings are read into the screen; Save writes them.
+go_edit(item) { Game* g; int n; int i;
+    gEdit = gOrder[item];
+    g = &gGames[gEdit];
+    strcpy(gEditName, g->name);
+    gEditProf = profile_index(g->profile);
+    if (OBGI_CFG_GET(g->path, "options", 0, gEditOptions, 250) <= 0) {
+        gEditOptions[0] = 0;
+    }
+    gEditPatchCount = 0;
+    n = cfg_n(g->path, "patches");
+    for (i = 0; i < n && gEditPatchCount < MAX_PATCHES; i = i + 1) {
+        if (OBGI_CFG_GET(g->path, "patches", i, gEditPatches[gEditPatchCount], PATH_LEN) > 0) {
+            gEditPatchCount = gEditPatchCount + 1;
+        }
+    }
+    gEditSel = -1;
+    go_edit_resume(Z_FIELDS);
+    cascade_start();
+}
+
+// The edit screen as it was left (for the browser of "Add patch"), the focus in zone `zone`.
+go_edit_resume(zone) {
+    gScreen = SCR_EDIT;
+    btn_clear();
+    btn_add(B_ADD_PATCH, TXT_BTN_ADD_PATCH, 0, 0);
+    btn_add(B_REMOVE_PATCH, TXT_BTN_REMOVE_PATCH, 0, 0);
+    btn_add(B_REMOVE_GAME, TXT_BTN_REMOVE_GAME, 0, 0);
+    btn_add(B_CANCEL, TXT_BTN_CANCEL, 1, 0);
+    btn_add(B_SAVE, TXT_BTN_SAVE, 1, 1);
+    gLstCount = gEditPatchCount;
+    gLstTop = 0;
+    gLstSel = -1;
+    gLstHover = -1;
+    gFieldHover = -1;
+    gFocusField = 0;
+    gFieldCount = FIELDS;
+    gFocusZone = zone;
+    if (!zone_ok(zone)) zone_default();
+    build();
+    list_select(gEditSel, 1);
+}
+
+// A patch was chosen in the browser: it goes to the end of the list (a later one wins).
+patch_chosen(char* path) { int i;
+    br_close();
+    for (i = 0; i < gEditPatchCount; i = i + 1) {
+        if (streq(gEditPatches[i], path)) {
+            gEditSel = i;
+            go_edit_resume(Z_LIST);
+            return;
+        }
+    }
+    if (gEditPatchCount < MAX_PATCHES) {
+        strcpy(gEditPatches[gEditPatchCount], path);
+        gEditSel = gEditPatchCount;
+        gEditPatchCount = gEditPatchCount + 1;
+    }
+    go_edit_resume(Z_LIST);
+}
+
+patch_remove_selected() { int i; int sel;
+    sel = gLstSel;
+    if (sel < 0) return;
+    for (i = sel; i + 1 < gEditPatchCount; i = i + 1) {
+        strcpy(gEditPatches[i], gEditPatches[i + 1]);
+    }
+    gEditPatchCount = gEditPatchCount - 1;
+    gLstCount = gEditPatchCount;
+    gLstSel = -1;
+    list_draw();
+    list_select(imin(sel, gLstCount - 1), 1);
+    if (gLstCount == 0) {
+        gFocusZone = Z_BUTTONS;
+        gFocusBtn = btn_usable(btn_index(B_ADD_PATCH));
+        redraw_focus();
+    }
+}
+
+// Save the name, the compatibility, the options and the patches to openbgi.json; back to the
+// games.
+edit_save() { Game* g; int n; int i;
+    g = &gGames[gEdit];
+    if (!gEditName[0] || streq(gEditName, g->probed)) {
+        OBGI_CFG_SET(g->path, "name", 0, 0);
+        strcpy(g->name, g->probed);
+    } else {
+        OBGI_CFG_SET(g->path, "name", 0, gEditName);
+        strcpy(g->name, gEditName);
+    }
+    if (gEditProf < 0) {
+        OBGI_CFG_SET(g->path, "profile", 0, 0);
+        g->profile[0] = 0;
+    } else {
+        OBGI_CFG_SET(g->path, "profile", 0, gProfiles[gEditProf]);
+        strcpy(g->profile, gProfiles[gEditProf]);
+    }
+    if (gEditOptions[0]) {
+        OBGI_CFG_SET(g->path, "options", 0, gEditOptions);
+    } else {
+        OBGI_CFG_SET(g->path, "options", 0, 0);
+    }
+    n = cfg_n(g->path, "patches");
+    for (i = n - 1; i >= 0; i = i - 1) {
+        OBGI_CFG_SET(g->path, "patches", i, 0);
+    }
+    for (i = 0; i < gEditPatchCount; i = i + 1) {
+        OBGI_CFG_SET(g->path, "patches", i, gEditPatches[i]);
+    }
+    settings_save();
+    strcpy(gSelPath, g->path);
+    games_sort();
+    go_games();
+}
+
+// Remove the game from the list for good (after asking): openbgi.json marks it removed, so
+// that no later scan brings it back - until its folder is removed and added again.
+edit_remove() { Game* g;
+    g = &gGames[gEdit];
+    sprintf(gMsg, TXT_ASK_REMOVE, g->name);
+    if (!ext0.msg_box_yes_no(gMsg, 0)) return;
+    OBGI_CFG_SET(g->path, "removed", 0, "1");
+    settings_save();
+    game_delete(gEdit);
+    gSelPath[0] = 0;
+    games_sort();
+    go_games();
+}

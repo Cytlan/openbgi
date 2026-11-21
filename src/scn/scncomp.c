@@ -2,7 +2,7 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * scncomp.c - the scenario compiler: source text (docs/scenario.md) to a
+ * scncomp.c - the scenario compiler: source text (docs/modding/scenario.md) to a
  *             container (interface in scn.h)
  *
  * A recursive-descent parser builds a tree of the file; the generator
@@ -17,7 +17,7 @@
  */
 #include "scn_internal.h"
 #include "bgi/asm.h"
-#include "bgi/os.h"
+#include "bgi/sjis.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -129,7 +129,7 @@ static void SkipSpace(Lex_t* l)
 static const char* const kPuncts[] = {">>>", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "<-", "(", ")", "{", "}", "[", "]", ",",
 	";", ":", "=", "<", ">", "+", "-", "*", "/", "%", "&", "|", "^", "!", "~", "@", NULL};
 
-static void ReadToken(Lex_t* l, Token_t* t)
+static void ReadToken(OpenBGI_t* o, Lex_t* l, Token_t* t)
 {
 	SkipSpace(l);
 	memset(t, 0, sizeof *t);
@@ -149,7 +149,7 @@ static void ReadToken(Lex_t* l, Token_t* t)
 		if(strcmp(t->text, "encoding") == 0)
 		{ // "#encoding utf-8": takes effect here, before the next literal is read
 			int ok;
-			l->p = Asm_EncodingDirective(l->p, l->end, &ok);
+			l->p = Asm_EncodingDirective(o, l->p, l->end, &ok);
 			if(!ok)
 				Errorf(l, l->line, "#encoding utf-8 or #encoding sjis");
 		}
@@ -158,7 +158,7 @@ static void ReadToken(Lex_t* l, Token_t* t)
 	if(*l->p == '"')
 	{
 		const char* next;
-		const char* err = Asm_ReadStringLiteral(l->p, l->end, &t->bytes, &t->len, &next);
+		const char* err = Asm_ReadStringLiteral(o, l->p, l->end, &t->bytes, &t->len, &next);
 		if(err)
 		{
 			Errorf(l, l->line, "%s", err);
@@ -226,10 +226,10 @@ static void ReadToken(Lex_t* l, Token_t* t)
 	}
 	Errorf(l, l->line, "unexpected character '%c'", *l->p);
 	l->p++;
-	ReadToken(l, t);
+	ReadToken(o, l, t);
 }
 
-static void Next(Lex_t* l)
+static void Next(OpenBGI_t* o, Lex_t* l)
 {
 	if(l->peeked)
 	{
@@ -237,14 +237,14 @@ static void Next(Lex_t* l)
 		l->peeked = 0;
 		return;
 	}
-	ReadToken(l, &l->tok);
+	ReadToken(o, l, &l->tok);
 }
 
-static const Token_t* Peek(Lex_t* l)
+static const Token_t* Peek(OpenBGI_t* o, Lex_t* l)
 {
 	if(!l->peeked)
 	{
-		ReadToken(l, &l->peek);
+		ReadToken(o, l, &l->peek);
 		l->peeked = 1;
 	}
 	return &l->peek;
@@ -260,19 +260,19 @@ static int IsIdent(const Lex_t* l, const char* p)
 	return l->tok.kind == T_IDENT && strcmp(l->tok.text, p) == 0;
 }
 
-static int Accept(Lex_t* l, const char* p)
+static int Accept(OpenBGI_t* o, Lex_t* l, const char* p)
 {
 	if(IsPunct(l, p))
 	{
-		Next(l);
+		Next(o, l);
 		return 1;
 	}
 	return 0;
 }
 
-static int Expect(Lex_t* l, const char* p)
+static int Expect(OpenBGI_t* o, Lex_t* l, const char* p)
 {
-	if(Accept(l, p))
+	if(Accept(o, l, p))
 		return 1;
 	Errorf(l, l->tok.line, "'%s' expected", p);
 	return 0;
@@ -334,7 +334,7 @@ struct Node
 	int64_t num;
 	int size;
 	int op;
-	int direct; // a call written `name!(..)`: the library convention in a scenario file (docs/scenario.md)
+	int direct; // a call written `name!(..)`: the library convention in a scenario file (docs/modding/scenario.md)
 	char text[SCN_NAME_MAX];
 	uint8_t* bytes;
 	uint32_t len;
@@ -438,10 +438,10 @@ typedef struct Parser
 	const ScnCmdTable_t* cmds;
 } Parser_t;
 
-static Node_t* ParseExpression(Parser_t* p);
-static Node_t* ParseStatement(Parser_t* p);
-static void ParseDirective(Parser_t* p);
-static Node_t* ParseBlock(Parser_t* p, int* closeLine);
+static Node_t* ParseExpression(OpenBGI_t* o, Parser_t* p);
+static Node_t* ParseStatement(OpenBGI_t* o, Parser_t* p);
+static void ParseDirective(OpenBGI_t* o, Parser_t* p);
+static Node_t* ParseBlock(OpenBGI_t* o, Parser_t* p, int* closeLine);
 
 /* the scenario style's label table, in order of first mention - a goto
  * or a definition; definitions only in the older variant (what the
@@ -470,17 +470,17 @@ static Var_t* FindVar(Func_t* f, const char* name)
 	return NULL;
 }
 
-static Node_t* StrNode(Parser_t* p)
+static Node_t* StrNode(OpenBGI_t* o, Parser_t* p)
 {
 	Node_t* n = NewNode(N_STR, p->lex.tok.line);
 	n->bytes = p->lex.tok.bytes;
 	n->len = p->lex.tok.len;
 	p->lex.tok.bytes = NULL;
-	Next(&p->lex);
+	Next(o, &p->lex);
 	return n;
 }
 
-static Node_t* ParsePrimary(Parser_t* p)
+static Node_t* ParsePrimary(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Node_t* n;
@@ -488,38 +488,38 @@ static Node_t* ParsePrimary(Parser_t* p)
 	{
 		n = NewNode(N_NUM, l->tok.line);
 		n->num = l->tok.num;
-		Next(l);
+		Next(o, l);
 		return n;
 	}
 	if(l->tok.kind == T_STR)
-		return StrNode(p);
+		return StrNode(o, p);
 	if(IsPunct(l, "@"))
 	{ // @0xADDR(args): a function of the game's main file, called by address (the raw variant)
 		int line = l->tok.line;
-		Next(l);
+		Next(o, l);
 		n = NewNode(N_RAWCALL, line);
 		if(l->tok.kind != T_NUM)
 			Errorf(l, line, "@ADDRESS(..) expects the address of a function of the main file");
 		else
 		{
 			n->num = l->tok.num;
-			Next(l);
+			Next(o, l);
 		}
-		Expect(l, "(");
+		Expect(o, l, "(");
 		if(!IsPunct(l, ")"))
 			for(;;)
 			{
-				AddItem(n, ParseExpression(p));
-				if(!Accept(l, ","))
+				AddItem(n, ParseExpression(o, p));
+				if(!Accept(o, l, ","))
 					break;
 			}
-		Expect(l, ")");
+		Expect(o, l, ")");
 		return n;
 	}
-	if(Accept(l, "("))
+	if(Accept(o, l, "("))
 	{
-		n = ParseExpression(p);
-		Expect(l, ")");
+		n = ParseExpression(o, p);
+		Expect(o, l, ")");
 		return n;
 	}
 	if(l->tok.kind == T_IDENT)
@@ -527,14 +527,14 @@ static Node_t* ParsePrimary(Parser_t* p)
 		char name[SCN_NAME_MAX];
 		int line = l->tok.line;
 		strcpy(name, l->tok.text);
-		Next(l);
-		if(Accept(l, "(") || (IsPunct(l, "!") && Peek(l)->kind == T_PUNCT && strcmp(Peek(l)->text, "(") == 0))
+		Next(o, l);
+		if(Accept(o, l, "(") || (IsPunct(l, "!") && Peek(o, l)->kind == T_PUNCT && strcmp(Peek(o, l)->text, "(") == 0))
 		{
 			int direct = 0;
 			if(IsPunct(l, "!"))
 			{ // name!( .. ): the direct form
-				Next(l);
-				Next(l);
+				Next(o, l);
+				Next(o, l);
 				direct = 1;
 			}
 			n = NewNode(strcmp(name, "lstr") == 0 && p->unit->style == SCN_STYLE_SCENARIO && !direct ? N_LSTR : N_CALL, line);
@@ -543,19 +543,19 @@ static Node_t* ParsePrimary(Parser_t* p)
 			if(!IsPunct(l, ")"))
 				for(;;)
 				{
-					AddItem(n, ParseExpression(p));
-					if(!Accept(l, ","))
+					AddItem(n, ParseExpression(o, p));
+					if(!Accept(o, l, ","))
 						break;
 				}
-			Expect(l, ")");
+			Expect(o, l, ")");
 			return n;
 		}
-		if(Accept(l, "["))
+		if(Accept(o, l, "["))
 		{
 			n = NewNode(N_INDEX, line);
 			strcpy(n->text, name);
-			n->a = ParseExpression(p);
-			Expect(l, "]");
+			n->a = ParseExpression(o, p);
+			Expect(o, l, "]");
 			return n;
 		}
 		n = NewNode(N_NAME, line);
@@ -563,60 +563,60 @@ static Node_t* ParsePrimary(Parser_t* p)
 		return n;
 	}
 	Errorf(l, l->tok.line, "an expression was expected");
-	Next(l);
+	Next(o, l);
 	return NewNode(N_NUM, l->tok.line);
 }
 
-static Node_t* ParseUnary(Parser_t* p)
+static Node_t* ParseUnary(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	int line = l->tok.line;
 	Node_t* n;
-	if(Accept(l, "-"))
+	if(Accept(o, l, "-"))
 	{
 		n = NewNode(N_NEG, line);
-		n->a = ParseUnary(p);
+		n->a = ParseUnary(o, p);
 		return n;
 	}
-	if(Accept(l, "!"))
+	if(Accept(o, l, "!"))
 	{
 		n = NewNode(N_LNOT, line);
-		n->a = ParseUnary(p);
+		n->a = ParseUnary(o, p);
 		return n;
 	}
-	if(Accept(l, "~"))
+	if(Accept(o, l, "~"))
 	{
 		n = NewNode(N_NOT, line);
-		n->a = ParseUnary(p);
+		n->a = ParseUnary(o, p);
 		return n;
 	}
-	if(Accept(l, "&"))
+	if(Accept(o, l, "&"))
 	{
 		n = NewNode(N_ADDROF, line);
 		if(l->tok.kind != T_IDENT)
 			Errorf(l, line, "a name was expected after &");
 		strcpy(n->text, l->tok.text);
-		Next(l);
+		Next(o, l);
 		return n;
 	}
-	if(Accept(l, "*"))
+	if(Accept(o, l, "*"))
 	{
 		// *(int*)e / *(char*)e
 		n = NewNode(N_DEREF, line);
-		Expect(l, "(");
+		Expect(o, l, "(");
 		if(IsIdent(l, "int"))
 			n->size = 2;
 		else if(IsIdent(l, "char"))
 			n->size = 0;
 		else
 			Errorf(l, line, "int or char expected in a cast");
-		Next(l);
-		Expect(l, "*");
-		Expect(l, ")");
-		n->a = ParseUnary(p);
+		Next(o, l);
+		Expect(o, l, "*");
+		Expect(o, l, ")");
+		n->a = ParseUnary(o, p);
 		return n;
 	}
-	return ParsePrimary(p);
+	return ParsePrimary(o, p);
 }
 
 static const ScnOperator_t* OperatorAt(const Lex_t* l)
@@ -630,53 +630,53 @@ static const ScnOperator_t* OperatorAt(const Lex_t* l)
 	return NULL;
 }
 
-static Node_t* ParseBinary(Parser_t* p, int minPrec)
+static Node_t* ParseBinary(OpenBGI_t* o, Parser_t* p, int minPrec)
 {
 	Lex_t* l = &p->lex;
-	Node_t* left = ParseUnary(p);
+	Node_t* left = ParseUnary(o, p);
 	for(;;)
 	{
 		const ScnOperator_t* op = OperatorAt(l);
 		Node_t* n;
 		if(!op || op->prec < minPrec)
 			return left;
-		Next(l);
+		Next(o, l);
 		n = NewNode(N_BINARY, left->line);
 		n->op = (int)op->token;
 		n->a = left;
-		n->b = ParseBinary(p, op->prec + 1);
+		n->b = ParseBinary(o, p, op->prec + 1);
 		left = n;
 	}
 }
 
-static Node_t* ParseExpression(Parser_t* p)
+static Node_t* ParseExpression(OpenBGI_t* o, Parser_t* p)
 {
-	return ParseBinary(p, 0);
+	return ParseBinary(o, p, 0);
 }
 
 // a condition: an expression, or an assignment (`if (x = v)` of the original sources, which pushes nothing)
-static Node_t* ParseCondition(Parser_t* p)
+static Node_t* ParseCondition(OpenBGI_t* o, Parser_t* p)
 {
-	Node_t* n = ParseBinary(p, 0);
-	if(Accept(&p->lex, "="))
+	Node_t* n = ParseBinary(o, p, 0);
+	if(Accept(o, &p->lex, "="))
 	{
 		Node_t* s = NewNode(N_ASSIGN, n->line);
 		s->a = n;
-		s->b = ParseExpression(p);
+		s->b = ParseExpression(o, p);
 		return s;
 	}
 	return n;
 }
 
 // a declaration list at the start of a function body: int a, b; char buf[256]; char rows[4][16]; ...
-static int ParseDeclarations(Parser_t* p)
+static int ParseDeclarations(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Func_t* f = p->func;
 	while(IsIdent(l, "int") || IsIdent(l, "char"))
 	{
 		int isChar = IsIdent(l, "char");
-		Next(l);
+		Next(o, l);
 		for(;;)
 		{
 			Var_t* v;
@@ -696,43 +696,43 @@ static int ParseDeclarations(Parser_t* p)
 			v->size = isChar ? 1 : 4;
 			v->elem = isChar ? 1 : 4;
 			v->isChar = isChar;
-			Next(l);
-			if(Accept(l, "["))
+			Next(o, l);
+			if(Accept(o, l, "["))
 			{
 				uint32_t count;
 				if(l->tok.kind != T_NUM)
 					Errorf(l, l->tok.line, "an array size was expected");
 				count = (uint32_t)l->tok.num;
-				Next(l);
-				Expect(l, "]");
+				Next(o, l);
+				Expect(o, l, "]");
 				v->size = count * (isChar ? 1 : 4);
 				v->isChar = 0;
 				v->isArray = 1;
-				if(Accept(l, "["))
+				if(Accept(o, l, "["))
 				{
 					uint32_t row;
 					if(l->tok.kind != T_NUM)
 						Errorf(l, l->tok.line, "a row size was expected");
 					row = (uint32_t)l->tok.num;
-					Next(l);
-					Expect(l, "]");
+					Next(o, l);
+					Expect(o, l, "]");
 					v->size = count * row * (isChar ? 1 : 4);
 					v->elem = (int)(row * (isChar ? 1 : 4));
 				}
 			}
-			if(!Accept(l, ","))
+			if(!Accept(o, l, ","))
 				break;
 		}
-		Expect(l, ";");
+		Expect(o, l, ";");
 	}
 	return 1;
 }
 
-static Node_t* ParseAsmBlock(Parser_t* p)
+static Node_t* ParseAsmBlock(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Node_t* n = NewNode(N_ASM, l->tok.line);
-	Expect(l, "{");
+	Expect(o, l, "{");
 	while(!IsPunct(l, "}") && l->tok.kind != T_EOF)
 	{
 		Node_t* t = NewNode(N_ASMTOKEN, l->tok.line);
@@ -741,17 +741,17 @@ static Node_t* ParseAsmBlock(Parser_t* p)
 		if(l->tok.kind != T_IDENT)
 		{
 			Errorf(l, l->tok.line, "a token name was expected");
-			Next(l);
+			Next(o, l);
 			FreeNode(t);
 			continue;
 		}
 		// a label definition
-		if(Peek(l)->kind == T_PUNCT && strcmp(Peek(l)->text, ":") == 0)
+		if(Peek(o, l)->kind == T_PUNCT && strcmp(Peek(o, l)->text, ":") == 0)
 		{
 			strcpy(t->text, l->tok.text);
 			t->num = -1;
-			Next(l);
-			Next(l);
+			Next(o, l);
+			Next(o, l);
 			AddItem(n, t);
 			continue;
 		}
@@ -772,41 +772,41 @@ static Node_t* ParseAsmBlock(Parser_t* p)
 			}
 		}
 		t->num = tok;
-		Next(l);
+		Next(o, l);
 		k = Scn_OperandCount(tok);
 		for(i = 0; i < k; i++)
 		{
-			Node_t* o;
+			Node_t* node;
 			if(i)
-				Expect(l, ",");
+				Expect(o, l, ",");
 			if(l->tok.kind == T_NUM)
 			{
-				o = NewNode(N_NUM, l->tok.line);
-				o->num = l->tok.num;
-				Next(l);
+				node = NewNode(N_NUM, l->tok.line);
+				node->num = l->tok.num;
+				Next(o, l);
 			}
 			else if(l->tok.kind == T_STR)
-				o = StrNode(p);
+				node = StrNode(o, p);
 			else if(l->tok.kind == T_IDENT)
 			{
-				o = NewNode(N_NAME, l->tok.line);
-				strcpy(o->text, l->tok.text);
-				Next(l);
+				node = NewNode(N_NAME, l->tok.line);
+				strcpy(node->text, l->tok.text);
+				Next(o, l);
 			}
 			else
 			{
 				Errorf(l, l->tok.line, "an operand was expected");
-				o = NewNode(N_NUM, l->tok.line);
+				node = NewNode(N_NUM, l->tok.line);
 			}
-			AddItem(t, o);
+			AddItem(t, node);
 		}
 		AddItem(n, t);
 	}
-	Expect(l, "}");
+	Expect(o, l, "}");
 	return n;
 }
 
-static Node_t* ParseStatement(Parser_t* p)
+static Node_t* ParseStatement(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	int line = l->tok.line;
@@ -814,7 +814,7 @@ static Node_t* ParseStatement(Parser_t* p)
 	if(l->tok.kind == T_DIRECTIVE)
 	{ // `#line N` sets the count; `#file "name"` switches the marker file from here on
 		uint8_t* before = p->unit->file;
-		ParseDirective(p);
+		ParseDirective(o, p);
 		if(p->unit->file != before)
 		{
 			n = NewNode(N_FILE, line);
@@ -827,195 +827,195 @@ static Node_t* ParseStatement(Parser_t* p)
 	if(IsPunct(l, "{"))
 	{
 		int closeLine;
-		n = ParseBlock(p, &closeLine);
+		n = ParseBlock(o, p, &closeLine);
 		n->closeLine = closeLine;
 		return n;
 	}
-	if(Accept(l, ";"))
+	if(Accept(o, l, ";"))
 		return NewNode(N_EMPTY, line);
 	if(l->tok.kind == T_IDENT)
 	{
 		// a label
-		if(Peek(l)->kind == T_PUNCT && strcmp(Peek(l)->text, ":") == 0 && strcmp(l->tok.text, "default") != 0)
+		if(Peek(o, l)->kind == T_PUNCT && strcmp(Peek(o, l)->text, ":") == 0 && strcmp(l->tok.text, "default") != 0)
 		{
 			n = NewNode(N_LABEL, line);
 			strcpy(n->text, l->tok.text);
-			Next(l);
-			Next(l);
+			Next(o, l);
+			Next(o, l);
 			MentionLabel(p, n->text);
 			return n;
 		}
 		if(IsIdent(l, "if"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_IF, line);
-			Expect(l, "(");
-			n->a = ParseCondition(p);
-			Expect(l, ")");
-			n->b = ParseBlock(p, &n->closeLine);
+			Expect(o, l, "(");
+			n->a = ParseCondition(o, p);
+			Expect(o, l, ")");
+			n->b = ParseBlock(o, p, &n->closeLine);
 			if(IsIdent(l, "else"))
 			{
 				n->elseLine = l->tok.line;
-				Next(l);
+				Next(o, l);
 				if(IsIdent(l, "if"))
 				{
 					// `else if`: only where no marker is written for the braces (the scenario style)
 					if(p->unit->style == SCN_STYLE_LIBRARY)
 						Errorf(l, l->tok.line, "write `else { if .. }` in the library style (every brace has a line marker)");
-					n->c = ParseStatement(p);
+					n->c = ParseStatement(o, p);
 				}
 				else
 				{
 					int closeLine;
-					n->c = ParseBlock(p, &closeLine);
+					n->c = ParseBlock(o, p, &closeLine);
 				}
 			}
 			return n;
 		}
 		if(IsIdent(l, "while"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_WHILE, line);
-			Expect(l, "(");
-			n->a = ParseCondition(p);
-			Expect(l, ")");
-			n->b = ParseBlock(p, &n->closeLine);
+			Expect(o, l, "(");
+			n->a = ParseCondition(o, p);
+			Expect(o, l, ")");
+			n->b = ParseBlock(o, p, &n->closeLine);
 			return n;
 		}
 		if(IsIdent(l, "switch"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_SWITCH, line);
-			if(Accept(l, "@"))
+			if(Accept(o, l, "@"))
 			{
 				n->num = l->tok.num;
-				Next(l);
+				Next(o, l);
 			}
-			Expect(l, "(");
-			n->a = ParseExpression(p);
-			Expect(l, ")");
-			n->b = ParseBlock(p, &n->closeLine);
+			Expect(o, l, "(");
+			n->a = ParseExpression(o, p);
+			Expect(o, l, ")");
+			n->b = ParseBlock(o, p, &n->closeLine);
 			return n;
 		}
 		if(IsIdent(l, "case"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_CASE, line);
 			if(l->tok.kind != T_NUM)
 				Errorf(l, line, "a case value was expected");
 			n->num = l->tok.num;
-			Next(l);
-			Expect(l, ":");
+			Next(o, l);
+			Expect(o, l, ":");
 			return n;
 		}
 		if(IsIdent(l, "default"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_CASE, line);
 			n->size = 1;
-			Expect(l, ":");
+			Expect(o, l, ":");
 			return n;
 		}
 		if(IsIdent(l, "break"))
 		{
-			Next(l);
-			Expect(l, ";");
+			Next(o, l);
+			Expect(o, l, ";");
 			return NewNode(N_BREAK, line);
 		}
 		if(IsIdent(l, "continue"))
 		{
-			Next(l);
-			Expect(l, ";");
+			Next(o, l);
+			Expect(o, l, ";");
 			return NewNode(N_CONTINUE, line);
 		}
 		if(IsIdent(l, "return"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_RETURN, line);
 			if(!IsPunct(l, ";"))
-				n->a = ParseExpression(p);
-			Expect(l, ";");
+				n->a = ParseExpression(o, p);
+			Expect(o, l, ";");
 			return n;
 		}
 		if(IsIdent(l, "goto"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_GOTO, line);
 			strcpy(n->text, l->tok.text);
-			Next(l);
-			Expect(l, ";");
+			Next(o, l);
+			Expect(o, l, ";");
 			if(!p->unit->lineMarkers) // the older variant lists the labels in definition order only
 				MentionLabel(p, n->text);
 			return n;
 		}
 		if(IsIdent(l, "end"))
 		{
-			Next(l);
-			Expect(l, ";");
+			Next(o, l);
+			Expect(o, l, ";");
 			return NewNode(N_END, line);
 		}
 		if(IsIdent(l, "__asm"))
 		{
-			Next(l);
-			return ParseAsmBlock(p);
+			Next(o, l);
+			return ParseAsmBlock(o, p);
 		}
 		if(p->unit->style == SCN_STYLE_SCENARIO)
 		{
 			if(IsIdent(l, "msg") && !p->unit->lineMarkers) // the older variant has no builtin message form
 			{
-				Next(l);
+				Next(o, l);
 				n = NewNode(N_MSG, line);
-				Expect(l, "(");
+				Expect(o, l, "(");
 				if(!IsPunct(l, ")"))
 					for(;;)
 					{
-						AddItem(n, ParseExpression(p));
-						if(!Accept(l, ","))
+						AddItem(n, ParseExpression(o, p));
+						if(!Accept(o, l, ","))
 							break;
 					}
-				Expect(l, ")");
-				Expect(l, ";");
+				Expect(o, l, ")");
+				Expect(o, l, ";");
 				return n;
 			}
 			if(IsIdent(l, "jump") || IsIdent(l, "call"))
 			{
 				int isCall = IsIdent(l, "call");
-				Next(l);
+				Next(o, l);
 				n = NewNode(N_JUMP, line);
 				if(l->tok.kind == T_IDENT)
 				{
 					// a local label
 					n->size = 2;
 					strcpy(n->text, l->tok.text);
-					Next(l);
-					Expect(l, ";");
+					Next(o, l);
+					Expect(o, l, ";");
 					return n; // a call by name mentions no label to the dispatcher (a goto does)
 				}
 				n->size = isCall ? 1 : 0;
-				n->a = ParseExpression(p);
-				if(Accept(l, ","))
-					n->b = ParseExpression(p);
-				Expect(l, ";");
+				n->a = ParseExpression(o, p);
+				if(Accept(o, l, ","))
+					n->b = ParseExpression(o, p);
+				Expect(o, l, ";");
 				return n;
 			}
-			if(IsIdent(l, "lstr") && Peek(l)->kind == T_PUNCT && strcmp(Peek(l)->text, "(") == 0)
+			if(IsIdent(l, "lstr") && Peek(o, l)->kind == T_PUNCT && strcmp(Peek(o, l)->text, "(") == 0)
 			{
 				// lstr(n) = "text"; or an expression statement
 				const char* save = l->p;
 				int saveLine = l->line, savePeeked = l->peeked;
 				Token_t saveTok = l->tok, savePeek = l->peek;
-				Next(l);
-				Next(l);
+				Next(o, l);
+				Next(o, l);
 				if(l->tok.kind == T_NUM)
 				{
 					int64_t index = l->tok.num;
-					Next(l);
-					if(Accept(l, ")") && Accept(l, "="))
+					Next(o, l);
+					if(Accept(o, l, ")") && Accept(o, l, "="))
 					{
 						n = NewNode(N_LSTRSET, line);
 						n->num = index;
-						n->a = ParseExpression(p);
-						Expect(l, ";");
+						n->a = ParseExpression(o, p);
+						Expect(o, l, ";");
 						return n;
 					}
 				}
@@ -1029,24 +1029,24 @@ static Node_t* ParseStatement(Parser_t* p)
 		}
 	}
 	// an expression statement or an assignment
-	n = ParseExpression(p);
-	if(Accept(l, "="))
+	n = ParseExpression(o, p);
+	if(Accept(o, l, "="))
 	{
 		Node_t* s = NewNode(N_ASSIGN, line);
 		s->a = n;
-		s->b = ParseExpression(p);
-		Expect(l, ";");
+		s->b = ParseExpression(o, p);
+		Expect(o, l, ";");
 		return s;
 	}
-	if(Accept(l, "<-"))
+	if(Accept(o, l, "<-"))
 	{
 		Node_t* s = NewNode(N_ASSIGN2, line);
 		s->a = n;
-		s->b = ParseExpression(p);
-		Expect(l, ";");
+		s->b = ParseExpression(o, p);
+		Expect(o, l, ";");
 		return s;
 	}
-	Expect(l, ";");
+	Expect(o, l, ";");
 	{
 		Node_t* s = NewNode(N_EXPR, line);
 		s->a = n;
@@ -1055,24 +1055,24 @@ static Node_t* ParseStatement(Parser_t* p)
 }
 
 // `{ statements }`; *closeLine receives the line of the closing brace
-static Node_t* ParseBlock(Parser_t* p, int* closeLine)
+static Node_t* ParseBlock(OpenBGI_t* o, Parser_t* p, int* closeLine)
 {
 	Lex_t* l = &p->lex;
 	Node_t* n = NewNode(N_BLOCK, l->tok.line);
-	Expect(l, "{");
+	Expect(o, l, "{");
 	while(!IsPunct(l, "}") && l->tok.kind != T_EOF)
 	{
-		Node_t* s = ParseStatement(p);
+		Node_t* s = ParseStatement(o, p);
 		if(s)
 			AddItem(n, s);
 	}
 	*closeLine = l->tok.line;
 	n->closeLine = l->tok.line;
-	Expect(l, "}");
+	Expect(o, l, "}");
 	return n;
 }
 
-static int ParseFunction(Parser_t* p)
+static int ParseFunction(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Func_t* f = (Func_t*)calloc(1, sizeof *f);
@@ -1082,8 +1082,8 @@ static int ParseFunction(Parser_t* p)
 	f->index = u->funcCount;
 	f->file = u->file;
 	f->fileLen = u->fileLen;
-	Next(l);
-	Expect(l, "(");
+	Next(o, l);
+	Expect(o, l, "(");
 	if(!IsPunct(l, ")"))
 		for(;;)
 		{
@@ -1093,11 +1093,11 @@ static int ParseFunction(Parser_t* p)
 			if(IsIdent(l, "char") || IsIdent(l, "int"))
 			{
 				elem = IsIdent(l, "char") ? 1 : 4;
-				Next(l);
+				Next(o, l);
 				if(elem == 1 && !IsPunct(l, "*"))
 					byteParam = 1;
 				else
-					Expect(l, "*");
+					Expect(o, l, "*");
 			}
 			if(l->tok.kind != T_IDENT)
 			{
@@ -1112,23 +1112,23 @@ static int ParseFunction(Parser_t* p)
 			v->isParam = 1;
 			v->isChar = byteParam;
 			f->paramCount++;
-			Next(l);
-			if(!Accept(l, ","))
+			Next(o, l);
+			if(!Accept(o, l, ","))
 				break;
 		}
-	Expect(l, ")");
-	Expect(l, "{");
+	Expect(o, l, ")");
+	Expect(o, l, "{");
 	p->func = f;
-	ParseDeclarations(p);
+	ParseDeclarations(o, p);
 	f->body = NewNode(N_BLOCK, l->tok.line);
 	while(!IsPunct(l, "}") && l->tok.kind != T_EOF)
 	{
-		Node_t* s = ParseStatement(p);
+		Node_t* s = ParseStatement(o, p);
 		if(s)
 			AddItem(f->body, s);
 	}
 	f->closeLine = l->tok.line;
-	Expect(l, "}");
+	Expect(o, l, "}");
 	p->func = NULL;
 	// the frame: locals in declaration order from offset 4 up, then the parameters, then the switch slot
 	{
@@ -1155,14 +1155,14 @@ static int ParseFunction(Parser_t* p)
 	return 1;
 }
 
-static void ParseDirective(Parser_t* p)
+static void ParseDirective(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Unit_t* u = p->unit;
 	char name[SCN_NAME_MAX];
 	int line = l->tok.line;
 	strcpy(name, l->tok.text);
-	Next(l);
+	Next(o, l);
 	if(strcmp(name, "encoding") == 0)
 		return; // the lexer has switched the encoding of the literals
 	if(strcmp(name, "style") == 0)
@@ -1170,10 +1170,10 @@ static void ParseDirective(Parser_t* p)
 		if(IsIdent(l, "library"))
 		{
 			u->style = SCN_STYLE_LIBRARY;
-			if(Peek(l)->kind == T_PUNCT && strcmp(Peek(l)->text, "-") == 0)
+			if(Peek(o, l)->kind == T_PUNCT && strcmp(Peek(o, l)->text, "-") == 0)
 			{ // library-raw: the headerless files
-				Next(l);
-				Next(l);
+				Next(o, l);
+				Next(o, l);
 				if(IsIdent(l, "raw"))
 					u->raw = 1;
 				else
@@ -1183,10 +1183,10 @@ static void ParseDirective(Parser_t* p)
 		else if(IsIdent(l, "scenario"))
 		{
 			u->style = SCN_STYLE_SCENARIO;
-			if(Peek(l)->kind == T_PUNCT && strcmp(Peek(l)->text, "-") == 0)
+			if(Peek(o, l)->kind == T_PUNCT && strcmp(Peek(o, l)->text, "-") == 0)
 			{ // scenario-line: the older variant
-				Next(l);
-				Next(l);
+				Next(o, l);
+				Next(o, l);
 				if(IsIdent(l, "line"))
 					u->lineMarkers = 1;
 				else
@@ -1195,7 +1195,7 @@ static void ParseDirective(Parser_t* p)
 		}
 		else
 			Errorf(l, line, "#style library, library-raw, scenario or scenario-line");
-		Next(l);
+		Next(o, l);
 	}
 	else if(strcmp(name, "file") == 0)
 	{ // the file the line markers name from here on (the includes of a raw library hold functions)
@@ -1214,7 +1214,7 @@ static void ParseDirective(Parser_t* p)
 		else
 			free(l->tok.bytes);
 		l->tok.bytes = NULL;
-		Next(l);
+		Next(o, l);
 	}
 	else if(strcmp(name, "srcinfo") == 0)
 		u->srcinfo = 1;
@@ -1235,8 +1235,8 @@ static void ParseDirective(Parser_t* p)
 			}
 			free(l->tok.bytes);
 			l->tok.bytes = NULL;
-			Next(l);
-			if(!Accept(l, ","))
+			Next(o, l);
+			if(!Accept(o, l, ","))
 				break;
 		}
 	}
@@ -1273,7 +1273,7 @@ static void ParseDirective(Parser_t* p)
 		else
 			free(l->tok.bytes);
 		l->tok.bytes = NULL;
-		Next(l);
+		Next(o, l);
 	}
 	else if(strcmp(name, "line") == 0)
 	{
@@ -1292,38 +1292,38 @@ static void ParseDirective(Parser_t* p)
 				l->p++;
 			l->line = n;
 			l->peeked = 0;
-			Next(l);
+			Next(o, l);
 		}
 	}
 	else
 		Errorf(l, line, "unknown directive #%s", name);
 }
 
-static void ParseUnit(Parser_t* p)
+static void ParseUnit(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Unit_t* u = p->unit;
-	Next(l);
+	Next(o, l);
 	while(l->tok.kind != T_EOF)
 	{
 		if(l->tok.kind == T_DIRECTIVE)
 		{
-			ParseDirective(p);
+			ParseDirective(o, p);
 			continue;
 		}
 		if(u->style == SCN_STYLE_LIBRARY)
 		{
-			if(l->tok.kind == T_IDENT && Peek(l)->kind == T_PUNCT && strcmp(Peek(l)->text, "(") == 0)
+			if(l->tok.kind == T_IDENT && Peek(o, l)->kind == T_PUNCT && strcmp(Peek(o, l)->text, "(") == 0)
 			{
-				ParseFunction(p);
+				ParseFunction(o, p);
 				continue;
 			}
 			Errorf(l, l->tok.line, "a function definition was expected");
-			Next(l);
+			Next(o, l);
 			continue;
 		}
 		{
-			Node_t* s = ParseStatement(p);
+			Node_t* s = ParseStatement(o, p);
 			if(s)
 				AddItem(u->body, s);
 		}
@@ -1380,6 +1380,7 @@ typedef struct Gen
 	} named[1024];
 	int namedCount;
 	int errors;
+	Var_t tmpVar; // `_tmp` as VarOf describes it: the switch slot at the bottom of the frame
 } Gen_t;
 
 static void GenError(Gen_t* g, int line, const char* fmt, ...)
@@ -1447,9 +1448,9 @@ static uint32_t InternString(Gen_t* g, const uint8_t* s, uint32_t len)
 	uint32_t off;
 	for(i = 0; i < g->strCount; i++)
 	{
-		uint32_t o = g->strOff[i];
-		if(strlen((const char*)g->strings + o) == len && memcmp(g->strings + o, s, len) == 0)
-			return o;
+		uint32_t ofs = g->strOff[i];
+		if(strlen((const char*)g->strings + ofs) == len && memcmp(g->strings + ofs, s, len) == 0)
+			return ofs;
 	}
 	if(g->stringsLen + len + 1 > g->stringsCap)
 	{
@@ -1482,7 +1483,7 @@ static void EmitStr(Gen_t* g, const uint8_t* s, uint32_t len)
 static void EmitLabelName(Gen_t* g, const char* name)
 {
 	char sjis[SCN_NAME_MAX * 2];
-	size_t n = OS_Utf8ToSjis(name, sjis, sizeof sjis);
+	size_t n = Sjis_FromUtf8(name, sjis, sizeof sjis);
 	EmitStr(g, (const uint8_t*)sjis, (uint32_t)n);
 }
 
@@ -1520,16 +1521,16 @@ static int GenLvalue(Gen_t* g, Node_t* n);
 
 static Var_t* VarOf(Gen_t* g, Node_t* n, const char* name)
 {
-	static Var_t tmp; // `_tmp`: the switch slot at the bottom of the frame
 	Var_t* v = FindVar(g->func, name);
 	if(!v && g->func && strcmp(name, "_tmp") == 0)
 	{
-		memset(&tmp, 0, sizeof tmp);
-		strcpy(tmp.name, name);
-		tmp.off = g->func->frameSize;
-		tmp.size = 4;
-		tmp.elem = 4;
-		return &tmp;
+		Var_t* tmp = &g->tmpVar; // `_tmp`: the switch slot at the bottom of the frame
+		memset(tmp, 0, sizeof *tmp);
+		strcpy(tmp->name, name);
+		tmp->off = g->func->frameSize;
+		tmp->size = 4;
+		tmp->elem = 4;
+		return tmp;
 	}
 	if(!v)
 		GenError(g, n->line, "unknown variable '%s'", name);
@@ -2149,29 +2150,29 @@ static void GenStatement(Gen_t* g, Node_t* n)
 				Emit(g, tok);
 				for(j = 0; j < t->count; j++)
 				{
-					Node_t* o = t->items[j];
-					if(o->kind == N_NUM)
-						Emit(g, (uint32_t)o->num);
-					else if(o->kind == N_STR)
-						Emit(g, InternString(g, o->bytes, o->len) | STR_MARK);
+					Node_t* node = t->items[j];
+					if(node->kind == N_NUM)
+						Emit(g, (uint32_t)node->num);
+					else if(node->kind == N_STR)
+						Emit(g, InternString(g, node->bytes, node->len) | STR_MARK);
 					else
 					{
 						// a label or function name
-						if(IsFunctionName(g, o->text))
+						if(IsFunctionName(g, node->text))
 						{
 							g->code->n--; // EmitAddr writes the token itself
-							EmitAddr(g, -1, o->text);
+							EmitAddr(g, -1, node->text);
 						}
 						else
 						{
 							int k, label = -1;
 							for(k = 0; k < g->namedCount; k++)
-								if(strcmp(g->named[k].name, o->text) == 0)
+								if(strcmp(g->named[k].name, node->text) == 0)
 									label = g->named[k].label;
 							if(label < 0 && g->namedCount < (int)(sizeof g->named / sizeof g->named[0]))
 							{
 								label = NewLabel(g);
-								strcpy(g->named[g->namedCount].name, o->text);
+								strcpy(g->named[g->namedCount].name, node->text);
 								g->named[g->namedCount++].label = label;
 							}
 							g->code->n--;
@@ -2323,7 +2324,7 @@ static void FreeUnit(Unit_t* u)
 	memset(u, 0, sizeof *u);
 }
 
-void Scn_Compile(const char* text, size_t len, const char* fileName, const ScnCmdTable_t* cmds, const PrepIncludes_t* inc, FILE* log,
+void Scn_Compile(OpenBGI_t* o, const char* text, size_t len, const char* fileName, const ScnCmdTable_t* cmds, const PrepIncludes_t* inc, FILE* log,
 	ScnCompileResult_t* out)
 {
 	Parser_t p;
@@ -2332,10 +2333,10 @@ void Scn_Compile(const char* text, size_t len, const char* fileName, const ScnCm
 	Code_t* codes = NULL;
 	int i, j;
 	memset(out, 0, sizeof *out);
-	Asm_ResetStringEncoding(); // the default, until an #encoding line says otherwise
+	Asm_ResetStringEncoding(o); // the default, until an #encoding line says otherwise
 	if(Scn16_IsSource(text, len))
 	{ // a 16-bit scene of the 1.64 games
-		out->errors = Scn16_Compile(text, len, fileName, inc, log, &out->file.image, &out->file.imageSize);
+		out->errors = Scn16_Compile(o, text, len, fileName, inc, log, &out->file.image, &out->file.imageSize);
 		return;
 	}
 	memset(&p, 0, sizeof p);
@@ -2349,7 +2350,7 @@ void Scn_Compile(const char* text, size_t len, const char* fileName, const ScnCm
 	p.lex.fileName = fileName;
 	p.unit = &unit;
 	p.cmds = cmds;
-	ParseUnit(&p);
+	ParseUnit(o, &p);
 	out->errors = p.lex.errors;
 	out->warnings = p.lex.warnings;
 	if(out->errors)

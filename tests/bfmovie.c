@@ -2,10 +2,10 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * tests/bfmovie.c - unit test of the BF_Movie frame decoder (src/core/
- *                   bfmovie.c, inc/bgi/bfmovie.h) and the sequence
+ * tests/bfmovie.c - unit test of the BF_Movie frame decoder (src/base/
+ *                   bfmovie.c, src/include/bgi/bfmovie.h) and the sequence
  *                   registry behind "90 F4" .. "90 F7" (src/gfx/bmseq.c,
- *                   inc/bgi/gfx/bmseq.h); built as bin/test_bfmovie by
+ *                   src/include/bgi/gfx/bmseq.h); built as test_bfmovie by
  *                   `make test`
  *
  * The test has no sample movie to rely on, so it carries an encoder written
@@ -30,38 +30,38 @@
  *             and of the deferred "90 F6" decode, polled as the scheduler
  *             would, with the values they push on the thread's stack
  *
+ *   streamed - a movie of the streamed form put together byte by byte
+ *             (three frames of 16 x 8 pixels: a whole one, one that
+ *             changes a block's colour and the other block's alpha, one
+ *             that changes nothing): each frame's pixels; the same in a
+ *             target that is no whole number of blocks or has wider rows;
+ *             the form whose alpha plane has no leading word; a 24-bit
+ *             one; a frame cut short; the registry's decode
+ *
  * With BGI_BM_FILE naming a real .bm file every frame of it is decoded as
  * a smoke test (and the picture after the last frame written to BGI_BM_OUT
  * as a PPM when set).
  *
- * main runs in a scratch directory under /tmp that it removes afterwards,
- * because the wait tests write files and the POSIX OS layer presents the
- * working directory at OS_Init as the engine's drive.
+ * main runs in a scratch directory in the temporary directory that it
+ * removes afterwards, because the wait tests write files there and read
+ * them through the engine's drive, which OS_SetGameDir makes of it.
  */
 #include "bgi/bfmovie.h"
+#include "bgi/bytes.h"
+#include "bgi/core.h"
 #include "bgi/gfx/bmseq.h"
 #include "bgi/gfx/bmpmgr.h"
 #include "bgi/vm.h"
 #include "bgi/wait.h"
 #include "bgi/waitobj.h"
 #include "bgi/file.h"
-#include "bgi/os.h"
+#include "host/os.h"
+
+#include "testhost.h"
 
 #include <stdio.h>
-#include <unistd.h>
-#include <sys/stat.h>
 
-static int gFails; // the number of failed checks so far
-// evaluate a condition; print it with its location and count a failure when it is false
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 // ---- the encoder ---------------------------------------------------------------------
 
@@ -180,7 +180,7 @@ static size_t PackFrame(uint8_t* out, const uint8_t* payload, uint32_t payloadLe
 	uint8_t* huff = (uint8_t*)malloc(payloadLen + 4);
 	uint32_t weights[256], i, n = payloadLen + 4;
 	TNode_t nodes[511];
-	size_t o = 0;
+	size_t off = 0;
 	uint32_t acc = 0;
 	int accBits = 0;
 	memcpy(huff, &payloadLen, 4); // the length field in front of the run-length stream
@@ -189,9 +189,9 @@ static size_t PackFrame(uint8_t* out, const uint8_t* payload, uint32_t payloadLe
 	for(i = 0; i < n; i++)
 		weights[huff[i]]++;
 	Tree(nodes, weights);
-	o += PutVarint(out + o, n);
+	off += PutVarint(out + off, n);
 	for(i = 0; i < 256; i++)
-		o += PutVarint(out + o, weights[i]);
+		off += PutVarint(out + off, weights[i]);
 	for(i = 0; i < n; i++)
 	{
 		uint32_t code;
@@ -201,25 +201,25 @@ static size_t PackFrame(uint8_t* out, const uint8_t* payload, uint32_t payloadLe
 		accBits += len;
 		while(accBits >= 8)
 		{
-			out[o++] = (uint8_t)acc;
+			out[off++] = (uint8_t)acc;
 			acc >>= 8;
 			accBits -= 8;
 		}
 	}
 	if(accBits)
-		out[o++] = (uint8_t)acc;
+		out[off++] = (uint8_t)acc;
 	free(huff);
-	return o;
+	return off;
 }
 
 /* the run-length layer: one (fill 0, copy `len`) pair, so a single literal run holding
  * everything */
 static size_t Runs(uint8_t* out, const uint8_t* data, uint32_t len)
 {
-	size_t o = PutVarint(out, 0);
-	o += PutVarint(out + o, len);
-	memcpy(out + o, data, len);
-	return o + len;
+	size_t off = PutVarint(out, 0);
+	off += PutVarint(out + off, len);
+	memcpy(out + off, data, len);
+	return off + len;
 }
 
 #define W 20 // the test picture's width in pixels (not a multiple of 8: the right blocks are partial)
@@ -241,7 +241,7 @@ static uint32_t Pixel(int x, int y, int frame)
 static size_t KeyPayload(uint8_t* out, const uint32_t* pix, int bpp)
 {
 	int bytes = bpp / 8, channels = bytes == 4 ? 4 : 3, x, y, c;
-	size_t stride = ((size_t)bytes * W + 3) & ~(size_t)3, o = 0;
+	size_t stride = ((size_t)bytes * W + 3) & ~(size_t)3, off = 0;
 	memset(out, 0, stride * H);
 	for(y = 0; y < H; y++)
 		for(x = 0; x < W; x++)
@@ -260,8 +260,8 @@ static size_t KeyPayload(uint8_t* out, const uint32_t* pix, int bpp)
 					pred = 0;
 				out[y * stride + (size_t)x * bytes + c] = (uint8_t)(cur - pred);
 			}
-	o = stride * H;
-	return o;
+	off = stride * H;
+	return off;
 }
 
 /* The delta frame's payload, and in `next` the picture it has to decode
@@ -273,7 +273,7 @@ static size_t KeyPayload(uint8_t* out, const uint32_t* pix, int bpp)
 static size_t DeltaPayload(uint8_t* out, const uint32_t* prev, uint32_t* next, int bpp)
 {
 	int bytes = bpp / 8, blocksX = (W + 7) / 8, blocksY = (H + 7) / 8, bx, by, x, y;
-	size_t maskBytes = ((size_t)blocksX * blocksY + 7) / 8, o;
+	size_t maskBytes = ((size_t)blocksX * blocksY + 7) / 8, off;
 	uint8_t* rowMasks;
 	uint8_t* stream;
 	int present = 0;
@@ -290,7 +290,7 @@ static size_t DeltaPayload(uint8_t* out, const uint32_t* prev, uint32_t* next, i
 				present++;
 			}
 	stream = rowMasks + present * 8;
-	o = 0;
+	off = 0;
 	for(by = 0; by < blocksY; by++)
 		for(bx = 0; bx < blocksX; bx++)
 		{
@@ -314,27 +314,27 @@ static size_t DeltaPayload(uint8_t* out, const uint32_t* prev, uint32_t* next, i
 						uint32_t want = Pixel(px, py, 1);
 						rowMasks[y] |= (uint8_t)(1 << x);
 						for(c = 0; c < bytes; c++)
-							stream[o++] = (uint8_t)(((want >> (8 * c)) & 0xff) - ((old >> (8 * c)) & 0xff));
+							stream[off++] = (uint8_t)(((want >> (8 * c)) & 0xff) - ((old >> (8 * c)) & 0xff));
 						if(bytes == 3)
 							want &= 0xffffffu; // a 24-bit movie decodes with alpha 0
 						next[py * W + px] = want;
 					}
 					else if(kind == 1 && x % 2 == 0)
 					{ // transparent: the byte 0x80, the pixel decodes to 0
-						stream[o++] = 0x80;
+						stream[off++] = 0x80;
 						next[py * W + px] = 0;
 					}
 					else
 					{ // a copy from the previous frame at (dx, dy), two signed bytes
 						int dx = -(px % 3), dy = py > 2 ? -2 : 1;
-						stream[o++] = (uint8_t)(int8_t)dx;
-						stream[o++] = (uint8_t)(int8_t)dy;
+						stream[off++] = (uint8_t)(int8_t)dx;
+						stream[off++] = (uint8_t)(int8_t)dy;
 						next[py * W + px] = prev[(py + dy) * W + px + dx];
 					}
 				}
 			rowMasks += 8;
 		}
-	return (size_t)(stream - out) + o;
+	return (size_t)(stream - out) + off;
 }
 
 /* The wait objects: "90 F4" loads a movie on the loader thread and pushes
@@ -347,7 +347,7 @@ static size_t DeltaPayload(uint8_t* out, const uint32_t* prev, uint32_t* next, i
  * name reaches them as loose files.  A failure means the wait objects do
  * not finish, push the wrong value, or decode through them differs from
  * the direct decode. */
-static void TestWaits(const uint8_t* file, size_t size, const uint32_t* pix1, int bpp)
+static void TestWaits(OpenBGI_t* o, const uint8_t* file, size_t size, const uint32_t* pix1, int bpp)
 {
 	FILE* f;
 	Thread_t* t;
@@ -361,22 +361,22 @@ static void TestWaits(const uint8_t* file, size_t size, const uint32_t* pix1, in
 	f = fopen("clip.bm", "wb");
 	fwrite(file, 1, size, f);
 	fclose(f);
-	SetBaseDir(NULL);
-	gBmpMgr = BmpMgr_New(4);
-	gArcMgr = FileSet_New();
-	Loader_Start();
-	t = Thread_New(0x100, 0x100, 0x100);
+	SetBaseDir(o, NULL);
+	o->gfx.bmpMgr = BmpMgr_New(4);
+	o->files.arcMgr = FileSet_New();
+	Loader_Start(o);
+	t = Thread_New(o, 0x100, 0x100, 0x100);
 	// the load: polled as the scheduler would until it reports done (1); the result is
 	// pushed
-	w = WaitSeqLoad_New(t, "0", "clip.bm", &no, info);
+	w = WaitSeqLoad_New(o, t, "0", "clip.bm", &no, info);
 	for(polls = 0, r = 0; r == 0 && polls < 2000; polls++)
 	{
-		r = w->vt->poll(w);
+		r = w->vt->poll(o, w);
 		if(r == 0)
 			OS_SleepMs(1);
 	}
 	CHECK(r == 1);
-	Wait_Release(w);
+	Wait_Release(o, w);
 	CHECK(t->sp == 1 && t->stack[0] == 0);
 	CHECK(no > 0 && info[0] == W && info[1] == H && info[4] == 2); // width, height, frame count
 	// a file that is not a movie: result 2, the number untouched
@@ -384,35 +384,35 @@ static void TestWaits(const uint8_t* file, size_t size, const uint32_t* pix1, in
 	fputs("not a movie at all, just some bytes", f);
 	fclose(f);
 	t->sp = 0;
-	w = WaitSeqLoad_New(t, "0", "text.bm", &no, info);
+	w = WaitSeqLoad_New(o, t, "0", "text.bm", &no, info);
 	for(polls = 0, r = 0; r == 0 && polls < 2000; polls++)
 	{
-		r = w->vt->poll(w);
+		r = w->vt->poll(o, w);
 		if(r == 0)
 			OS_SleepMs(1);
 	}
 	CHECK(r == 1);
-	Wait_Release(w);
+	Wait_Release(o, w);
 	CHECK(t->sp == 1 && t->stack[0] == 2);
 	// the deferred decode of frame 1 after frame 0, into a slot of the movie's size and
 	// mode
-	BmpMgr_Create(gBmpMgr, 2, W, H, bpp == 32 ? PM_ARGB32 : PM_RGB32);
+	BmpMgr_Create(o->gfx.bmpMgr, 2, W, H, bpp == 32 ? PM_ARGB32 : PM_RGB32);
 	t->sp = 0;
-	w = WaitSeqDecode_New(t, 2, no, 0);
-	CHECK(w->vt->poll(w) == 1);
-	Wait_Release(w);
+	w = WaitSeqDecode_New(o, t, 2, no, 0);
+	CHECK(w->vt->poll(o, w) == 1);
+	Wait_Release(o, w);
 	t->sp = 0;
-	w = WaitSeqDecode_New(t, 2, no, 1);
-	CHECK(w->vt->poll(w) == 1);
-	Wait_Release(w);
+	w = WaitSeqDecode_New(o, t, 2, no, 1);
+	CHECK(w->vt->poll(o, w) == 1);
+	Wait_Release(o, w);
 	CHECK(t->sp == 1 && t->stack[0] == 0);
-	BmpMgr_GetInfo(gBmpMgr, &b, 2);
+	BmpMgr_GetInfo(o->gfx.bmpMgr, &b, 2);
 	CHECK(memcmp(b.pixels, pix1, sizeof(uint32_t) * W * H) == 0);
-	BmSeq_FreeAll();
-	Thread_Delete(t);
-	Loader_Stop();
-	BmpMgr_Delete(gBmpMgr);
-	gBmpMgr = NULL;
+	BmSeq_FreeAll(o);
+	Thread_Delete(o, t);
+	Loader_Stop(o);
+	BmpMgr_Delete(o->gfx.bmpMgr);
+	o->gfx.bmpMgr = NULL;
 	remove("clip.bm");
 	remove("text.bm");
 }
@@ -424,11 +424,11 @@ static void TestWaits(const uint8_t* file, size_t size, const uint32_t* pix1, in
  * frame 2 does not exist.  A failure in the decoder part means the
  * decoder and this encoder disagree on the format; the comments in
  * bfmovie.h describe it. */
-static void TestMovie(int bpp)
+static void TestMovie(OpenBGI_t* o, int bpp)
 {
 	uint32_t pix0[W * H], pix1[W * H], decoded[W * H];
 	uint8_t payload[0x1000], runs[0x1100], file[0x3000];
-	size_t n, o = 0x40 + 2 * 4; // the header and two frame offsets
+	size_t n, off = 0x40 + 2 * 4; // the header and two frame offsets
 	BfMovieHeader_t* h = (BfMovieHeader_t*)file;
 	uint32_t offsets[2];
 	int x, y, ok;
@@ -446,61 +446,217 @@ static void TestMovie(int bpp)
 	h->mode = bpp == 32 ? 2 : 1; // the pixel mode of the target slot: 2 ARGB32, 1 RGB32
 	h->fps = 30;
 	h->frames = 2;
-	offsets[0] = (uint32_t)o;
+	offsets[0] = (uint32_t)off;
 	n = KeyPayload(payload, pix0, bpp);
 	n = Runs(runs, payload, (uint32_t)n);
-	o += PackFrame(file + o, runs, (uint32_t)n);
-	offsets[1] = (uint32_t)o;
+	off += PackFrame(file + off, runs, (uint32_t)n);
+	offsets[1] = (uint32_t)off;
 	n = DeltaPayload(payload, pix0, pix1, bpp);
 	n = Runs(runs, payload, (uint32_t)n);
-	o += PackFrame(file + o, runs, (uint32_t)n);
+	off += PackFrame(file + off, runs, (uint32_t)n);
 	memcpy(file + 0x40, offsets, sizeof offsets);
 
-	CHECK(BfMovie_Check(file, (uint32_t)o));
+	CHECK(BfMovie_Check(file, (uint32_t)off));
 	CHECK(BfMovie_IsSimple(file));
 	memset(decoded, 0xaa, sizeof decoded);
-	ok = BfMovie_DecodeFrame(file, (uint32_t)o, 0, (uint8_t*)decoded, W * 4);
+	ok = BfMovie_DecodeFrame(file, (uint32_t)off, 0, (uint8_t*)decoded, W * 4);
 	CHECK(ok);
 	CHECK(memcmp(decoded, pix0, sizeof pix0) == 0);
-	ok = BfMovie_DecodeFrame(file, (uint32_t)o, 1, (uint8_t*)decoded, W * 4);
+	ok = BfMovie_DecodeFrame(file, (uint32_t)off, 1, (uint8_t*)decoded, W * 4);
 	CHECK(ok);
 	CHECK(memcmp(decoded, pix1, sizeof pix1) == 0);
-	CHECK(!BfMovie_DecodeFrame(file, (uint32_t)o, 2, (uint8_t*)decoded, W * 4));
+	CHECK(!BfMovie_DecodeFrame(file, (uint32_t)off, 2, (uint8_t*)decoded, W * 4));
 
 	// the registry: a slot of the right size and mode, the error codes, the clone
 	{
 		int32_t no = 0, no2 = 0, info[5];
-		gBmpMgr = BmpMgr_New(4);
+		o->gfx.bmpMgr = BmpMgr_New(4);
 		// "90 F4": the number is positive, info holds width, height, pixel mode, frame
 		// rate, frame count
-		CHECK(BmSeq_Register(file, (uint32_t)o, &no, info) == 0 && no > 0);
+		CHECK(BmSeq_Register(o, file, (uint32_t)off, &no, info) == 0 && no > 0);
 		CHECK(info[0] == W && info[1] == H && info[2] == (bpp == 32 ? 2 : 1) && info[3] == 30 && info[4] == 2);
-		CHECK(BmSeq_Register(file, 8, &no2, info) == 0x80000002u); // too short for the header: not a movie
-		CHECK(BmSeq_Decode(0, no, 0) == 0x80000005u);              // no bitmap in the slot
-		BmpMgr_Create(gBmpMgr, 0, W, H, bpp == 32 ? PM_ARGB32 : PM_RGB32);
-		CHECK(BmSeq_Decode(0, no, 5) == 0x80000004u);       // no such frame
-		CHECK(BmSeq_Decode(0, no + 100, 0) == 0x80000003u); // no such number
-		CHECK(BmSeq_Decode(0, no, 0) == 0);
-		CHECK(BmSeq_Decode(0, no, 1) == 0);
+		CHECK(BmSeq_Register(o, file, 8, &no2, info) == 0x80000002u); // too short for the header: not a movie
+		CHECK(BmSeq_Decode(o, 0, no, 0) == 0x80000005u);              // no bitmap in the slot
+		BmpMgr_Create(o->gfx.bmpMgr, 0, W, H, bpp == 32 ? PM_ARGB32 : PM_RGB32);
+		CHECK(BmSeq_Decode(o, 0, no, 5) == 0x80000004u);       // no such frame
+		CHECK(BmSeq_Decode(o, 0, no + 100, 0) == 0x80000003u); // no such number
+		CHECK(BmSeq_Decode(o, 0, no, 0) == 0);
+		CHECK(BmSeq_Decode(o, 0, no, 1) == 0);
 		{
 			Bmp_t b;
-			BmpMgr_GetInfo(gBmpMgr, &b, 0);
+			BmpMgr_GetInfo(o->gfx.bmpMgr, &b, 0);
 			CHECK(memcmp(b.pixels, pix1, sizeof pix1) == 0);
 		}
-		BmpMgr_Create(gBmpMgr, 1, W + 1, H, PM_ARGB32);
-		CHECK(BmSeq_Decode(1, no, 0) == 0x80000005u); // a slot one pixel too wide does not match
+		BmpMgr_Create(o->gfx.bmpMgr, 1, W + 1, H, PM_ARGB32);
+		CHECK(BmSeq_Decode(o, 1, no, 0) == 0x80000005u); // a slot one pixel too wide does not match
 		// "90 F7": the clone takes the next number; a record has one clone at most
-		CHECK(BmSeq_Clone(no, &no2) == 0 && no2 == no + 1);
-		CHECK(BmSeq_Clone(no, &no2) == 0x80000007u);
-		CHECK(BmSeq_Decode(0, no2, 0) == 0);
-		CHECK(BmSeq_Free(no) == 0);
-		CHECK(BmSeq_Decode(0, no2, 1) == 0); // the data lives on with the clone
-		CHECK(BmSeq_Free(no2) == 0);
-		CHECK(BmSeq_Free(no2) == 0x80000003u); // freed twice: no such number
-		BmpMgr_Delete(gBmpMgr);
-		gBmpMgr = NULL;
+		CHECK(BmSeq_Clone(o, no, &no2) == 0 && no2 == no + 1);
+		CHECK(BmSeq_Clone(o, no, &no2) == 0x80000007u);
+		CHECK(BmSeq_Decode(o, 0, no2, 0) == 0);
+		CHECK(BmSeq_Free(o, no) == 0);
+		CHECK(BmSeq_Decode(o, 0, no2, 1) == 0); // the data lives on with the clone
+		CHECK(BmSeq_Free(o, no2) == 0);
+		CHECK(BmSeq_Free(o, no2) == 0x80000003u); // freed twice: no such number
+		BmpMgr_Delete(o->gfx.bmpMgr);
+		o->gfx.bmpMgr = NULL;
 	}
-	TestWaits(file, o, pix1, bpp);
+	TestWaits(o, file, off, pix1, bpp);
+}
+
+// ---- a streamed movie, by hand ---------------------------------------------------------------
+
+/* A frame of a streamed movie of two blocks in one band at `p`: the 16
+ * weights of the DC tree (no AC values: those weights are all zero), the
+ * band - the bitmap of its blocks, the number of coefficients, the DC bit
+ * stream - and the alpha plane (none when alphaLen is 0); the bytes */
+static size_t StreamedFrame(uint8_t* p, const uint8_t* dcWeights, unsigned bitmap, unsigned blocks, const uint8_t* dc, size_t dcLen,
+	const uint8_t* alpha, size_t alphaLen)
+{
+	size_t n = 16 + 176 + 8, count = (size_t)blocks * 3 * 64;
+	memset(p, 0, n);
+	memcpy(p, dcWeights, 16);
+	PutLe32(p + 192, 200);
+	p[n++] = (uint8_t)bitmap;
+	if(count >= 0x80)
+		p[n++] = (uint8_t)(0x80 | (count & 0x7f)), p[n++] = (uint8_t)(count >> 7);
+	else
+		p[n++] = (uint8_t)count;
+	memcpy(p + n, dc, dcLen);
+	n += dcLen;
+	PutLe32(p + 196, alphaLen ? (uint32_t)n : 0xffffffffu);
+	memcpy(p + n, alpha, alphaLen);
+	return n + alphaLen;
+}
+
+/* The movie at `file`: `w` x `h` pixels (16 x 8 at most), `bpp` bits, of
+ * the given type; the bytes.
+ *
+ *   frame 0  both blocks.  The DC values, one predictor through them: Y
+ *            80, 160, Cb 80, 0, Cr 0, 0 - four differences of seven bits
+ *            (+80, +80, -80, -80; the heavier symbol, bit 1) and two of
+ *            none (bit 0).  Block 0 comes out as blue 156, green 135, red
+ *            138, block 1 as gray 148.  The alpha plane, the first way: a
+ *            literal 0xC0 and a copy of the pixel before, 127 times.
+ *   frame 1  block 1 alone: Y 40, Cb and Cr 0 (two differences of six
+ *            bits, one of none): gray 133.  The alpha plane, the second
+ *            way: 65 bytes - a bitmap that names block 0, its 64 alpha
+ *            bytes 0x40 -, the byte 1 as bit 0 and the byte 0x40 as bit 1.
+ *   frame 2  no block, and an alpha plane of the bitmap alone.
+ *
+ * A movie of type 0x10000 has the alpha plane of frame 0 without its
+ * leading word, and in frame 1 the same plane with 0x40; a 24-bit movie
+ * has none. */
+static size_t StreamedMovie(uint8_t* file, uint32_t type, uint32_t w, uint32_t h, uint32_t bpp)
+{
+	static const uint8_t kDc0[16] = {2, 0, 0, 0, 0, 0, 0, 4}, kDc1[16] = {1, 0, 0, 0, 0, 0, 2}, kDc2[16] = {0};
+	static const uint8_t kBits0[] = {0xD0, 0xD0, 0xAF, 0xAF, 0x00}, kBits1[] = {0xD1, 0x5C};
+	static const uint8_t kLzC0[] = {1, 0, 0, 0, 0x02, 0xC0, 0x3F, 0xF8}, kLz40[] = {1, 0, 0, 0, 0x02, 0x40, 0x3F, 0xF8};
+	uint8_t blocks[4 + 4 + 256 + 9], none[4 + 4 + 256 + 1];
+	BfMovieHeader_t* hd = (BfMovieHeader_t*)file;
+	size_t n = 0xC0 + 3 * 4;
+	int plain = type == 0x10000u; // no leading word
+	memset(file, 0, n);
+	memcpy(hd->magic, BFMOVIE_MAGIC, 16);
+	hd->type = type;
+	hd->width = w;
+	hd->height = h;
+	hd->bpp = bpp;
+	hd->mode = bpp == 32 ? 2 : 1;
+	hd->fps = 30;
+	hd->frames = 3;
+	hd->zero[0] = 3;
+	memset(file + 0x40, 1, 128); // the quantisation tables: every step 1
+	// the two alpha planes of the second way
+	memset(blocks, 0, sizeof blocks);
+	blocks[0] = 2;
+	blocks[4] = 65;
+	blocks[8 + 1] = 1;
+	blocks[8 + 0x40] = 64;
+	blocks[8 + 256] = 0x7f;
+	memset(blocks + 8 + 257, 0xff, 7);
+	blocks[8 + 264] = 0x80;
+	memset(none, 0, sizeof none);
+	none[0] = 2;
+	none[4] = 1;
+	none[8] = 1;
+	PutLe32(file + 0xC0, (uint32_t)n);
+	n += StreamedFrame(file + n, kDc0, 3, 2, kBits0, sizeof kBits0, kLzC0 + (plain ? 4 : 0), bpp == 32 ? sizeof kLzC0 - (plain ? 4 : 0) : 0);
+	PutLe32(file + 0xC4, (uint32_t)n);
+	if(plain)
+		n += StreamedFrame(file + n, kDc1, 2, 1, kBits1, sizeof kBits1, kLz40 + 4, sizeof kLz40 - 4);
+	else
+		n += StreamedFrame(file + n, kDc1, 2, 1, kBits1, sizeof kBits1, blocks, bpp == 32 ? sizeof blocks : 0);
+	PutLe32(file + 0xC8, (uint32_t)n);
+	n += StreamedFrame(file + n, kDc2, 0, 0, kBits0, 0, plain ? kLz40 + 4 : none, bpp != 32 ? 0 : plain ? sizeof kLz40 - 4
+																										: sizeof none);
+	return n;
+}
+
+// whether the 8 x 8 block `bx` of the picture at `pix` (w x h visible pixels, rows `pitch` apart) is of one colour
+static int BlockIs(const uint8_t* pix, int pitch, int w, int h, int bx, unsigned b, unsigned g, unsigned r, unsigned a)
+{
+	int x, y;
+	for(y = 0; y < h; y++)
+		for(x = bx * 8; x < bx * 8 + 8 && x < w; x++)
+		{
+			const uint8_t* p = pix + (size_t)y * (size_t)pitch + (size_t)x * 4;
+			if(p[0] != b || p[1] != g || p[2] != r || p[3] != a)
+				return 0;
+		}
+	return 1;
+}
+
+static void TestStreamed(OpenBGI_t* o)
+{
+	static uint8_t file[0x1000], pix[8 * 80];
+	size_t n;
+	printf("streamed\n");
+	n = StreamedMovie(file, 0x10001, 16, 8, 32);
+	CHECK(BfMovie_Check(file, (uint32_t)n) && !BfMovie_IsSimple(file) && BfMovie_CanDecode(file));
+	CHECK(!BfMovie_Check(file, 0xC0 + 8)); // the offsets do not fit
+	memset(pix, 0x11, sizeof pix);
+	CHECK(BfMovie_DecodeFrame(file, (uint32_t)n, 0, pix, 64));
+	CHECK(BlockIs(pix, 64, 16, 8, 0, 156, 135, 138, 0xC0) && BlockIs(pix, 64, 16, 8, 1, 148, 148, 148, 0xC0));
+	CHECK(BfMovie_DecodeFrame(file, (uint32_t)n, 1, pix, 64)); // block 1's colour, block 0's alpha: the rest stays
+	CHECK(BlockIs(pix, 64, 16, 8, 0, 156, 135, 138, 0x40) && BlockIs(pix, 64, 16, 8, 1, 133, 133, 133, 0xC0));
+	CHECK(BfMovie_DecodeFrame(file, (uint32_t)n, 2, pix, 64)); // nothing changes
+	CHECK(BlockIs(pix, 64, 16, 8, 0, 156, 135, 138, 0x40) && BlockIs(pix, 64, 16, 8, 1, 133, 133, 133, 0xC0));
+	CHECK(!BfMovie_DecodeFrame(file, (uint32_t)n, 3, pix, 64));
+	// a frame cut short inside its tables is refused; cut inside its band it leaves the blocks alone
+	CHECK(!BfMovie_DecodeFrame(file, 0xCC + 100, 0, pix, 64));
+	{
+		int32_t no = 0, info[5];
+		Bmp_t b;
+		o->gfx.bmpMgr = BmpMgr_New(4);
+		CHECK(BmSeq_Register(o, file, (uint32_t)n, &no, info) == 0 && info[0] == 16 && info[1] == 8 && info[2] == 2 && info[4] == 3);
+		BmpMgr_Create(o->gfx.bmpMgr, 0, 16, 8, PM_ARGB32);
+		CHECK(BmSeq_Decode(o, 0, no, 0) == 0 && BmSeq_Decode(o, 0, no, 1) == 0);
+		BmpMgr_GetInfo(o->gfx.bmpMgr, &b, 0);
+		CHECK(BlockIs(b.pixels, b.pitch, 16, 8, 0, 156, 135, 138, 0x40) && BlockIs(b.pixels, b.pitch, 16, 8, 1, 133, 133, 133, 0xC0));
+		CHECK(BmSeq_Free(o, no) == 0);
+		file[0x10] = 2; // a type nobody knows
+		CHECK(BmSeq_Register(o, file, (uint32_t)n, &no, info) == 0 && BmSeq_Decode(o, 0, no, 0) == 0x8000000au);
+		file[0x10] = 1;
+		CHECK(BmSeq_Free(o, no) == 0);
+		BmpMgr_Delete(o->gfx.bmpMgr);
+		o->gfx.bmpMgr = NULL;
+	}
+	// 12 x 6 pixels in rows 80 bytes apart: no whole blocks; what is beside the picture is not touched
+	n = StreamedMovie(file, 0x10001, 12, 6, 32);
+	memset(pix, 0x11, sizeof pix);
+	CHECK(BfMovie_DecodeFrame(file, (uint32_t)n, 0, pix, 80) && BfMovie_DecodeFrame(file, (uint32_t)n, 1, pix, 80));
+	CHECK(BlockIs(pix, 80, 12, 6, 0, 156, 135, 138, 0x40) && BlockIs(pix, 80, 12, 6, 1, 133, 133, 133, 0xC0));
+	CHECK(pix[12 * 4] == 0x11 && pix[80 * 6] == 0x11 && pix[80 * 5 + 79] == 0x11);
+	// the form without the word before the alpha plane: every frame has a whole plane
+	n = StreamedMovie(file, 0x10000, 16, 8, 32);
+	CHECK(BfMovie_DecodeFrame(file, (uint32_t)n, 0, pix, 64) && BlockIs(pix, 64, 16, 8, 0, 156, 135, 138, 0xC0));
+	CHECK(BfMovie_DecodeFrame(file, (uint32_t)n, 1, pix, 64));
+	CHECK(BlockIs(pix, 64, 16, 8, 0, 156, 135, 138, 0x40) && BlockIs(pix, 64, 16, 8, 1, 133, 133, 133, 0x40));
+	// 24 bits: no alpha plane, the alpha bytes are 0
+	n = StreamedMovie(file, 0x10001, 16, 8, 24);
+	memset(pix, 0x11, sizeof pix);
+	CHECK(BfMovie_DecodeFrame(file, (uint32_t)n, 0, pix, 64) && BfMovie_DecodeFrame(file, (uint32_t)n, 1, pix, 64));
+	CHECK(BlockIs(pix, 64, 16, 8, 0, 156, 135, 138, 0) && BlockIs(pix, 64, 16, 8, 1, 133, 133, 133, 0));
 }
 
 /* The smoke test on a real movie: when BGI_BM_FILE names a .bm file, read
@@ -555,21 +711,26 @@ static void TestRealFile(void)
 int main(void)
 {
 	char dir[0x100];
-	setenv("BGI_MSGBOX_STDERR", "1", 1); // message boxes go to stderr instead of a dialog
+	OpenBGI_t* o = OpenBGI_New(OS_Host()); // the engine whose code the test runs
+	if(!o)
+		return 1;
+	TestHost_SetEnv("BGI_MSGBOX_STDERR", "1"); // message boxes go to stderr instead of a dialog
 	// the scratch directory becomes the engine's drive (see TestWaits) and is removed at
 	// the end
-	sprintf(dir, "/tmp/bgi_bfmovie_%d", (int)getpid());
-	if(mkdir(dir, 0700) != 0 || chdir(dir) != 0)
+	TestHost_ScratchName(dir, sizeof dir, "bgi_bfmovie");
+	if(TestHost_Mkdir(dir) != 0 || TestHost_Chdir(dir) != 0)
 	{
 		printf("cannot make the scratch directory %s\n", dir);
 		return 1;
 	}
 	OS_Init();
-	TestMovie(32);
-	TestMovie(24);
+	OS_SetGameDir(dir); // the drive on Windows too, where it is otherwise the binary's directory
+	TestMovie(o, 32);
+	TestMovie(o, 24);
+	TestStreamed(o);
 	TestRealFile();
-	if(chdir("/") == 0)
-		remove(dir);
+	if(TestHost_Chdir(TestHost_TempRoot()) == 0)
+		TestHost_RemoveTree(dir);
 	if(gFails)
 	{
 		printf("%d failure(s)\n", gFails);

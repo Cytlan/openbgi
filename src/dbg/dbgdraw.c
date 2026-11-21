@@ -9,8 +9,8 @@
  * the surface exists between DbgDraw_Init and DbgDraw_Shutdown, which is
  * while the debugger's window is open.
  *
- * Text comes from the OS layer's mono rasteriser (OS_FontOpenMono, the
- * same GDI-like path the engine's text instruction uses) at a 8 x 16
+ * Text comes from the mono typeface (Typeface_OpenMono, the same GDI-like
+ * path the engine's text instruction uses) at a 8 x 16
  * cell: the ASCII glyphs are rendered once into a cache, two-byte
  * Shift-JIS characters (the games' own strings in the listings) on
  * demand into a small cache of their own.  No font files, no embedded
@@ -21,35 +21,19 @@
  */
 #include "dbg_internal.h"
 #include "bgi/msg.h"
+#include "bgi/gfx/typeface.h"
+#include "bgi/core.h"
 
 #include <stdarg.h>
 
-DbgSurf_t gDbgSurf;
-int gDbgCellW = 8;
-
-#define CELL_PITCH 4 // bytes per glyph row in the caches: up to 32 pixels wide
-
-static OsFont_t* gFont;                              // the debugger's font, NULL when none could be opened
-static uint8_t gAscii[128][DBG_CELL_H * CELL_PITCH]; // one bit per pixel, MSB first
-static int gAsciiReady;                              // gAscii is filled
-
-#define WIDE_CACHE 256 // two-byte characters cached; the oldest is replaced
-static struct
-{
-	uint16_t code;                         // the Shift-JIS code (lead byte first)
-	uint8_t bits[DBG_CELL_H * CELL_PITCH]; // two cells wide
-	int used;                              // the slot holds a glyph
-} gWide[WIDE_CACHE];
-static int gWideNext; // the slot the next glyph takes
-
 // the widest advance of the printable ASCII characters of a font
-static int MaxAdvance(OsFont_t* f)
+static int MaxAdvance(Typeface_t* f)
 {
 	int c, w = 0;
 	for(c = 0x21; c < 0x7f; c++)
 	{
 		char ch = (char)c;
-		int a = OS_FontCharAdvance(f, &ch, 1);
+		int a = Typeface_Advance(f, &ch, 1);
 		if(a > w)
 			w = a;
 	}
@@ -58,89 +42,89 @@ static int MaxAdvance(OsFont_t* f)
 
 /* MS Gothic at 16 when the platform has it; else the monospace face at the
  * largest size up to 16 whose glyphs fit 8 pixels; else whatever fits */
-static void OpenFont(void)
+static void OpenFont(OpenBGI_t* o)
 {
-	const char* face = OS_FontFaceExists(MSG_FONT_GOTHIC) ? MSG_FONT_GOTHIC : "monospace";
+	const char* face = Typefaces_Exists(o, MSG_FONT_GOTHIC) ? MSG_FONT_GOTHIC : "monospace";
 	int size, adv = 0;
-	gDbgCellW = 8;
+	o->dbg.dbgCellW = 8;
 	for(size = DBG_CELL_H; size >= 11; size--)
 	{
-		gFont = OS_FontOpenMono(face, size, 0);
-		if(!gFont)
+		o->dbg.font = Typeface_OpenMono(o, face, size, 0);
+		if(!o->dbg.font)
 			return;
-		adv = MaxAdvance(gFont);
+		adv = MaxAdvance(o->dbg.font);
 		if(adv <= 8)
 			return;
-		OS_FontClose(gFont);
-		gFont = NULL;
+		Typeface_Close(o->dbg.font);
+		o->dbg.font = NULL;
 	}
-	gFont = OS_FontOpenMono(face, 14, 0);
-	if(gFont)
+	o->dbg.font = Typeface_OpenMono(o, face, 14, 0);
+	if(o->dbg.font)
 	{
-		adv = MaxAdvance(gFont);
-		gDbgCellW = adv > 8 ? (adv < 16 ? adv : 16) : 8;
+		adv = MaxAdvance(o->dbg.font);
+		o->dbg.dbgCellW = adv > 8 ? (adv < 16 ? adv : 16) : 8;
 	}
 }
 
-// the printable ASCII glyphs into gAscii, once per font; without a font every character is a box
-static void RenderAscii(void)
+// the printable ASCII glyphs into o->dbg.ascii, once per font; without a font every character is a box
+static void RenderAscii(OpenBGI_t* o)
 {
 	int c;
-	if(gAsciiReady)
+	if(o->dbg.asciiReady)
 		return;
-	gAsciiReady = 1;
+	o->dbg.asciiReady = 1;
 	for(c = 0x20; c < 0x7f; c++)
 	{
 		char ch = (char)c;
-		if(gFont)
-			OS_FontRenderMono(gFont, &ch, 1, gAscii[c], CELL_PITCH, DBG_CELL_W, DBG_CELL_H);
+		if(o->dbg.font)
+			Typeface_RenderMono(o->dbg.font, &ch, 1, o->dbg.ascii[c], DBG_CELL_PITCH, DBG_CELL_W(o), DBG_CELL_H);
 	}
-	if(!gFont)
+	if(!o->dbg.font)
 	{ // no font at all: a box for every character, so that something shows
 		for(c = 0x21; c < 0x7f; c++)
 		{
 			int y;
 			for(y = 2; y < DBG_CELL_H - 3; y++)
-				gAscii[c][y * CELL_PITCH] = (y == 2 || y == DBG_CELL_H - 4) ? 0x7c : 0x44;
+				o->dbg.ascii[c][y * DBG_CELL_PITCH] = (y == 2 || y == DBG_CELL_H - 4) ? 0x7c : 0x44;
 		}
 	}
 }
 
 // A black surface of w x h pixels, the font and the ASCII glyph cache: 1 ok, 0 when the surface cannot be allocated.
-int DbgDraw_Init(int w, int h)
+int DbgDraw_Init(OpenBGI_t* o, int w, int h)
 {
-	gDbgSurf.px = (uint32_t*)calloc((size_t)w * h, 4);
-	if(!gDbgSurf.px)
+	o->dbg.dbgSurf.px = (uint32_t*)calloc((size_t)w * h, 4);
+	if(!o->dbg.dbgSurf.px)
 		return 0;
-	gDbgSurf.w = w;
-	gDbgSurf.h = h;
-	DbgDraw_Clip(0, 0, 0, 0);
-	if(!gFont)
-		OpenFont();
-	RenderAscii();
+	o->dbg.dbgSurf.w = w;
+	o->dbg.dbgSurf.h = h;
+	DbgDraw_Clip(o, 0, 0, 0, 0);
+	if(!o->dbg.font)
+		OpenFont(o);
+	RenderAscii(o);
 	return 1;
 }
 
 // Free the surface, the font and the glyph caches.
-void DbgDraw_Shutdown(void)
+void DbgDraw_Shutdown(OpenBGI_t* o)
 {
-	free(gDbgSurf.px);
-	gDbgSurf.px = NULL;
-	if(gFont)
-		OS_FontClose(gFont);
-	gFont = NULL;
-	gAsciiReady = 0;
-	memset(gWide, 0, sizeof gWide);
+	free(o->dbg.dbgSurf.px);
+	o->dbg.dbgSurf.px = NULL;
+	if(o->dbg.font)
+		Typeface_Close(o->dbg.font);
+	o->dbg.font = NULL;
+	o->dbg.asciiReady = 0;
+	memset(o->dbg.wide, 0, sizeof o->dbg.wide);
 }
 
 // Set the clip rectangle, cut to the surface; an empty one (w or h <= 0) resets it to the whole surface.
-void DbgDraw_Clip(int x, int y, int w, int h)
+void DbgDraw_Clip(OpenBGI_t* o, int x, int y, int w, int h)
 {
 	if(w <= 0 || h <= 0)
 	{
-		gDbgSurf.clipX = gDbgSurf.clipY = 0;
-		gDbgSurf.clipW = gDbgSurf.w;
-		gDbgSurf.clipH = gDbgSurf.h;
+		o->dbg.dbgSurf.clipX = o->dbg.dbgSurf.clipY = 0;
+		o->dbg.dbgSurf.clipW = o->dbg.dbgSurf.w;
+		o->dbg.dbgSurf.clipH = o->dbg.dbgSurf.h;
 		return;
 	}
 	if(x < 0)
@@ -153,92 +137,92 @@ void DbgDraw_Clip(int x, int y, int w, int h)
 		h += y;
 		y = 0;
 	}
-	if(x + w > gDbgSurf.w)
-		w = gDbgSurf.w - x;
-	if(y + h > gDbgSurf.h)
-		h = gDbgSurf.h - y;
-	gDbgSurf.clipX = x;
-	gDbgSurf.clipY = y;
-	gDbgSurf.clipW = w > 0 ? w : 0;
-	gDbgSurf.clipH = h > 0 ? h : 0;
+	if(x + w > o->dbg.dbgSurf.w)
+		w = o->dbg.dbgSurf.w - x;
+	if(y + h > o->dbg.dbgSurf.h)
+		h = o->dbg.dbgSurf.h - y;
+	o->dbg.dbgSurf.clipX = x;
+	o->dbg.dbgSurf.clipY = y;
+	o->dbg.dbgSurf.clipW = w > 0 ? w : 0;
+	o->dbg.dbgSurf.clipH = h > 0 ? h : 0;
 }
 
 // Fill a rectangle (clipped).
-void DbgDraw_Fill(int x, int y, int w, int h, uint32_t rgb)
+void DbgDraw_Fill(OpenBGI_t* o, int x, int y, int w, int h, uint32_t rgb)
 {
 	int x0 = x, y0 = y, x1 = x + w, y1 = y + h, yy;
-	if(x0 < gDbgSurf.clipX)
-		x0 = gDbgSurf.clipX;
-	if(y0 < gDbgSurf.clipY)
-		y0 = gDbgSurf.clipY;
-	if(x1 > gDbgSurf.clipX + gDbgSurf.clipW)
-		x1 = gDbgSurf.clipX + gDbgSurf.clipW;
-	if(y1 > gDbgSurf.clipY + gDbgSurf.clipH)
-		y1 = gDbgSurf.clipY + gDbgSurf.clipH;
-	if(x1 <= x0 || y1 <= y0 || !gDbgSurf.px)
+	if(x0 < o->dbg.dbgSurf.clipX)
+		x0 = o->dbg.dbgSurf.clipX;
+	if(y0 < o->dbg.dbgSurf.clipY)
+		y0 = o->dbg.dbgSurf.clipY;
+	if(x1 > o->dbg.dbgSurf.clipX + o->dbg.dbgSurf.clipW)
+		x1 = o->dbg.dbgSurf.clipX + o->dbg.dbgSurf.clipW;
+	if(y1 > o->dbg.dbgSurf.clipY + o->dbg.dbgSurf.clipH)
+		y1 = o->dbg.dbgSurf.clipY + o->dbg.dbgSurf.clipH;
+	if(x1 <= x0 || y1 <= y0 || !o->dbg.dbgSurf.px)
 		return;
 	for(yy = y0; yy < y1; yy++)
 	{
-		uint32_t* row = gDbgSurf.px + (size_t)yy * gDbgSurf.w;
+		uint32_t* row = o->dbg.dbgSurf.px + (size_t)yy * o->dbg.dbgSurf.w;
 		int xx;
 		for(xx = x0; xx < x1; xx++)
 			row[xx] = rgb;
 	}
 }
 
-void DbgDraw_HLine(int x, int y, int w, uint32_t rgb)
+void DbgDraw_HLine(OpenBGI_t* o, int x, int y, int w, uint32_t rgb)
 {
-	DbgDraw_Fill(x, y, w, 1, rgb);
+	DbgDraw_Fill(o, x, y, w, 1, rgb);
 }
 
-void DbgDraw_VLine(int x, int y, int h, uint32_t rgb)
+void DbgDraw_VLine(OpenBGI_t* o, int x, int y, int h, uint32_t rgb)
 {
-	DbgDraw_Fill(x, y, 1, h, rgb);
+	DbgDraw_Fill(o, x, y, 1, h, rgb);
 }
 
 // A one-pixel outline just inside the rectangle.
-void DbgDraw_Frame(int x, int y, int w, int h, uint32_t rgb)
+void DbgDraw_Frame(OpenBGI_t* o, int x, int y, int w, int h, uint32_t rgb)
 {
-	DbgDraw_HLine(x, y, w, rgb);
-	DbgDraw_HLine(x, y + h - 1, w, rgb);
-	DbgDraw_VLine(x, y, h, rgb);
-	DbgDraw_VLine(x + w - 1, y, h, rgb);
+	DbgDraw_HLine(o, x, y, w, rgb);
+	DbgDraw_HLine(o, x, y + h - 1, w, rgb);
+	DbgDraw_VLine(o, x, y, h, rgb);
+	DbgDraw_VLine(o, x + w - 1, y, h, rgb);
 }
 
 // one pixel, clipped
-static void Plot(int x, int y, uint32_t rgb)
+static void Plot(OpenBGI_t* o, int x, int y, uint32_t rgb)
 {
-	if(x >= gDbgSurf.clipX && x < gDbgSurf.clipX + gDbgSurf.clipW && y >= gDbgSurf.clipY &&
-		y < gDbgSurf.clipY + gDbgSurf.clipH)
-		gDbgSurf.px[(size_t)y * gDbgSurf.w + x] = rgb;
+	if(x >= o->dbg.dbgSurf.clipX && x < o->dbg.dbgSurf.clipX + o->dbg.dbgSurf.clipW && y >= o->dbg.dbgSurf.clipY &&
+		y < o->dbg.dbgSurf.clipY + o->dbg.dbgSurf.clipH)
+		o->dbg.dbgSurf.px[(size_t)y * o->dbg.dbgSurf.w + x] = rgb;
 }
 
 // a glyph of `cw` pixels from `bits` (MSB first, `pitch` bytes per row)
-static void Glyph(int x, int y, const uint8_t* bits, int pitch, int cw, uint32_t rgb)
+static void Glyph(OpenBGI_t* o, int x, int y, const uint8_t* bits, int pitch, int cw, uint32_t rgb)
 {
 	int gx, gy;
 	for(gy = 0; gy < DBG_CELL_H; gy++)
 		for(gx = 0; gx < cw; gx++)
 			if(bits[gy * pitch + (gx >> 3)] & (0x80 >> (gx & 7)))
-				Plot(x + gx, y + gy, rgb);
+				Plot(o, x + gx, y + gy, rgb);
 }
 
 // the glyph of the two-byte character at s, from the cache or rendered into its next slot
-static const uint8_t* WideGlyph(const char* s)
+static const uint8_t* WideGlyph(OpenBGI_t* o, const char* s)
 {
 	uint16_t code = (uint16_t)(((uint8_t)s[0] << 8) | (uint8_t)s[1]);
 	int i, slot;
-	for(i = 0; i < WIDE_CACHE; i++)
-		if(gWide[i].used && gWide[i].code == code)
-			return gWide[i].bits;
-	slot = gWideNext;
-	gWideNext = (gWideNext + 1) % WIDE_CACHE;
-	gWide[slot].used = 1;
-	gWide[slot].code = code;
-	memset(gWide[slot].bits, 0, sizeof gWide[slot].bits);
-	if(gFont)
-		OS_FontRenderMono(gFont, s, 2, gWide[slot].bits, CELL_PITCH, DBG_CELL_W * 2, DBG_CELL_H);
-	return gWide[slot].bits;
+	for(i = 0; i < DBG_WIDE_CACHE; i++)
+		if(o->dbg.wide[i].used && o->dbg.wide[i].code == code)
+			return o->dbg.wide[i].bits;
+	slot = o->dbg.wideNext;
+	o->dbg.wideNext = (o->dbg.wideNext + 1) % DBG_WIDE_CACHE;
+	o->dbg.wide[slot].used = 1;
+	o->dbg.wide[slot].code = code;
+	memset(o->dbg.wide[slot].bits, 0, sizeof o->dbg.wide[slot].bits);
+	if(o->dbg.font)
+		Typeface_RenderMono(o->dbg.font, s, 2, o->dbg.wide[slot].bits, DBG_CELL_PITCH, DBG_CELL_W(o) * 2, DBG_CELL_H);
+	return o->dbg.wide[slot].bits;
 }
 
 // a Shift-JIS lead byte
@@ -250,44 +234,44 @@ static int IsLead(uint8_t c)
 /* Draw a string at (x, y): ASCII one cell each, a two-byte character two
  * cells, a tab to the next multiple of four cells, a stray high byte as a
  * dot.  Returns the width drawn in pixels. */
-int DbgDraw_Text(int x, int y, uint32_t rgb, const char* text)
+int DbgDraw_Text(OpenBGI_t* o, int x, int y, uint32_t rgb, const char* text)
 {
 	int x0 = x;
-	RenderAscii();
+	RenderAscii(o);
 	while(*text)
 	{
 		uint8_t c = (uint8_t)*text;
 		if(IsLead(c) && text[1])
 		{
-			if(x + DBG_CELL_W * 2 > gDbgSurf.clipX && x < gDbgSurf.clipX + gDbgSurf.clipW)
-				Glyph(x, y, WideGlyph(text), CELL_PITCH, DBG_CELL_W * 2, rgb);
-			x += DBG_CELL_W * 2;
+			if(x + DBG_CELL_W(o) * 2 > o->dbg.dbgSurf.clipX && x < o->dbg.dbgSurf.clipX + o->dbg.dbgSurf.clipW)
+				Glyph(o, x, y, WideGlyph(o, text), DBG_CELL_PITCH, DBG_CELL_W(o) * 2, rgb);
+			x += DBG_CELL_W(o) * 2;
 			text += 2;
 			continue;
 		}
 		if(c == '\t')
 		{
-			x = x0 + ((x - x0) / (DBG_CELL_W * 4) + 1) * DBG_CELL_W * 4;
+			x = x0 + ((x - x0) / (DBG_CELL_W(o) * 4) + 1) * DBG_CELL_W(o) * 4;
 			text++;
 			continue;
 		}
 		if(c >= 0x20 && c < 0x7f)
 		{
-			if(x + DBG_CELL_W > gDbgSurf.clipX && x < gDbgSurf.clipX + gDbgSurf.clipW)
-				Glyph(x, y, gAscii[c], CELL_PITCH, DBG_CELL_W, rgb);
+			if(x + DBG_CELL_W(o) > o->dbg.dbgSurf.clipX && x < o->dbg.dbgSurf.clipX + o->dbg.dbgSurf.clipW)
+				Glyph(o, x, y, o->dbg.ascii[c], DBG_CELL_PITCH, DBG_CELL_W(o), rgb);
 		}
 		else if(c >= 0x80)
 		{ // a stray byte: a dot
-			Plot(x + 3, y + DBG_CELL_H - 4, rgb);
+			Plot(o, x + 3, y + DBG_CELL_H - 4, rgb);
 		}
-		x += DBG_CELL_W;
+		x += DBG_CELL_W(o);
 		text++;
 	}
 	return x - x0;
 }
 
 // The width DbgDraw_Text would take, in pixels (tabs count as one cell here).
-int DbgDraw_TextWidth(const char* text)
+int DbgDraw_TextWidth(OpenBGI_t* o, const char* text)
 {
 	int w = 0;
 	while(*text)
@@ -295,12 +279,12 @@ int DbgDraw_TextWidth(const char* text)
 		uint8_t c = (uint8_t)*text;
 		if(IsLead(c) && text[1])
 		{
-			w += DBG_CELL_W * 2;
+			w += DBG_CELL_W(o) * 2;
 			text += 2;
 		}
 		else
 		{
-			w += DBG_CELL_W;
+			w += DBG_CELL_W(o);
 			text++;
 		}
 	}
@@ -308,14 +292,14 @@ int DbgDraw_TextWidth(const char* text)
 }
 
 // printf-style DbgDraw_Text (the line is cut at 0x3ff characters).
-int DbgDraw_TextF(int x, int y, uint32_t rgb, const char* fmt, ...)
+int DbgDraw_TextF(OpenBGI_t* o, int x, int y, uint32_t rgb, const char* fmt, ...)
 {
 	char buf[0x400];
 	va_list ap;
 	va_start(ap, fmt);
 	vsnprintf(buf, sizeof buf, fmt, ap);
 	va_end(ap);
-	return DbgDraw_Text(x, y, rgb, buf);
+	return DbgDraw_Text(o, x, y, rgb, buf);
 }
 
 // one pixel of a bitmap as 0x00RRGGBB: RGB555 for 16 bits (as the back ends read it), a grey for 8 bits, the low 24 bits for 32
@@ -340,7 +324,7 @@ static uint32_t BmpPixel(const Bmp_t* b, int x, int y)
  * keeping its aspect and never enlarging it; an ARGB32 bitmap (mode 2) is
  * composed over a grey checkerboard so that transparency shows.  Nothing
  * is drawn for a bitmap without pixels (a virtual slot). */
-void DbgDraw_Bitmap(int x, int y, int w, int h, const Bmp_t* b)
+void DbgDraw_Bitmap(OpenBGI_t* o, int x, int y, int w, int h, const Bmp_t* b)
 {
 	double sx, sy, s;
 	int dw, dh, yy, xx, check;
@@ -379,7 +363,7 @@ void DbgDraw_Bitmap(int x, int y, int w, int h, const Bmp_t* b)
 				bl = (bl * a + (uint32_t)check * (255 - a)) / 255;
 				p = (r << 16) | (g << 8) | bl;
 			}
-			Plot(x + xx, y + yy, p);
+			Plot(o, x + xx, y + yy, p);
 		}
 	}
 }

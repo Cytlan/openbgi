@@ -5,7 +5,7 @@
  * compositor.c - the compositor: the display objects sorted by key, the
  * overlap-free list of dirty rectangles and the band renderer that repaints
  * them, plus the worker pool it paints with (synchronous here).  Interface
- * in inc/bgi/gfx/compositor.h.
+ * in src/include/bgi/gfx/compositor.h.
  *
  * Objects report the rectangles they change through Compositor_AddDirty
  * (via DispObj_Invalidate).  Once per frame the graphics manager calls
@@ -45,15 +45,15 @@ void WorkerPool_SetCallback(WorkerPool_t* p, PoolFn_t fn, void* arg)
 }
 
 /* Run the callback until it returns 0.  The original wakes its threads and
- * lets every one of them, including the caller, call fn(arg) until it
+ * lets every one of them, including the caller, call fn(o, arg) until it
  * returns 0; running them one after another on this thread consumes the
  * same job queue in order and paints the same pixels, because jobs never
  * overlap.  `parallel` is only recorded in `running`. */
-void WorkerPool_Run(WorkerPool_t* p, int parallel)
+void WorkerPool_Run(OpenBGI_t* o, WorkerPool_t* p, int parallel)
 {
 	p->running = parallel;
 	if(p->fn)
-		while(p->fn(p->arg))
+		while(p->fn(o, p->arg))
 			;
 	p->running = 0;
 }
@@ -126,28 +126,28 @@ void Compositor_RemoveAll(Compositor_t* c)
 // ========================================================================
 
 // insert at the place its current sort key gives it; the key is recorded in the node
-void Compositor_Add(Compositor_t* c, DispObj_t* o)
+void Compositor_Add(OpenBGI_t* o, Compositor_t* c, DispObj_t* obj)
 {
-	uint32_t key = o->vt->sortKey(o);
+	uint32_t key = obj->vt->sortKey(o, obj);
 	ObjNode_t **link = &c->objects, *n;
 	while(*link && (*link)->key <= key) // equal keys: the newcomer goes on top
 		link = &(*link)->next;
 	n = (ObjNode_t*)BGI_Alloc(sizeof *n);
 	n->key = key;
 	n->unused04 = 0;
-	n->obj = o;
+	n->obj = obj;
 	n->next = *link;
 	*link = n;
 	c->objectCount++;
 }
 
 // 1 if the object was listed
-int Compositor_Remove(Compositor_t* c, DispObj_t* o)
+int Compositor_Remove(Compositor_t* c, DispObj_t* obj)
 {
 	ObjNode_t **link, *n;
 	for(link = &c->objects; (n = *link) != NULL; link = &n->next)
 	{
-		if(n->obj == o)
+		if(n->obj == obj)
 		{
 			*link = n->next;
 			BGI_Free(n);
@@ -159,20 +159,20 @@ int Compositor_Remove(Compositor_t* c, DispObj_t* o)
 }
 
 // after the object's priority or depth changed: remove and re-insert; 0 if it was not listed
-int Compositor_Resort(Compositor_t* c, DispObj_t* o)
+int Compositor_Resort(OpenBGI_t* o, Compositor_t* c, DispObj_t* obj)
 {
-	if(!Compositor_Remove(c, o))
+	if(!Compositor_Remove(c, obj))
 		return 0;
-	Compositor_Add(c, o);
+	Compositor_Add(o, c, obj);
 	return 1;
 }
 
 // call every object's notify method (0xF0000000 after each rendered frame)
-void Compositor_NotifyAll(Compositor_t* c, uint32_t what, int a, int b)
+void Compositor_NotifyAll(OpenBGI_t* o, Compositor_t* c, uint32_t what, int a, int b)
 {
 	ObjNode_t* n;
 	for(n = c->objects; n; n = n->next)
-		n->obj->vt->notify(n->obj, what, a, b);
+		n->obj->vt->notify(o, n->obj, what, a, b);
 }
 
 // ========================================================================
@@ -437,18 +437,18 @@ int Compositor_SplitBands(Compositor_t* c, Rect_t* out, const Rect_t* r)
  * of a type that reads the screen around each pixel (6 displacement, 7
  * gradient, 9 stretched view, 10 zoom, 11 mosaic) and not while an
  * effector is visible. */
-int Compositor_CanBand(Compositor_t* c)
+int Compositor_CanBand(OpenBGI_t* o, Compositor_t* c)
 {
 	int t = c->bgType;
 	if(t == 6 || t == 7 || t == 9 || t == 10 || t == 11)
 		return 0;
-	return !Effector_AnyVisible();
+	return !Effector_AnyVisible(o);
 }
 
 /* The pool callback: take the next band job and paint every object into
  * it, in key order; objects below the draw limit are skipped unless they
  * are backgrounds (class order 0).  Returns 0 when the queue is empty. */
-static int Compositor_Worker(void* arg)
+static int Compositor_Worker(OpenBGI_t* o, void* arg)
 {
 	Compositor_t* c = (Compositor_t*)arg;
 	BandJob_t job;
@@ -464,28 +464,28 @@ static int Compositor_Worker(void* arg)
 		return 0;
 	for(n = c->objects; n; n = n->next)
 	{
-		DispObj_t* o = n->obj;
-		if(o->vt->sortKey(o) < c->drawLimit && o->classOrder != 0)
+		DispObj_t* obj = n->obj;
+		if(obj->vt->sortKey(o, obj) < c->drawLimit && obj->classOrder != 0)
 			continue;
-		DispObj_DrawClipped(o, c->screen, &job.r, job.minKey);
+		DispObj_DrawClipped(o, obj, c->screen, &job.r, job.minKey);
 	}
 	return 1;
 }
 
 // paint the queued jobs through the pool
-static void Compositor_RunJobs(Compositor_t* c, int parallel)
+static void Compositor_RunJobs(OpenBGI_t* o, Compositor_t* c, int parallel)
 {
 	WorkerPool_SetCallback(c->pool, Compositor_Worker, c);
-	WorkerPool_Run(c->pool, parallel);
+	WorkerPool_Run(o, c->pool, parallel);
 	WorkerPool_SetCallback(c->pool, NULL, NULL);
 }
 
 /* Paint the whole screen: in bands when banding is possible, else as one
  * job.  The dirty list is cleared afterwards and every object notified
  * (0xF0000000). */
-void Compositor_RenderAll(Compositor_t* c)
+void Compositor_RenderAll(OpenBGI_t* o, Compositor_t* c)
 {
-	int parallel = Compositor_CanBand(c), i;
+	int parallel = Compositor_CanBand(o, c), i;
 	c->jobCount = parallel ? Compositor_SplitBands(c, NULL, &c->screen->screen) : 1;
 	c->jobs = (BandJob_t*)BGI_Alloc((size_t)c->jobCount * sizeof(BandJob_t));
 	c->nextJob = 0;
@@ -505,20 +505,20 @@ void Compositor_RenderAll(Compositor_t* c)
 		c->jobs[0].r = c->screen->screen;
 		c->jobs[0].minKey = 0;
 	}
-	Compositor_RunJobs(c, parallel);
+	Compositor_RunJobs(o, c, parallel);
 	BGI_Free(c->jobs);
 	c->jobs = NULL;
 	Compositor_ClearDirty(c);
-	Compositor_NotifyAll(c, 0xf0000000u, 0, 0);
+	Compositor_NotifyAll(o, c, 0xf0000000u, 0, 0);
 }
 
 /* Paint one frame: the dirty rectangles, each cut into bands, with the
- * objects that redraw every frame (setParam 0x7FFF0000, 1.494 on) dirtied
+ * objects that redraw every frame (setParam 0x7FFF0000, 1.492 on) dirtied
  * first.  Writes the repainted rectangles to `outRects` (room for maxDirty
  * of them) and returns their count, so that the caller can copy just
  * those to the window; -1 when the whole screen was painted instead
  * (a full redraw was requested, or banding is not possible). */
-int Compositor_Render(Compositor_t* c, Rect_t* outRects)
+int Compositor_Render(OpenBGI_t* o, Compositor_t* c, Rect_t* outRects)
 {
 	int* counts;
 	uint32_t* keys;
@@ -527,13 +527,13 @@ int Compositor_Render(Compositor_t* c, Rect_t* outRects)
 	ObjNode_t* n;
 	int count = 0, total = 0, i, k = 0;
 
-	// 1.494 on: the objects that redraw every frame (setParam 0x7FFF0000)
+	// 1.492 on: the objects that redraw every frame (setParam 0x7FFF0000)
 	for(n = c->objects; n; n = n->next)
 		if(n->obj->redrawEveryFrame)
-			n->obj->vt->invalidate(n->obj);
-	if(c->fullRedraw || !Compositor_CanBand(c))
+			n->obj->vt->invalidate(o, n->obj);
+	if(c->fullRedraw || !Compositor_CanBand(o, c))
 	{
-		Compositor_RenderAll(c);
+		Compositor_RenderAll(o, c);
 		return -1;
 	}
 	counts = (int*)BGI_Alloc((size_t)c->maxDirty * sizeof(int));
@@ -568,21 +568,21 @@ int Compositor_Render(Compositor_t* c, Rect_t* outRects)
 			k++;
 		}
 	}
-	Compositor_RunJobs(c, 1);
+	Compositor_RunJobs(o, c, 1);
 	BGI_Free(counts);
 	BGI_Free(keys);
 	BGI_Free(c->jobs);
 	c->jobs = NULL;
 	BGI_Free(bands);
 	Compositor_ClearDirty(c);
-	Compositor_NotifyAll(c, 0xf0000000u, 0, 0);
+	Compositor_NotifyAll(o, c, 0xf0000000u, 0, 0);
 	return count;
 }
 
 /* "90 05": paint every object with key <= (prio << 20) | 0xFFFFF -
  * everything up to and including priority `prio` - into `dst`, which
  * stands in for the screen; the dirty list is not touched. */
-void Compositor_Snapshot(Compositor_t* c, const Bmp_t* dst, int prio)
+void Compositor_Snapshot(OpenBGI_t* o, Compositor_t* c, const Bmp_t* dst, int prio)
 {
 	ScreenBmp_t s;
 	ObjNode_t* n;
@@ -591,8 +591,8 @@ void Compositor_Snapshot(Compositor_t* c, const Bmp_t* dst, int prio)
 	Rect_FromBmp(&s.screen, dst);
 	for(n = c->objects; n; n = n->next)
 	{
-		DispObj_t* o = n->obj;
-		if(o->vt->sortKey(o) <= limit)
-			DispObj_DrawClipped(o, &s, &s.screen, 0);
+		DispObj_t* obj = n->obj;
+		if(obj->vt->sortKey(o, obj) <= limit)
+			DispObj_DrawClipped(o, obj, &s, &s.screen, 0);
 	}
 }

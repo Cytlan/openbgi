@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * bpdec.c - the program decompiler: bytecode back to the C-like source
- *           (interface in bpc.h, the source in docs/bpc.md, the code
+ *           (interface in bpc.h, the source in docs/modding/programs.md, the code
  *           shapes in bpc_internal.h)
  *
  * The disassembler's analysis (Dis_Analyze) tells code from data and
@@ -24,6 +24,7 @@
  * differs, so that the text always compiles back to the input.
  */
 #include "bpc_internal.h"
+#include "bgi/core.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -163,6 +164,7 @@ typedef struct Dec
 	// the condition-tree search
 	int* memoKey;
 	int memoCount;
+	uint32_t collectRetry; // CollectLeaves: where the first leaf's expression began when values lay below it
 } Dec_t;
 
 static void Fail(Dec_t* d, uint32_t off, const char* fmt, ...)
@@ -476,7 +478,7 @@ static void FuncName(const Dec_t* d, uint32_t off, char* out, size_t n)
 /* the string at a data offset as a quoted literal: the bytes up to the
  * NUL (whatever they are - a literal of the source may hold control
  * characters); NULL when the offset is not in data or no NUL follows */
-static char* StringLiteral(const Dec_t* d, uint32_t off)
+static char* StringLiteral(OpenBGI_t* o, const Dec_t* d, uint32_t off)
 {
 	uint32_t len = 0;
 	FILE* mem;
@@ -491,7 +493,7 @@ static char* StringLiteral(const Dec_t* d, uint32_t off)
 	mem = tmpfile();
 	if(!mem)
 		return NULL;
-	Asm_WriteStringLiteral(mem, d->map->area + off, len);
+	Asm_WriteStringLiteral(o, mem, d->map->area + off, len);
 	n = ftell(mem);
 	fseek(mem, 0, SEEK_SET);
 	text = (char*)malloc((size_t)n + 1);
@@ -626,7 +628,7 @@ static void BinaryOp(Dec_t* d, const BpcOperator_t* op, uint32_t off)
  * first).  Returns the index of the instruction it stopped at. */
 static void FlushStatements(Dec_t* d, uint32_t off);
 
-static uint32_t Run(Dec_t* d, uint32_t i, uint32_t end)
+static uint32_t Run(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end)
 {
 	for(; i < end && !d->failed; i++)
 	{
@@ -670,7 +672,7 @@ static uint32_t Run(Dec_t* d, uint32_t i, uint32_t end)
 				}
 				case OP_CODE_ADDR:
 				{
-					char* lit = StringLiteral(d, in->target);
+					char* lit = StringLiteral(o, d, in->target);
 					if(!lit)
 					{
 						Fail(d, off, "a data reference to something that is not a string");
@@ -748,7 +750,7 @@ static uint32_t Run(Dec_t* d, uint32_t i, uint32_t end)
 					long n;
 					if(!mem)
 						return i;
-					Asm_WriteStringLiteral(mem, in->bytes, (uint32_t)in->v[0]);
+					Asm_WriteStringLiteral(o, mem, in->bytes, (uint32_t)in->v[0]);
 					n = ftell(mem);
 					fseek(mem, 0, SEEK_SET);
 					lit = (char*)malloc((size_t)n + 1);
@@ -910,7 +912,7 @@ static uint32_t Run(Dec_t* d, uint32_t i, uint32_t end)
 			else
 				snprintf(full, sizeof full, "%s", name);
 			args = ArgsInOrder(d, pops, off);
-			{   // a conditional jump right after an instruction tests "its value", whatever it pushes (the
+			{ // a conditional jump right after an instruction tests "its value", whatever it pushes (the
 				// source wrote `if (instruction(...))`; a value an earlier statement left is what runs)
 				uint32_t t;
 				int cc;
@@ -1170,14 +1172,12 @@ static void FreeLeaves(Leaf_t* leaves, int count)
  * Returns the count; *leaves is malloc'ed. */
 static void FreeEntries(Dec_t* d, int from);
 
-static uint32_t gCollectRetry; // CollectLeaves: where the first leaf's expression began when values lay below it
-
-static int CollectLeaves(Dec_t* d, uint32_t i, uint32_t end, Leaf_t** leaves, int firstReady)
+static int CollectLeaves(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end, Leaf_t** leaves, int firstReady)
 {
 	int count = 0, cap = 0;
 	uint32_t chainStart = i;
 	*leaves = NULL;
-	gCollectRetry = UINT32_MAX;
+	d->collectRetry = UINT32_MAX;
 	for(;;)
 	{
 		uint32_t j, target;
@@ -1209,7 +1209,7 @@ static int CollectLeaves(Dec_t* d, uint32_t i, uint32_t end, Leaf_t** leaves, in
 			ResetStack(d);
 			d->curIdx = i;
 			d->quiet++;
-			j = Run(d, i, end);
+			j = Run(o, d, i, end);
 			d->quiet--;
 			if(d->failed || d->sp != 1 || d->entCount != entBefore)
 			{
@@ -1218,7 +1218,7 @@ static int CollectLeaves(Dec_t* d, uint32_t i, uint32_t end, Leaf_t** leaves, in
 						d->entCount - entBefore);
 				// values below the top: statements before the chain, which may begin where the top began
 				if(!d->failed && count == 0 && d->sp > 1 && d->entCount == entBefore && d->stack[d->sp - 1].startIdx > i)
-					gCollectRetry = d->stack[d->sp - 1].startIdx;
+					d->collectRetry = d->stack[d->sp - 1].startIdx;
 				d->failed = 0; // not a leaf: the statement parser reports whatever it is
 				ResetStack(d);
 				FreeEntries(d, entBefore);
@@ -1259,7 +1259,7 @@ static int CollectLeaves(Dec_t* d, uint32_t i, uint32_t end, Leaf_t** leaves, in
 
 // ---- statements -------------------------------------------------------------------------------------
 
-static uint32_t ParseStmts(Dec_t* d, uint32_t i, uint32_t end);
+static uint32_t ParseStmts(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end);
 static void FreeEntries(Dec_t* d, int from);
 
 /* a jump statement: return when the target is the exit (with the value
@@ -1305,10 +1305,10 @@ static int JumpedToFromOutside(const Dec_t* d, uint32_t off, uint32_t from, uint
  * the then part, false jumps past it) and the direct form (true jumps to
  * a break / continue / goto target, false falls through).  Returns the
  * index after the construct, or i when it is none. */
-static uint32_t ParseIf(Dec_t* d, uint32_t i, uint32_t end, int firstReady)
+static uint32_t ParseIf(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end, int firstReady)
 {
 	Leaf_t* leaves;
-	int count = CollectLeaves(d, i, end, &leaves, firstReady), len;
+	int count = CollectLeaves(o, d, i, end, &leaves, firstReady), len;
 	Cond_t c;
 	uint32_t result = i;
 	if(count == 0)
@@ -1378,13 +1378,13 @@ static uint32_t ParseIf(Dec_t* d, uint32_t i, uint32_t end, int firstReady)
 				AddEntry(d, ENT_OPEN, Off(d, leaves[0].start), Format("if (%s) {", cond));
 				free(cond);
 				d->depth++;
-				ParseStmts(d, next, thenEnd);
+				ParseStmts(o, d, next, thenEnd);
 				d->depth--;
 				if(elseEnd != UINT32_MAX)
 				{
 					AddEntry(d, ENT_CLOSE, Off(d, thenEnd), Strdup("} else {"));
 					d->depth++;
-					ParseStmts(d, xi, elseEnd);
+					ParseStmts(o, d, xi, elseEnd);
 					d->depth--;
 					AddEntry(d, ENT_CLOSE, Off(d, elseEnd), Strdup("}"));
 					result = elseEnd;
@@ -1442,7 +1442,7 @@ static int StatementEnd(const Dec_t* d, uint32_t k)
 
 /* The loop whose head is instruction i and whose last backward jump is
  * instruction j (a `push_code_off i` followed by jmp or jcc). */
-static uint32_t ParseLoop(Dec_t* d, uint32_t i, uint32_t j, uint32_t end)
+static uint32_t ParseLoop(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t j, uint32_t end)
 {
 	uint32_t loopEnd = j + 2, bodyEnd = j;
 	uint32_t headOff = Off(d, i), outerHead;
@@ -1456,7 +1456,7 @@ static uint32_t ParseLoop(Dec_t* d, uint32_t i, uint32_t j, uint32_t end)
 		uint32_t bodyStart = i;
 		char* cond = NULL;
 		ResetStack(d);
-		count = CollectLeaves(d, i, j, &leaves, 0);
+		count = CollectLeaves(o, d, i, j, &leaves, 0);
 		c.d = d;
 		c.leaves = leaves;
 		for(len = count; len > 0 && !cond; len--)
@@ -1478,7 +1478,7 @@ static uint32_t ParseLoop(Dec_t* d, uint32_t i, uint32_t j, uint32_t end)
 		d->depth++;
 		outerHead = d->loopHead;
 		d->loopHead = headOff;
-		ParseStmts(d, bodyStart, bodyEnd);
+		ParseStmts(o, d, bodyStart, bodyEnd);
 		d->loopHead = outerHead;
 		d->depth--;
 		PopCtx(d);
@@ -1500,13 +1500,13 @@ static uint32_t ParseLoop(Dec_t* d, uint32_t i, uint32_t j, uint32_t end)
 			if(k > i && !IsLabelled(d, Off(d, k)) && !StatementEnd(d, k - 1))
 				continue; // a leaf starts after a statement boundary of some kind (cheap filter)
 			ResetStack(d);
-			count = CollectLeaves(d, k, j + 2, &leaves, 0);
-			if(count == 0 && gCollectRetry != UINT32_MAX && gCollectRetry < j)
+			count = CollectLeaves(o, d, k, j + 2, &leaves, 0);
+			if(count == 0 && d->collectRetry != UINT32_MAX && d->collectRetry < j)
 			{ // the chain begins after values an earlier statement left: from there
 				FreeLeaves(leaves, count);
-				k = gCollectRetry;
+				k = d->collectRetry;
 				ResetStack(d);
-				count = CollectLeaves(d, k, j + 2, &leaves, 0);
+				count = CollectLeaves(o, d, k, j + 2, &leaves, 0);
 			}
 			if(d->opt->verbose > 1)
 				fprintf(stderr, "    do-while condition from 0x%x: %d leaves%s\n", (unsigned)Off(d, k), count,
@@ -1543,7 +1543,7 @@ static uint32_t ParseLoop(Dec_t* d, uint32_t i, uint32_t j, uint32_t end)
 		d->depth++;
 		outerHead = d->loopHead;
 		d->loopHead = headOff;
-		ParseStmts(d, i, condStart);
+		ParseStmts(o, d, i, condStart);
 		d->loopHead = outerHead;
 		d->depth--;
 		PopCtx(d);
@@ -1555,7 +1555,7 @@ static uint32_t ParseLoop(Dec_t* d, uint32_t i, uint32_t j, uint32_t end)
 	(void)ctx;
 }
 
-static uint32_t ParseStmts(Dec_t* d, uint32_t i, uint32_t end)
+static uint32_t ParseStmts(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end)
 {
 	while(i < end && !d->failed)
 	{
@@ -1568,7 +1568,7 @@ static uint32_t ParseStmts(Dec_t* d, uint32_t i, uint32_t end)
 		if(IsLabelled(d, off) && off != d->loopHead && !IsNoLoop(d, off) && (j = LastBackJump(d, i, end, off)) != UINT32_MAX && j + 2 <= end)
 		{
 			FlushStatements(d, off);
-			i = ParseLoop(d, i, j, end);
+			i = ParseLoop(o, d, i, j, end);
 			continue;
 		}
 		if(IsLabelled(d, off) && i != d->bodyIdx)
@@ -1578,7 +1578,7 @@ static uint32_t ParseStmts(Dec_t* d, uint32_t i, uint32_t end)
 		}
 		ResetStack(d);
 		d->curIdx = i;
-		j = Run(d, i, end);
+		j = Run(o, d, i, end);
 		if(d->failed)
 			break;
 		if(j >= end)
@@ -1607,7 +1607,7 @@ static uint32_t ParseStmts(Dec_t* d, uint32_t i, uint32_t end)
 				Push(d, cond.text, cond.prec, cond.kind, cond.aux);
 				d->stack[d->sp - 1].startIdx = cond.startIdx;
 			}
-			r = ParseIf(d, j, end, 1);
+			r = ParseIf(o, d, j, end, 1);
 			if(r == j)
 			{
 				Fail(d, Off(d, j), "a conditional jump that is no construct");
@@ -1892,13 +1892,13 @@ static char* Declarations(Dec_t* d)
 }
 
 // the listing of a function (or any range) as an __asm block, strings inline
-static void WriteAsmBlock(Dec_t* d, uint32_t start, uint32_t end, FILE* out, int depth)
+static void WriteAsmBlock(OpenBGI_t* o, Dec_t* d, uint32_t start, uint32_t end, FILE* out, int depth)
 {
 	FILE* mem = tmpfile();
 	char line[0x1000];
 	if(!mem)
 		return;
-	Dis_WriteRange(d->map, start, end, d->gen, NULL, mem);
+	Dis_WriteRange(o, d->map, start, end, d->gen, NULL, mem);
 	fseek(mem, 0, SEEK_SET);
 	fprintf(out, "%*s__asm {\n", depth * 4, "");
 	while(fgets(line, sizeof line, mem))
@@ -1916,7 +1916,7 @@ static void WriteAsmBlock(Dec_t* d, uint32_t start, uint32_t end, FILE* out, int
 		if(strncmp(line, "\tpush_code_addr ", 16) == 0)
 		{
 			uint32_t target = (uint32_t)strtoul(line + 16 + 4, NULL, 16);
-			char* lit = StringLiteral(d, target);
+			char* lit = StringLiteral(o, d, target);
 			if(lit)
 			{
 				fprintf(out, "%*s    push_code_addr %s\n", depth * 4, "", lit);
@@ -1970,7 +1970,7 @@ static void WriteEntries(Dec_t* d, int from, FILE* out)
 
 /* decompile one function into entries and write it; 1 when written as
  * source, 0 when as an __asm block */
-static int WriteFunction(Dec_t* d, Func_t* f, FILE* out, int forceAsm)
+static int WriteFunction(OpenBGI_t* o, Dec_t* d, Func_t* f, FILE* out, int forceAsm)
 {
 	int first = d->entCount, ok = 0, i;
 	char name[32];
@@ -1995,7 +1995,7 @@ static int WriteFunction(Dec_t* d, Func_t* f, FILE* out, int forceAsm)
 				FreeEntries(d, first);
 				for(k = 0; k < d->localCount; k++)
 					d->locals[k].sizes[0] = d->locals[k].sizes[1] = d->locals[k].sizes[2] = d->locals[k].pushes = 0;
-				ParseStmts(d, d->bodyIdx, d->exitIdx);
+				ParseStmts(o, d, d->bodyIdx, d->exitIdx);
 				if(pass == 0)
 				{ // the first pass only counts the accesses of the locals; the declarations decide how they are written
 					ResetStack(d);
@@ -2059,7 +2059,7 @@ static int WriteFunction(Dec_t* d, Func_t* f, FILE* out, int forceAsm)
 	else
 	{
 		fprintf(out, "%s() {\n", name);
-		WriteAsmBlock(d, f->start, f->end, out, 1);
+		WriteAsmBlock(o, d, f->start, f->end, out, 1);
 		fprintf(out, "}\n\n");
 	}
 	FreeEntries(d, first);
@@ -2161,16 +2161,16 @@ static int LinesSoFar(FILE* out)
 	return lines;
 }
 
-static int WriteProgram(Dec_t* d, const uint8_t* asmMask, FILE* out)
+static int WriteProgram(OpenBGI_t* o, Dec_t* d, const uint8_t* asmMask, FILE* out)
 {
 	int i, fallbacks = 0;
-	fprintf(out, "// %s - decompiled by bpasm (docs/bpc.md)\n", d->opt->name ? d->opt->name : "program");
-	fprintf(out, "#engine %s\n%s\n", d->gen == GEN_COUNT ? "any" : kGenNames[d->gen], gAsmUtf8 ? "#encoding utf-8\n" : "");
+	fprintf(out, "// %s - decompiled by bpasm (docs/modding/programs.md)\n", d->opt->name ? d->opt->name : "program");
+	fprintf(out, "#engine %s\n%s\n", d->gen == GEN_COUNT ? "any" : kGenNames[d->gen], o->tools.asmUtf8 ? "#encoding utf-8\n" : "");
 	for(i = 0; i < d->funcCount; i++)
 	{
 		if(d->funcLine)
 			d->funcLine[i] = LinesSoFar(out);
-		if(!WriteFunction(d, &d->funcs[i], out, asmMask[i]))
+		if(!WriteFunction(o, d, &d->funcs[i], out, asmMask[i]))
 			fallbacks++;
 	}
 	return fallbacks;
@@ -2186,14 +2186,14 @@ static int FuncOfLine(const Dec_t* d, int line)
 	return best;
 }
 
-static char* WriteToBuffer(Dec_t* d, const uint8_t* asmMask, size_t* len, int* fallbacks)
+static char* WriteToBuffer(OpenBGI_t* o, Dec_t* d, const uint8_t* asmMask, size_t* len, int* fallbacks)
 {
 	FILE* mem = tmpfile();
 	char* text;
 	long n;
 	if(!mem)
 		return NULL;
-	*fallbacks = WriteProgram(d, asmMask, mem);
+	*fallbacks = WriteProgram(o, d, asmMask, mem);
 	n = ftell(mem);
 	fseek(mem, 0, SEEK_SET);
 	text = (char*)malloc((size_t)n + 1);
@@ -2205,7 +2205,7 @@ static char* WriteToBuffer(Dec_t* d, const uint8_t* asmMask, size_t* len, int* f
 	return text;
 }
 
-int Bpc_Decompile(const uint8_t* file, uint32_t size, const BpcDecOptions_t* opt, FILE* out)
+int Bpc_Decompile(OpenBGI_t* o, const uint8_t* file, uint32_t size, const BpcDecOptions_t* opt, FILE* out)
 {
 	Dec_t d;
 	DisMap_t map;
@@ -2232,7 +2232,7 @@ int Bpc_Decompile(const uint8_t* file, uint32_t size, const BpcDecOptions_t* opt
 		int again = 0;
 		if(whole)
 			break;
-		text = WriteToBuffer(&d, asmMask, &len, &fallbacks);
+		text = WriteToBuffer(o, &d, asmMask, &len, &fallbacks);
 		if(opt->noVerify)
 		{
 			fputs(text, out);
@@ -2241,7 +2241,7 @@ int Bpc_Decompile(const uint8_t* file, uint32_t size, const BpcDecOptions_t* opt
 		}
 		{
 			FILE* log = tmpfile();
-			Bpc_Compile(text, len, opt->name ? opt->name : "program", opt->gen, NULL, log ? log : stderr, &res);
+			Bpc_Compile(o, text, len, opt->name ? opt->name : "program", opt->gen, NULL, log ? log : stderr, &res);
 			if(res.errors && log)
 			{ // the first message names a line: the function there is the one that failed
 				char msg[0x400];
@@ -2355,15 +2355,15 @@ int Bpc_Decompile(const uint8_t* file, uint32_t size, const BpcDecOptions_t* opt
 	}
 	if(whole)
 	{
-		fprintf(out, "// %s - decompiled by bpasm (docs/bpc.md)\n", opt->name ? opt->name : "program");
-		fprintf(out, "#engine %s\n%s\n", d.gen == GEN_COUNT ? "any" : kGenNames[d.gen], gAsmUtf8 ? "#encoding utf-8\n" : "");
+		fprintf(out, "// %s - decompiled by bpasm (docs/modding/programs.md)\n", opt->name ? opt->name : "program");
+		fprintf(out, "#engine %s\n%s\n", d.gen == GEN_COUNT ? "any" : kGenNames[d.gen], o->tools.asmUtf8 ? "#encoding utf-8\n" : "");
 		fprintf(out, "__program {\n");
 		{
 			FILE* mem = tmpfile();
 			char line[0x1000];
 			if(mem)
 			{
-				Dis_WriteRange(&map, 0, map.size, d.gen, NULL, mem);
+				Dis_WriteRange(o, &map, 0, map.size, d.gen, NULL, mem);
 				fseek(mem, 0, SEEK_SET);
 				while(fgets(line, sizeof line, mem))
 					fputs(line, out);

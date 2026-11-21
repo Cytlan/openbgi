@@ -4,7 +4,7 @@
  *
  * background_internal.h - what the background types share (src/gfx/background/)
  *
- * The public interface is inc/bgi/gfx/background.h.  The base class and the
+ * The public interface is src/include/bgi/gfx/background.h.  The base class and the
  * factory are in base.c; the twelve types are one file each (plain.c,
  * crossfade.c, tiled.c, twopos.c, flipbook.c, displace.c, gradient.c,
  * ripple.c, stretch.c, zoom.c, mosaic.c, layers.c).  Every type file ends
@@ -21,23 +21,9 @@
 #include "bgi/common.h"
 #include "bgi/gfx/background.h"
 
-// the description of bitmap `no` of the shared bitmap manager; 0 when the slot is empty
-static inline int BgGetInfo(Bmp_t* out, int no)
-{
-	return BmpMgr_GetInfo(gDispBmpMgr, out, no);
-}
-
-// the generation of slot `no` (bumped whenever the script re-creates the bitmap)
-static inline int BgGen(int no)
-{
-	return BmpMgr_Generation(gDispBmpMgr, no);
-}
-
-// the description of bitmap `no` when its generation is still `gen` (it was not replaced); 1 if usable
-static inline int BgCurrent(Bmp_t* out, int no, int gen)
-{
-	return BgGetInfo(out, no) && BgGen(no) == gen;
-}
+int BgGetInfo(OpenBGI_t* o, Bmp_t* out, int no);          // the description of bitmap `no` of the shared bitmap manager; 0 when the slot is empty
+int BgGen(OpenBGI_t* o, int no);                          // the generation of slot `no` (bumped whenever the script re-creates the bitmap)
+int BgCurrent(OpenBGI_t* o, Bmp_t* out, int no, int gen); // the description of bitmap `no` when its generation is still `gen` (it was not replaced); 1 if usable
 
 // (a * b) >> sh in 64 bits, b zero-extended
 static inline int32_t MulShr(int32_t a, uint32_t b, int sh)
@@ -47,8 +33,8 @@ static inline int32_t MulShr(int32_t a, uint32_t b, int sh)
 }
 
 // the virtual methods of a background `b`
-#define VT(b)        ((const DispObjVtbl_t*)(b)->obj.vt)
-#define GET_LEVEL(b) (VT(b)->getLevel(&(b)->obj))
+#define VT(b)           ((const DispObjVtbl_t*)(b)->obj.vt)
+#define GET_LEVEL(o, b) (VT(b)->getLevel(o, &(b)->obj))
 
 /* a vtable that differs from the base only in the given slots: the DispObj
  * methods a type may override, then the three background methods */
@@ -62,6 +48,6 @@ static inline int32_t MulShr(int32_t a, uint32_t b, int sh)
 		setModeFn, matchFn, renderFn}
 
 // setPos of the types whose position is fixed: does nothing
-void Background_NopSetPos(DispObj_t* o, int x, int y);
+void Background_NopSetPos(OpenBGI_t* o, DispObj_t* obj, int x, int y);
 
 #endif // BGI_GFX_BACKGROUND_INTERNAL_H_

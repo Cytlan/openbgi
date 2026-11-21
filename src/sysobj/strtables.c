@@ -2,7 +2,7 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * strtables.c - numbered string lists (inc/bgi/sysobj/strtables.h)
+ * strtables.c - numbered string lists (src/include/bgi/sysobj/strtables.h)
  *
  * The tables are a singly linked list in creation order, each with a
  * singly linked list of its strings in insertion order (so an index is
@@ -10,6 +10,7 @@
  */
 #include "bgi/sysobj/strtables.h"
 #include "bgi/version.h"
+#include "bgi/core.h"
 
 typedef struct StrItem // one string of a table
 {
@@ -25,13 +26,11 @@ typedef struct StrTab // one table
 	struct StrTab* next; // the next table, in creation order
 } StrTab_t;
 
-static StrTab_t* gStrTabList; // every table, oldest first
-
 // the table with id `id`, NULL when there is none
-static StrTab_t* StrTab_Lookup(uint32_t id)
+static StrTab_t* StrTab_Lookup(OpenBGI_t* o, uint32_t id)
 {
 	StrTab_t* t;
-	for(t = gStrTabList; t && t->id != id; t = t->next)
+	for(t = o->sysobj.strTabList; t && t->id != id; t = t->next)
 		;
 	return t;
 }
@@ -51,9 +50,9 @@ static void StrTab_FreeItems(StrTab_t* t)
 }
 
 // Drop every table, or every table but GNAME_TABLE ("80 D8" passes keepNames; it matters from 1.616 on, when the names live there).
-void StrTab_Clear(int keepNames)
+void StrTab_Clear(OpenBGI_t* o, int keepNames)
 {
-	StrTab_t **link = &gStrTabList, *t;
+	StrTab_t **link = &o->sysobj.strTabList, *t;
 	while((t = *link) != NULL)
 	{
 		if(keepNames && t->id == GNAME_TABLE)
@@ -66,16 +65,16 @@ void StrTab_Clear(int keepNames)
 	}
 }
 
-int StrTab_Count(uint32_t id)
+int StrTab_Count(OpenBGI_t* o, uint32_t id)
 {
-	StrTab_t* t = StrTab_Lookup(id);
+	StrTab_t* t = StrTab_Lookup(o, id);
 	return t ? (int)t->count : 0;
 }
 
 // the table, created empty at the end of the list when it is missing
-static StrTab_t* StrTab_Need(uint32_t id)
+static StrTab_t* StrTab_Need(OpenBGI_t* o, uint32_t id)
 {
-	StrTab_t **tlink = &gStrTabList, *t;
+	StrTab_t **tlink = &o->sysobj.strTabList, *t;
 	while(*tlink && (*tlink)->id != id)
 		tlink = &(*tlink)->next;
 	if(*tlink)
@@ -103,9 +102,9 @@ static int StrTab_Append(StrTab_t* t, const char* s)
 }
 
 // the index of the first string equal to s, -1 when absent or the table is unknown
-int StrTab_Find(uint32_t id, const char* s)
+int StrTab_Find(OpenBGI_t* o, uint32_t id, const char* s)
 {
-	StrTab_t* t = StrTab_Lookup(id);
+	StrTab_t* t = StrTab_Lookup(o, id);
 	StrItem_t* it;
 	int i;
 	if(!t)
@@ -119,12 +118,12 @@ int StrTab_Find(uint32_t id, const char* s)
 /* Append a copy of s to the table (created when needed) and return its
  * index.  1.599 on keep each string once per table: adding a string that
  * is present yields its index ("80 DC" pushes that index). */
-int StrTab_Add(uint32_t id, const char* s)
+int StrTab_Add(OpenBGI_t* o, uint32_t id, const char* s)
 {
-	StrTab_t* t = StrTab_Need(id);
-	if(gEngine->gen >= GEN_1_599)
+	StrTab_t* t = StrTab_Need(o, id);
+	if(o->engine.profile->gen >= GEN_1_599)
 	{
-		int i = StrTab_Find(id, s);
+		int i = StrTab_Find(o, id, s);
 		if(i >= 0)
 			return i;
 	}
@@ -132,9 +131,9 @@ int StrTab_Add(uint32_t id, const char* s)
 }
 
 // drop table `id`; 1 when it existed
-int StrTab_Remove(uint32_t id)
+int StrTab_Remove(OpenBGI_t* o, uint32_t id)
 {
-	StrTab_t **tlink = &gStrTabList, *t;
+	StrTab_t **tlink = &o->sysobj.strTabList, *t;
 	while(*tlink && (*tlink)->id != id)
 		tlink = &(*tlink)->next;
 	t = *tlink;
@@ -149,19 +148,19 @@ int StrTab_Remove(uint32_t id)
  * after the other at strs ("80 DA"); count 0 only drops the table.  The
  * strings are appended as they are, duplicates included.  1 done, 0 for a
  * negative count or a NULL strs. */
-int StrTab_SetAll(uint32_t id, int count, const char* strs)
+int StrTab_SetAll(OpenBGI_t* o, uint32_t id, int count, const char* strs)
 {
 	StrTab_t* t;
 	int i;
 	if(count == 0)
 	{
-		StrTab_Remove(id);
+		StrTab_Remove(o, id);
 		return 1;
 	}
 	if(count < 0 || !strs)
 		return 0;
-	StrTab_Remove(id);
-	t = StrTab_Need(id);
+	StrTab_Remove(o, id);
+	t = StrTab_Need(o, id);
 	for(i = 0; i < count; i++)
 	{
 		StrTab_Append(t, strs);
@@ -173,9 +172,9 @@ int StrTab_SetAll(uint32_t id, int count, const char* strs)
 /* Pack every string of table `id`, terminators included, into dst in
  * table order ("80 DB"); a NULL dst only measures.  The bytes written (or
  * needed), 0 for an unknown table. */
-int StrTab_Gather(char* dst, uint32_t id)
+int StrTab_Gather(OpenBGI_t* o, char* dst, uint32_t id)
 {
-	StrTab_t* t = StrTab_Lookup(id);
+	StrTab_t* t = StrTab_Lookup(o, id);
 	StrItem_t* it;
 	int total = 0;
 	if(!t)
@@ -194,9 +193,9 @@ int StrTab_Gather(char* dst, uint32_t id)
 }
 
 // the length of string `idx` (without terminator) into *outLen ("80 DE"): 0 ok, 0x80000001 unknown table, 0x80000002 bad index
-int StrTab_Length(int32_t* outLen, uint32_t id, uint32_t idx)
+int StrTab_Length(OpenBGI_t* o, int32_t* outLen, uint32_t id, uint32_t idx)
 {
-	StrTab_t* t = StrTab_Lookup(id);
+	StrTab_t* t = StrTab_Lookup(o, id);
 	StrItem_t* it;
 	uint32_t i;
 	if(!t)
@@ -212,9 +211,9 @@ int StrTab_Length(int32_t* outLen, uint32_t id, uint32_t idx)
 }
 
 // copy string `idx` into dst ("80 DD"): 0 ok, 0x80000001 unknown table, 0x80000002 bad index
-int StrTab_Get(char* dst, uint32_t id, uint32_t idx)
+int StrTab_Get(OpenBGI_t* o, char* dst, uint32_t id, uint32_t idx)
 {
-	StrTab_t* t = StrTab_Lookup(id);
+	StrTab_t* t = StrTab_Lookup(o, id);
 	StrItem_t* it;
 	uint32_t i;
 	if(!t)

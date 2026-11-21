@@ -4,7 +4,7 @@
  *
  * mgr_internal.h - what the graphics manager's files share (src/gfx/mgr/)
  *
- * The public interface is inc/bgi/gfx/gfxmgr.h.  gfxmgr.c holds the
+ * The public interface is src/include/bgi/gfx/gfxmgr.h.  gfxmgr.c holds the
  * manager itself (its life cycle, the back buffer, the handles), frame.c
  * the frame cycle, background.c the background operations; the per-class
  * files (sprites.c, filters.c, maps.c, windows.c, screens.c, knobs.c,
@@ -36,34 +36,34 @@
 #define NO_OBJECT 0xff // the result of every wrapper for an unknown handle
 
 // the object's effective visibility (shown, enabled, not faded out, not fully transparent)
-static inline int IsVisible(DispObj_t* o)
+static inline int IsVisible(OpenBGI_t* o, DispObj_t* obj)
 {
-	return o->vt->isVisible(o);
+	return obj->vt->isVisible(o, obj);
 }
 
 // hand the object's footprint to the compositor as dirty
-static inline void Invalidate(DispObj_t* o)
+static inline void Invalidate(OpenBGI_t* o, DispObj_t* obj)
 {
-	o->vt->invalidate(o);
+	obj->vt->invalidate(o, obj);
 }
 
-static inline void InvalidateIfVisible(DispObj_t* o)
+static inline void InvalidateIfVisible(OpenBGI_t* o, DispObj_t* obj)
 {
-	if(IsVisible(o))
-		Invalidate(o);
+	if(IsVisible(o, obj))
+		Invalidate(o, obj);
 }
 
 /* the show / hide bracket shared by every *Show wrapper: invalidate only
  * when the effective visibility changed - the footprint is the same
  * before and after, so one call is enough.  1 ok, 0 for no object. */
-int Mgr_ShowBracket(DispObj_t* o, int on);
+int Mgr_ShowBracket(OpenBGI_t* o, DispObj_t* obj, int on);
 // the first free slot of a table (the caller has checked that the table is not full)
 uint32_t Mgr_FreeSlot(DispObj_t** table);
 // destroy every object of a table and reset its counters
-void Mgr_DeleteAll(DispObj_t** table, int n, int32_t* count, int32_t* nextId);
+void Mgr_DeleteAll(OpenBGI_t* o, DispObj_t** table, int n, int32_t* count, int32_t* nextId);
 /* the common delete: repaint what the object covered (the whole screen
  * with invalidateAll), take it out of the compositor, destroy it, free the
  * slot.  1 ok, 0 for no object. */
-int Mgr_DeleteFromTable(Gfx_t* g, DispObj_t** table, DispObj_t* o, uint32_t h, int32_t* count, int invalidateAll);
+int Mgr_DeleteFromTable(OpenBGI_t* o, Gfx_t* g, DispObj_t** table, DispObj_t* obj, uint32_t h, int32_t* count, int invalidateAll);
 
 #endif // BGI_GFX_MGR_INTERNAL_H_

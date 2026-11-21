@@ -7,23 +7,24 @@
  *             and tag stripping of the inline markup, and the character
  *             classes of Japanese typesetting (opening / closing brackets,
  *             the glyphs that rotate or shift in vertical writing)
- *             (inc/bgi/gfx/text.h)
+ *             (src/include/bgi/gfx/text.h)
  *
  * The class tables are the MSG_TXT_* strings of tools/messages.txt; a
  * character is tested by membership in the table (CharInSet).
  */
 #include "text_internal.h"
+#include "bgi/core.h"
 
 // ---- Shift-JIS helpers -------------------------------------------------------------------------
 
 // count the characters of `s`; with `out` also store their codes
-int SjisCodes(int32_t* outOrNull, const char* s)
+int SjisCodes(OpenBGI_t* o, int32_t* outOrNull, const char* s)
 {
 	int n = 0;
 	while(*s)
 	{
 		uint32_t code;
-		s += TextGetChar(&code, s);
+		s += TextGetChar(o, &code, s);
 		if(outOrNull)
 			outOrNull[n] = (int32_t)code;
 		n++;
@@ -32,19 +33,19 @@ int SjisCodes(int32_t* outOrNull, const char* s)
 }
 
 // one character of `s` as a NUL-terminated string in `out` (TEXT_CHAR_MAX bytes)
-static void CopyChar(char* out, const char* s)
+static void CopyChar(OpenBGI_t* o, char* out, const char* s)
 {
-	int len = TextCharLen(s);
+	int len = TextCharLen(o, s);
 	memcpy(out, s, (size_t)len);
 	out[len] = 0;
 }
 
 // 1 when the first character of `p` is in the NUL-terminated Shift-JIS literal `set`
-static int CharInSet(const char* p, const char* set)
+static int CharInSet(OpenBGI_t* o, const char* p, const char* set)
 {
 	uint32_t c;
-	TextGetChar(&c, p);
-	return TextCodeInSet(c, set);
+	TextGetChar(o, &c, p);
+	return TextCodeInSet(o, c, set);
 }
 
 // ---- measuring ---------------------------------------------------------------------------------
@@ -53,38 +54,38 @@ static int CharInSet(const char* p, const char* set)
  * whole string, out[1] the ink extent (without half of the first and last
  * proportional gaps), out[2] the advance up to the middle of the last gap.
  * 1 ok, 0 when the font is unknown (nothing written). */
-int Text_Measure(int32_t out[3], const char* str, int font, int proportional)
+int Text_Measure(OpenBGI_t* o, int32_t out[3], const char* str, int font, int proportional)
 {
 	FontInfo_t fi;
-	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+	if(!BmpMgr_FontInfo(o->text.textBmpMgr, &fi, font))
 		return 0;
-	return Text_MeasureInfo(out, str, &fi, proportional);
+	return Text_MeasureInfo(o, out, str, &fi, proportional);
 }
 
 /* the measure with the font given (the markup's temporary fonts have no
  * handle).  Proportional text advances by the ink width plus the glyph's
  * gap (Font_GapFor2); fixed-pitch text by the full (half for a single-byte
- * character) glyph width plus gCharPitch, plus the font's "91 0F" extra
- * width from 1.529 on.  Always 1. */
-int Text_MeasureInfo(int32_t out[3], const char* str, const FontInfo_t* fi, int proportional)
+ * character) glyph width plus o->text.charPitch, plus the font's "91 0F"
+ * extra width from 1.529 on.  Always 1. */
+int Text_MeasureInfo(OpenBGI_t* o, int32_t out[3], const char* str, const FontInfo_t* fi, int proportional)
 {
 	Bmp_t cell;
 	int glyphW, total = 0, firstHalf = 0, first = 1, gap = 0, pitch;
 
-	pitch = proportional ? 0 : gCharPitch;
-	if(!proportional && gEngine->gen >= GEN_1_529 && fi->font)
+	pitch = proportional ? 0 : o->text.charPitch;
+	if(!proportional && o->engine.profile->gen >= GEN_1_529 && fi->font)
 		pitch += fi->font->extraW[fi->italic ? 1 : 0];
-	Bmp_AllocScreen(&cell, 2 * fi->size, fi->size, 1);
+	Bmp_AllocScreen(o, &cell, 2 * fi->size, fi->size, 1);
 	glyphW = FontInfo_GlyphW(fi);
 	while(*str)
 	{
 		Bmp_t view = cell;
 		Glyph_t g;
 		uint32_t code;
-		int len = TextGetChar(&code, str);
-		int dbcs = TextIsWide(code, len);
+		int len = TextGetChar(o, &code, str);
+		int dbcs = TextIsWide(o, code, len);
 
-		Text_PaintGlyph(&view, &g, (int)code, fi->font, 0xffffff);
+		Text_PaintGlyph(o, &view, &g, (int)code, fi->font, 0xffffff);
 		if(proportional)
 		{
 			Bmp_CropGlyph(&view, &g);
@@ -120,26 +121,26 @@ int Text_MeasureInfo(int32_t out[3], const char* str, const FontInfo_t* fi, int 
  * of characters.  The original asks GDI for the ABC of each glyph; here
  * the ink extent of the rasterised glyph stands in.  1 ok, 0 unknown
  * font. */
-int Text_AbcWidths(int32_t* out, int32_t* outCount, const char* str, int font)
+int Text_AbcWidths(OpenBGI_t* o, int32_t* out, int32_t* outCount, const char* str, int font)
 {
 	FontInfo_t fi;
 	Bmp_t cell;
 	int glyphW, n = 0;
-	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+	if(!BmpMgr_FontInfo(o->text.textBmpMgr, &fi, font))
 		return 0;
-	Bmp_AllocScreen(&cell, 2 * fi.size, fi.size, 1);
+	Bmp_AllocScreen(o, &cell, 2 * fi.size, fi.size, 1);
 	glyphW = FontInfo_GlyphW(&fi);
 	while(*str)
 	{
 		Bmp_t view = cell;
 		Glyph_t g;
 		uint32_t code;
-		int len = TextGetChar(&code, str);
-		int adv = TextIsWide(code, len) ? glyphW : glyphW / 2;
+		int len = TextGetChar(o, &code, str);
+		int adv = TextIsWide(o, code, len) ? glyphW : glyphW / 2;
 		if(out)
 		{
 			int a, b;
-			Text_PaintGlyph(&view, &g, (int)code, fi.font, 0xffffff);
+			Text_PaintGlyph(o, &view, &g, (int)code, fi.font, 0xffffff);
 			a = g.left;
 			b = g.right >= g.left ? g.right - g.left + 1 : 0;
 			if(!b)
@@ -227,13 +228,13 @@ int Text_StripTags(char* out, const char* str)
 /* copy the run of closing punctuation (MSG_TXT_CLOSING_RUN: the characters
  * that may not start a line) that starts at `p` to `out` (NUL-terminated);
  * returns the number of characters */
-int Text_CollectClosing(char* out, const char* p)
+int Text_CollectClosing(OpenBGI_t* o, char* out, const char* p)
 {
 	int n = 0;
 
-	while(*p && CharInSet(p, MSG_TXT_CLOSING_RUN))
+	while(*p && CharInSet(o, p, MSG_TXT_CLOSING_RUN))
 	{
-		int len = TextCharLen(p);
+		int len = TextCharLen(o, p);
 		memcpy(out, p, (size_t)len);
 		out += len;
 		p += len;
@@ -244,25 +245,25 @@ int Text_CollectClosing(char* out, const char* p)
 }
 
 // is the first character of `p` an opening bracket that may hang into the left margin
-int Text_IsHangBracket(const char* p)
+int Text_IsHangBracket(OpenBGI_t* o, const char* p)
 {
-	return CharInSet(p, MSG_TXT_HANG_BRACKETS);
+	return CharInSet(o, p, MSG_TXT_HANG_BRACKETS);
 }
 
 // is the first character of `p` closing punctuation that may overhang the right margin
-int Text_IsClosing(const char* p)
+int Text_IsClosing(OpenBGI_t* o, const char* p)
 {
-	return CharInSet(p, MSG_TXT_CLOSING);
+	return CharInSet(o, p, MSG_TXT_CLOSING);
 }
 
 // is the first character of `p` an opening bracket that may not end a line
-int Text_IsOpening(const char* p)
+int Text_IsOpening(OpenBGI_t* o, const char* p)
 {
-	return CharInSet(p, MSG_TXT_OPENING);
+	return CharInSet(o, p, MSG_TXT_OPENING);
 }
 
 // the n-th (0-based) character of `s` as a string; 1 when it exists
-int Text_NthChar(char* out, const char* s, int n)
+int Text_NthChar(OpenBGI_t* o, char* out, const char* s, int n)
 {
 	int i;
 
@@ -271,10 +272,10 @@ int Text_NthChar(char* out, const char* s, int n)
 	for(i = 0; *s && i <= n; i++)
 	{
 		if(i < n)
-			s += TextCharLen(s);
+			s += TextCharLen(o, s);
 		else
 		{
-			CopyChar(out, s);
+			CopyChar(o, out, s);
 			return 1;
 		}
 	}
@@ -286,22 +287,22 @@ int Text_NthChar(char* out, const char* s, int n)
  * the size.  The first four entries of the shift table (，．、。) move
  * further (67%) than the small kana (20%).  1 when the character is in
  * either table. */
-int Text_VertClass(int32_t out[3], const char* s)
+int Text_VertClass(OpenBGI_t* o, int32_t out[3], const char* s)
 {
 	const char* set;
 	uint32_t c;
 	int idx = 0;
 
 	out[0] = out[1] = out[2] = 0;
-	if(CharInSet(s, MSG_TXT_VERT_ROTATE))
+	if(CharInSet(o, s, MSG_TXT_VERT_ROTATE))
 	{
 		out[0] = 1;
 		return 1;
 	}
-	TextGetChar(&c, s);
+	TextGetChar(o, &c, s);
 	for(set = MSG_TXT_VERT_SHIFT; *set; idx++)
 	{
-		if(TextTableChar(&set) == c)
+		if(TextTableChar(o, &set) == c)
 		{
 			out[1] = idx >= 4 ? 0x14 : 0x43;
 			out[2] = idx >= 4 ? -0x14 : -0x43;

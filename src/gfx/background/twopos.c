@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * twopos.c - background type 4: two positioned bitmaps, with a gray wipe
- *            between them (inc/bgi/gfx/background.h; selected by "90 43")
+ *            between them (src/include/bgi/gfx/background.h; selected by "90 43")
  *
  * The lower bitmap (or a solid colour) is copied at (x2, y2); the upper
  * one is drawn over it at (x1, y1), either alpha-blended by the object's
@@ -19,17 +19,18 @@
  */
 #include "background_internal.h"
 #include "bgi/version.h"
+#include "bgi/core.h"
 
 // the wipe map is screen aligned and of any size (1.529 on)
-static int Bg4_ScreenGray(void)
+static int Bg4_ScreenGray(OpenBGI_t* o)
 {
-	return gEngine->gen >= GEN_1_529;
+	return o->engine.profile->gen >= GEN_1_529;
 }
 
 // the wipe of the upper bitmap `a` at (ax, ay) of `dst` through the map `g`, in the form of the build
-static void Bg4_Wipe(const Bg4_t* b, Bmp_t* dst, int ax, int ay, const Bmp_t* a, const Bmp_t* g, const Rect_t* local, int level)
+static void Bg4_Wipe(OpenBGI_t* o, const Bg4_t* b, Bmp_t* dst, int ax, int ay, const Bmp_t* a, const Bmp_t* g, const Rect_t* local, int level)
 {
-	if(Bg4_ScreenGray())
+	if(Bg4_ScreenGray(o))
 	{
 		Bmp_t band = *g;
 		Rect_t r;
@@ -43,17 +44,17 @@ static void Bg4_Wipe(const Bg4_t* b, Bmp_t* dst, int ax, int ay, const Bmp_t* a,
 		Blit_ThroughGray(dst, ax, ay, a, g, b->grayParam, level);
 }
 
-static void Bg4_Destroy(DispObj_t* o, int flags)
+static void Bg4_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	Background_Dtor((Background_t*)o);
+	Background_Dtor((Background_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
 // effect 1 (alpha blend), no bitmaps, no wipe
-void Bg4_Ctor(Bg4_t* b)
+void Bg4_Ctor(OpenBGI_t* o, Bg4_t* b)
 {
-	Background_Ctor(&b->bg, 4);
+	Background_Ctor(o, &b->bg, 4);
 	b->bg.obj.vt = &Bg4_Vtbl.base;
 	b->bmp1 = -1;
 	b->bmp2 = -1;
@@ -62,16 +63,16 @@ void Bg4_Ctor(Bg4_t* b)
 }
 
 // the setPos / getPos slots address the upper bitmap's position
-static void Bg4_SetPos(DispObj_t* o, int x, int y)
+static void Bg4_SetPos(OpenBGI_t* o, DispObj_t* obj, int x, int y)
 {
-	Bg4_t* b = (Bg4_t*)o;
+	Bg4_t* b = (Bg4_t*)obj;
 	b->x1 = x;
 	b->y1 = y;
 }
 
-static void Bg4_GetPos(DispObj_t* o, int32_t out[2])
+static void Bg4_GetPos(OpenBGI_t* o, DispObj_t* obj, int32_t out[2])
 {
-	Bg4_t* b = (Bg4_t*)o;
+	Bg4_t* b = (Bg4_t*)obj;
 	out[0] = b->x1;
 	out[1] = b->y1;
 }
@@ -84,21 +85,21 @@ static int Bg4_IsSentinel(int no)
 
 /* bmp1 may have any size (0x80000001 if missing); bmp2 is a bitmap of any
  * size (0x80000002 if missing) or a sentinel.  0 ok. */
-int Bg4_Set(Bg4_t* b, int x1, int y1, int bmp1, int x2, int y2, int bmp2)
+int Bg4_Set(OpenBGI_t* o, Bg4_t* b, int x1, int y1, int bmp1, int x2, int y2, int bmp2)
 {
 	Bmp_t info;
-	if(!BgGetInfo(&info, bmp1))
+	if(!BgGetInfo(o, &info, bmp1))
 		return (int)0x80000001;
 	if(Bg4_IsSentinel(bmp2))
 	{
-		b->gen1 = BgGen(bmp1);
+		b->gen1 = BgGen(o, bmp1);
 	}
 	else
 	{
-		if(!BgGetInfo(&info, bmp2))
+		if(!BgGetInfo(o, &info, bmp2))
 			return (int)0x80000002;
-		b->gen1 = BgGen(bmp1);
-		b->gen2 = BgGen(bmp2);
+		b->gen1 = BgGen(o, bmp1);
+		b->gen2 = BgGen(o, bmp2);
 	}
 	b->x1 = x1;
 	b->y1 = y1;
@@ -112,9 +113,9 @@ int Bg4_Set(Bg4_t* b, int x1, int y1, int bmp1, int x2, int y2, int bmp2)
 /* a grayscale map (mode 3) that drives the wipe between the two bitmaps,
  * with `param` as the threshold parameter of Blit_ThroughGray; gray -1
  * selects a plain alpha blend.  0 ok, 0x80000003 map missing, 0x80000004
- * not grayscale, 0x80000005 not screen sized (up to 1.494 only: later
+ * not grayscale, 0x80000005 not screen sized (up to 1.492 only: later
  * builds take a map of any size). */
-int Bg4_SetWipe(Bg4_t* b, int gray, int param)
+int Bg4_SetWipe(OpenBGI_t* o, Bg4_t* b, int gray, int param)
 {
 	Bmp_t info, back;
 	if(gray == -1)
@@ -122,16 +123,16 @@ int Bg4_SetWipe(Bg4_t* b, int gray, int param)
 		b->gray = -1;
 		return 0;
 	}
-	if(!BgGetInfo(&info, gray))
+	if(!BgGetInfo(o, &info, gray))
 		return (int)0x80000003;
 	if(info.mode != 3)
 		return (int)0x80000004;
-	Gfx_GetBackBmp(&back);
-	if(!Bg4_ScreenGray() && (info.w != back.w || info.h != back.h))
+	Gfx_GetBackBmp(o, &back);
+	if(!Bg4_ScreenGray(o) && (info.w != back.w || info.h != back.h))
 		return (int)0x80000005;
 	b->gray = gray;
 	b->grayParam = param;
-	b->grayGen = BgGen(gray);
+	b->grayGen = BgGen(o, gray);
 	return 0;
 }
 
@@ -139,12 +140,12 @@ int Bg4_SetWipe(Bg4_t* b, int gray, int param)
  * effective level, or revealed through the wipe map; 0 once a bitmap has
  * been replaced.  The bitmap positions are relative to the screen, so
  * they are offset by the dirty rectangle's corner. */
-static int Bg4_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
+static int Bg4_Render(OpenBGI_t* o, Background_t* bg, Bmp_t* dst, const Rect_t* local)
 {
 	Bg4_t* b = (Bg4_t*)bg;
 	Bmp_t a, s, g;
 	int level, ax, ay;
-	if(!BgCurrent(&a, b->bmp1, b->gen1))
+	if(!BgCurrent(o, &a, b->bmp1, b->gen1))
 		return 0;
 	level = DispObj_EffectiveLevel(&b->bg.obj);
 	ax = -(b->x1 + local->l); // bitmap positions relative to `dst`
@@ -152,14 +153,14 @@ static int Bg4_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
 
 	if(!Bg4_IsSentinel(b->bmp2))
 	{
-		if(!BgCurrent(&s, b->bmp2, b->gen2))
+		if(!BgCurrent(o, &s, b->bmp2, b->gen2))
 			return 0;
 		if(b->gray != -1)
 		{
-			if(!BgCurrent(&g, b->gray, b->grayGen))
+			if(!BgCurrent(o, &g, b->gray, b->grayGen))
 				return 0;
 			Bmp_Blit(dst, -(b->x2 + local->l), -(b->y2 + local->t), &s, 0x80, 0);
-			Bg4_Wipe(b, dst, ax, ay, &a, &g, local, level);
+			Bg4_Wipe(o, b, dst, ax, ay, &a, &g, local, level);
 		}
 		else
 		{
@@ -188,7 +189,7 @@ static int Bg4_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
 				fill = 0xffffff;
 				effect = 0xc1; // tint toward white
 			}
-			Gfx_GetBackBmp(&back);
+			Gfx_GetBackBmp(o, &back);
 			needFill = !(b->x1 >= 0 && b->y1 >= 0 &&
 				(uint32_t)(a.w - b->x1) >= (uint32_t)back.w &&
 				(uint32_t)(a.h - b->y1) >= (uint32_t)back.h &&
@@ -196,11 +197,11 @@ static int Bg4_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
 		}
 		if(b->gray != -1)
 		{
-			if(!BgCurrent(&g, b->gray, b->grayGen))
+			if(!BgCurrent(o, &g, b->gray, b->grayGen))
 				return 0;
 			if(needFill)
 				Bmp_Fill(dst, NULL, fill);
-			Bg4_Wipe(b, dst, ax, ay, &a, &g, local, level);
+			Bg4_Wipe(o, b, dst, ax, ay, &a, &g, local, level);
 		}
 		else
 		{

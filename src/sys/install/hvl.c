@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * hvl.c - the hash verification list "BGI.hvl" and its file hash
- *         (install_internal.h; the script entry points in inc/bgi/install.h)
+ *         (install_internal.h; the script entry points in src/include/bgi/install.h)
  *
  * The list sits next to the engine on the disc: a 16-byte header
  * ("BHV_____", the record count at offset 12) and 0x40-byte records of a
@@ -56,14 +56,14 @@ void HvHash_UpdateBuf(uint8_t* state, const void* data, uint32_t n)
 /* "80 E9" of 1.69 build 472 on: the hash of a whole file, read in 64 KB
  * blocks, into the 8 bytes at `out` (zeroed first); 1 done, 0 when the
  * file cannot be opened (`out` is untouched then). */
-int HvHash_File(uint8_t* out, const char* path)
+int HvHash_File(OpenBGI_t* o, uint8_t* out, const char* path)
 {
 	File_t f;
 	HvHash_t hash = {0, 0, 0, 0, 0};
 	uint8_t* buf;
 	uint32_t remaining;
 	File_Ctor(&f);
-	if(!File_OpenRead(&f, path))
+	if(!File_OpenRead(o, &f, path))
 	{
 		File_Dtor(&f);
 		return 0;
@@ -93,13 +93,13 @@ int HvHash_File(uint8_t* out, const char* path)
  * at *outRecs, their number into *outCount.  Returns 0, or 0x80000001 when
  * the file cannot be opened, 0x80000002 for a bad header, 0x80000003 when
  * the records are short; the outputs are untouched then. */
-uint32_t Hvl_Load(int* outCount, uint8_t** outRecs, const char* path)
+uint32_t Hvl_Load(OpenBGI_t* o, int* outCount, uint8_t** outRecs, const char* path)
 {
 	File_t f;
 	uint8_t hdr[16];
 	uint32_t r = 0;
 	File_Ctor(&f);
-	if(!File_OpenRead(&f, path))
+	if(!File_OpenRead(o, &f, path))
 	{
 		r = 0x80000001u;
 	}

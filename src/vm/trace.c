@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * trace.c - development aids of the script VM, switched on through the
- *           environment (inc/bgi/vm.h); none of this is part of the
+ *           environment (src/include/bgi/vm.h); none of this is part of the
  *           original engine
  *
  *   BGI_TRACE=1            print every executed instruction to stderr:
@@ -21,28 +21,15 @@
  *                          "family opcode count" lines to the file at exit
  *
  * The scheduler (sched.c) calls Vm_TraceInit once, then Vm_TraceBefore and
- * Vm_TraceAfter around every instruction while gVmTraceOn is set, and
- * Vm_TraceShutdown when the machine stops; MsgBox (error.c) calls
+ * Vm_TraceAfter around every instruction while o->trace.vmTraceOn is set,
+ * and Vm_TraceShutdown when the machine stops; MsgBox (error.c) calls
  * Vm_TraceDump before it shows any message box, so the ring comes out on
- * every error.  See docs/vm.md, "Development aids".
+ * every error.  See docs/dev/vm.md, "Development aids".
  */
 #include "bgi/vm.h"
 #include "bgi/engine.h"
-#include "bgi/os.h"
-
-int gVmTraceOn; // any aid is on: the scheduler calls Vm_TraceBefore / Vm_TraceAfter
-
-// ---- the full trace (BGI_TRACE, BGI_TRACE_FROM) -----------------------------------------
-
-static int gVmTrace;             // print (or record) every instruction: BGI_TRACE, BGI_TRACE_LAST or BGI_TRACE_OPS is set
-static const char* gVmTraceProg; // the comma-separated programs of BGI_TRACE, NULL for all
-static uint32_t gVmTraceFrom;    // milliseconds after the first instruction before printing starts
-
-// ---- selected instructions (BGI_TRACE_OPS) ------------------------------------------------
-
-static uint8_t gVmTraceOps[OPFAM_COUNT][256]; // [family][opcode] = 1 to trace it
-static int gVmTraceOpsOn;                     // BGI_TRACE_OPS named at least one instruction: only those are printed
-static int gVmTraceOpsPending;                // a traced instruction is executing: print its result after it
+#include "bgi/host.h"
+#include "bgi/core.h"
 
 // ---- the ring of the last instructions (BGI_TRACE_LAST) ----------------------------------
 
@@ -54,15 +41,11 @@ typedef struct TraceEntry
 	int tid;                           // thread id
 	uint8_t code[4];                   // the instruction's first four bytes
 } TraceEntry_t;
-static TraceEntry_t* gTraceRing;                          // BGI_TRACE_LAST entries, NULL without it
-static int gTraceRingSize, gTraceRingPos, gTraceRingFull; // capacity, next slot to write, 1 once it wrapped
 
 // ---- opcode statistics (BGI_OPSTAT) ---------------------------------------------------------
 
-static const char* gVmStatFile; // the output file, NULL without BGI_OPSTAT
-// gVmStat[0] counts the first byte of every instruction, gVmStat[f] the
+// o->trace.vmStat[0] counts the first byte of every instruction, o->trace.vmStat[f] the
 // second byte of the instructions whose first byte is kStatFamily[f]
-static uint32_t gVmStat[8][256];
 static const uint8_t kStatFamily[8] = {0x00, 0x80, 0x90, 0x91, 0x92, 0xa0, 0xb0, 0xc0};
 
 // ---- helpers ----------------------------------------------------------------------------------
@@ -90,9 +73,9 @@ static const char* TraceModule(Thread_t* t, uint32_t opIP, uint32_t* rel, char* 
 }
 
 // Is `name` one of the comma-separated programs of BGI_TRACE?
-static int TraceMatches(const char* name)
+static int TraceMatches(OpenBGI_t* o, const char* name)
 {
-	const char* p = gVmTraceProg;
+	const char* p = o->trace.vmTraceProg;
 	size_t n = strlen(name);
 	while(*p)
 	{
@@ -132,9 +115,9 @@ static int TraceFamilyOf(const uint8_t* code, int* op)
 }
 
 /* Parse BGI_TRACE_OPS ("90:50,90:51,main:16": family name, colon, opcode
- * in hex) into gVmTraceOps; an entry with an unknown family name is
- * ignored.  One valid entry switches the selective trace on. */
-static void TraceParseOps(const char* p)
+ * in hex) into o->trace.vmTraceOps; an entry with an unknown family name
+ * is ignored.  One valid entry switches the selective trace on. */
+static void TraceParseOps(OpenBGI_t* o, const char* p)
 {
 	static const char* const kNames[OPFAM_COUNT] = {"main", "7f", "80", "81", "90", "91", "92", "a0", "b0", "c0", "d0", "e0", "ef"};
 	while(*p)
@@ -147,9 +130,9 @@ static void TraceParseOps(const char* p)
 			for(f = 0; f < OPFAM_COUNT; f++)
 				if(strlen(kNames[f]) == (size_t)(colon - p) && strncmp(kNames[f], p, (size_t)(colon - p)) == 0)
 				{
-					gVmTraceOps[f][strtoul(colon + 1, NULL, 16) & 0xff] = 1;
-					gVmTraceOpsOn = 1;
-					gVmTrace = 1;
+					o->trace.vmTraceOps[f][strtoul(colon + 1, NULL, 16) & 0xff] = 1;
+					o->trace.vmTraceOpsOn = 1;
+					o->trace.vmTrace = 1;
 				}
 		p += len + (end ? 1 : 0);
 	}
@@ -158,11 +141,11 @@ static void TraceParseOps(const char* p)
 // ---- the interface used by the scheduler ---------------------------------------------------
 
 /* Read the environment variables of the file header once, before the first
- * instruction, and set gVmTraceOn when any aid is wanted.  The aids
- * exclude each other in this order: a selection (BGI_TRACE_OPS) wins over
- * the ring (BGI_TRACE_LAST), which wins over the full trace (BGI_TRACE);
- * BGI_OPSTAT counts independently of them. */
-void Vm_TraceInit(void)
+ * instruction, and set o->trace.vmTraceOn when any aid is wanted.  The
+ * aids exclude each other in this order: a selection (BGI_TRACE_OPS) wins
+ * over the ring (BGI_TRACE_LAST), which wins over the full trace
+ * (BGI_TRACE); BGI_OPSTAT counts independently of them. */
+void Vm_TraceInit(OpenBGI_t* o)
 {
 	const char* v = getenv("BGI_TRACE");
 	const char* last = getenv("BGI_TRACE_LAST");
@@ -171,48 +154,48 @@ void Vm_TraceInit(void)
 		v = NULL; // an empty value is the same as none
 	if(last && !*last)
 		last = NULL;
-	gVmTrace = v != NULL;
-	gVmTraceProg = (v && strcmp(v, "1") != 0) ? v : NULL;
+	o->trace.vmTrace = v != NULL;
+	o->trace.vmTraceProg = (v && strcmp(v, "1") != 0) ? v : NULL;
 	if(getenv("BGI_TRACE_FROM"))
-		gVmTraceFrom = (uint32_t)atoi(getenv("BGI_TRACE_FROM"));
-	gVmStatFile = getenv("BGI_OPSTAT");
-	if(gVmStatFile && !*gVmStatFile)
-		gVmStatFile = NULL;
+		o->trace.vmTraceFrom = (uint32_t)atoi(getenv("BGI_TRACE_FROM"));
+	o->trace.vmStatFile = getenv("BGI_OPSTAT");
+	if(o->trace.vmStatFile && !*o->trace.vmStatFile)
+		o->trace.vmStatFile = NULL;
 	if(last && atoi(last) > 0)
 	{
-		gTraceRingSize = atoi(last);
-		gTraceRing = (TraceEntry_t*)BGI_Calloc((size_t)gTraceRingSize * sizeof(TraceEntry_t));
-		gVmTrace = 1;
+		o->trace.traceRingSize = atoi(last);
+		o->trace.traceRing = (TraceEntry_t*)BGI_Calloc((size_t)o->trace.traceRingSize * sizeof(TraceEntry_t));
+		o->trace.vmTrace = 1;
 	}
 	if(ops && *ops)
-		TraceParseOps(ops);
-	gVmTraceOn = gVmTrace || gVmStatFile != NULL;
+		TraceParseOps(o, ops);
+	o->trace.vmTraceOn = o->trace.vmTrace || o->trace.vmStatFile != NULL;
 }
 
 /* Print or record the instruction `op` thread `t` is about to execute:
  * the opening half of a BGI_TRACE_OPS line (Vm_TraceAfter completes it),
  * a ring entry, or the full BGI_TRACE line.  Nothing before BGI_TRACE_FROM
  * milliseconds have passed since the first traced instruction. */
-static void TraceInsn(Thread_t* t, uint8_t op)
+static void TraceInsn(OpenBGI_t* o, Thread_t* t, uint8_t op)
 {
 	uint32_t opIP = Thread_CurOpIP(t);
 	const uint8_t* code = t->code + opIP;
 	// the three values on top of the evaluation stack (sp wraps)
 	uint32_t n = t->stackEntries;
 	uint32_t s0 = t->stack[(t->sp + n - 1) % n], s1 = t->stack[(t->sp + n - 2) % n], s2 = t->stack[(t->sp + n - 3) % n];
-	static uint32_t t0;
-	uint32_t now = OS_TicksMs();
+	uint32_t now = Clock_HostMs(o), t0;
 	char name[0x40];
 	uint32_t rel;
-	if(!t0)
-		t0 = now;
-	if(now - t0 < gVmTraceFrom)
+	if(!o->trace.traceT0)
+		o->trace.traceT0 = now;
+	t0 = o->trace.traceT0;
+	if(now - t0 < o->trace.vmTraceFrom)
 		return;
-	if(gVmTraceOpsOn)
+	if(o->trace.vmTraceOpsOn)
 	{
-		int fam, o, i;
-		fam = TraceFamilyOf(code, &o);
-		if(!gVmTraceOps[fam][o])
+		int fam, opc, i;
+		fam = TraceFamilyOf(code, &opc);
+		if(!o->trace.vmTraceOps[fam][opc])
 			return;
 		TraceModule(t, opIP, &rel, name);
 		fprintf(stderr, "%7u T%d %-12s %06x: %02x %02x  fp=%x  [", (unsigned)(now - t0), (int)Thread_GetId(t), name,
@@ -220,12 +203,12 @@ static void TraceInsn(Thread_t* t, uint8_t op)
 		for(i = 1; i <= 8 && (uint32_t)i <= n; i++)
 			fprintf(stderr, "%s%x", i > 1 ? " " : "", (unsigned)t->stack[(t->sp + n - (uint32_t)i) % n]);
 		fprintf(stderr, "]");
-		gVmTraceOpsPending = 1; // the result follows once the instruction ran
+		o->trace.vmTraceOpsPending = 1; // the result follows once the instruction ran
 		return;
 	}
-	if(gTraceRing)
+	if(o->trace.traceRing)
 	{
-		TraceEntry_t* e = &gTraceRing[gTraceRingPos];
+		TraceEntry_t* e = &o->trace.traceRing[o->trace.traceRingPos];
 		e->ms = now - t0;
 		e->tid = (int)Thread_GetId(t);
 		e->opIP = opIP;
@@ -234,65 +217,65 @@ static void TraceInsn(Thread_t* t, uint8_t op)
 		e->s1 = s1;
 		e->s2 = s2;
 		memcpy(e->code, code, 4);
-		if(++gTraceRingPos == gTraceRingSize)
+		if(++o->trace.traceRingPos == o->trace.traceRingSize)
 		{
-			gTraceRingPos = 0;
-			gTraceRingFull = 1;
+			o->trace.traceRingPos = 0;
+			o->trace.traceRingFull = 1;
 		}
 		return;
 	}
 	TraceModule(t, opIP, &rel, name);
-	if(!gVmTraceProg || TraceMatches(name))
+	if(!o->trace.vmTraceProg || TraceMatches(o, name))
 		fprintf(stderr, "%7u T%d %-12s %06x (%06x): %02x %02x %02x %02x  fp=%x  [%x %x %x]\n", (unsigned)(now - t0),
 			(int)Thread_GetId(t), name, (unsigned)rel, (unsigned)opIP, op, code[1], code[2], code[3],
 			(unsigned)Thread_GetFP(t), (unsigned)s0, (unsigned)s1, (unsigned)s2);
 }
 
 // Count the instruction for BGI_OPSTAT: its first byte, and its second one for the families of kStatFamily.
-static void StatInsn(Thread_t* t, uint8_t op)
+static void StatInsn(OpenBGI_t* o, Thread_t* t, uint8_t op)
 {
 	int f;
-	gVmStat[0][op]++;
+	o->trace.vmStat[0][op]++;
 	for(f = 1; f < 8; f++)
 		if(op == kStatFamily[f])
 		{
-			gVmStat[f][t->code[Thread_CurOpIP(t) + 1]]++;
+			o->trace.vmStat[f][t->code[Thread_CurOpIP(t) + 1]]++;
 			break;
 		}
 }
 
 // Called before thread `t` executes the instruction `op` (its first byte).
-void Vm_TraceBefore(Thread_t* t, uint8_t op)
+void Vm_TraceBefore(OpenBGI_t* o, Thread_t* t, uint8_t op)
 {
-	if(gVmTrace)
-		TraceInsn(t, op);
-	if(gVmStatFile)
-		StatInsn(t, op);
+	if(o->trace.vmTrace)
+		TraceInsn(o, t, op);
+	if(o->trace.vmStatFile)
+		StatInsn(o, t, op);
 }
 
 // Called after the instruction ran: completes the line of BGI_TRACE_OPS with the stack top.
-void Vm_TraceAfter(Thread_t* t)
+void Vm_TraceAfter(OpenBGI_t* o, Thread_t* t)
 {
-	if(gVmTraceOpsPending)
+	if(o->trace.vmTraceOpsPending)
 	{
 		uint32_t n = t->stackEntries;
-		gVmTraceOpsPending = 0;
+		o->trace.vmTraceOpsPending = 0;
 		fprintf(stderr, " -> %x\n", (unsigned)t->stack[(t->sp + n - 1) % n]);
 	}
 }
 
 // Print the ring of BGI_TRACE_LAST to stderr (a no-op without it); called on every error.
-void Vm_TraceDump(void)
+void Vm_TraceDump(OpenBGI_t* o)
 {
-	int i, n = gTraceRingFull ? gTraceRingSize : gTraceRingPos;
-	if(!gTraceRing || n == 0)
+	int i, n = o->trace.traceRingFull ? o->trace.traceRingSize : o->trace.traceRingPos;
+	if(!o->trace.traceRing || n == 0)
 		return;
 	fprintf(stderr, "---- the last %d instructions ----\n", n);
 	for(i = 0; i < n; i++)
 	{
-		int k = gTraceRingFull ? (gTraceRingPos + i) % gTraceRingSize : i;
-		const TraceEntry_t* e = &gTraceRing[k];
-		Thread_t* t = gRootThread ? Thread_FindById(gRootThread, (uint32_t)e->tid) : NULL;
+		int k = o->trace.traceRingFull ? (o->trace.traceRingPos + i) % o->trace.traceRingSize : i;
+		const TraceEntry_t* e = &o->trace.traceRing[k];
+		Thread_t* t = o->vm.rootThread ? Thread_FindById(o->vm.rootThread, (uint32_t)e->tid) : NULL;
 		char name[0x40];
 		uint32_t rel;
 		TraceModule(t, e->opIP, &rel, name);
@@ -303,19 +286,21 @@ void Vm_TraceDump(void)
 	fprintf(stderr, "----\n");
 }
 
-// Write the BGI_OPSTAT file (a no-op without it); called when the machine stops.
-void Vm_TraceShutdown(void)
+// Write the BGI_OPSTAT file, a native path (a no-op without it); called when the machine stops.
+void Vm_TraceShutdown(OpenBGI_t* o)
 {
-	FILE* fp;
+	char* text;
+	size_t len = 0, cap = 8 * 256 * 18 + 1; // a line per instruction at most: "XX XX <count>\n"
 	int f, op;
-	if(!gVmStatFile)
+	if(!o->trace.vmStatFile)
 		return;
-	fp = fopen(gVmStatFile, "w");
-	if(!fp)
+	text = (char*)malloc(cap);
+	if(!text)
 		return;
 	for(f = 0; f < 8; f++)
 		for(op = 0; op < 256; op++)
-			if(gVmStat[f][op])
-				fprintf(fp, "%02X %02X %u\n", kStatFamily[f], op, (unsigned)gVmStat[f][op]);
-	fclose(fp);
+			if(o->trace.vmStat[f][op])
+				len += (size_t)snprintf(text + len, cap - len, "%02X %02X %u\n", kStatFamily[f], op, (unsigned)o->trace.vmStat[f][op]);
+	Host_WriteNativeFile(o, o->trace.vmStatFile, text, (uint32_t)len);
+	free(text);
 }

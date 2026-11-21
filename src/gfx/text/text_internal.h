@@ -4,7 +4,7 @@
  *
  * text_internal.h - the common includes of the text engine's files
  *                   (the files of src/gfx/text); the public interface is
- *                   inc/bgi/gfx/text.h
+ *                   src/include/bgi/gfx/text.h
  *
  * Every file of the engine includes this one: the engine's own header, the
  * graphics and bitmap managers it draws through, the Shift-JIS string

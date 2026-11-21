@@ -1,0 +1,185 @@
+.\" This file is part of OpenBGI (https://openbgi.net).
+.\" SPDX-License-Identifier: GPL-2.0-only
+.TH OPENBGI 1 "2026" "OpenBGI 1.0" "User Commands"
+.SH NAME
+openbgi \- play the games of the BGI/Ethornell visual-novel engine
+.SH SYNOPSIS
+.B openbgi
+.RI [ OPTIONS ]
+.RI [ GAME
+.RI [ "the game's own arguments" ]]
+.br
+.B openbgi
+.I COMMAND
+.RI [ arguments ]
+.SH DESCRIPTION
+OpenBGI is a reimplementation of Ethornell's Buriko General Interpreter.
+.I GAME
+is a game's folder, a zip archive or a disc image (.iso) of one, or a
+file in its folder.
+Without it the game of the current folder is played, and where there is
+none the launcher is shown: a list of the games in the folders it was
+told about.
+.PP
+Nothing of a game is changed when it is played from an archive, a disc
+image or a folder that cannot be written to: what it saves goes to the
+user's data folder.
+.SH OPTIONS
+.TP
+.BI \-\-engine= NAME
+The engine profile, instead of detecting the game
+.RB ( \-\-list\-engines ).
+.TP
+.BI \-\-games= FILE
+The
+.I openbgi.json
+to know the game by; it is used whatever it is.
+.TP
+.BI \-\-productname= NAME
+The product name the game's scripts ask for.
+.TP
+.B \-\-overlay
+Play a folder without writing into it.
+.TP
+.BI \-\-patch= FILE
+Lay a zip archive or a folder of files over the game; may be repeated.
+.TP
+.BR \-\-lang=en | ja
+The language of OpenBGI's own messages.
+.TP
+.B \-\-launcher=dialog
+Without a game, ask with the system's dialog
+.RB ( =program :
+the launcher).
+.TP
+.B \-\-preview=none
+The launcher makes no first pictures of games that were never played.
+.TP
+.BR \-\-dialogs=frame | host
+Message boxes drawn in the game's picture, or as windows.
+.TP
+.BR \-\-movies=decoder | player
+Movies by the built-in decoder, or by the system's player first.
+.TP
+.BR \-\-stand\-in\-font=gothic | mincho | auto
+The built-in font that stands in for a missing one.
+.TP
+.BR \-\-own\-pad\-keys=on | off
+Take or ignore the keys a game gives a pad's controls itself.
+.TP
+.BR \-\-child\-windows=frame | host
+Child windows drawn in the game's picture (the default), or as windows
+of their own.
+.TP
+.B \-\-disc\-marker
+Let the scripts see the disc's marker file.
+.TP
+.B \-\-no\-disc\-check
+The game counts as registered.
+.TP
+.BI \-\-enable= FAMILY:OP
+Make an opcode available whatever the profile says
+.RB ( \-\-disable=
+removes one).
+.TP
+.BR \-\-debug [ =pause ]
+Open the debugger with the game.
+.TP
+.B \-\-detect
+Print how the game is identified, and exit.
+.TP
+.B \-\-list\-engines
+Print the engine profiles, and exit.
+.TP
+.B \-\-list\-missing
+Print the opcodes of the profile that have no handler, and exit.
+.TP
+.BI \-\-list= ARCHIVE
+Print the entries of an archive, and exit.
+.TP
+.BI \-\-extract= ARCHIVE
+Write the entries of an archive into a folder, and exit
+.RB ( \-\-out=\fIDIR\fP ,
+.BR \-\-entry=\fINAME\fP ,
+.BR \-\-raw ,
+.BR \-\-convert ).
+.TP
+.B \-\-version
+Print the version, and exit.
+.TP
+.B \-\-help
+Print the options and the commands, and exit.
+.SH COMMANDS
+The tools are commands of the same program;
+.B openbgi help
+.I COMMAND
+prints a command's arguments.
+.TP
+.B dump
+Every archive of a game into files to edit.
+.TP
+.B pack
+The archives again, from a dump.
+.TP
+.B scn
+Scenario files: decompile, compile, list.
+.TP
+.B asm
+Programs as listings: disassemble, assemble.
+.TP
+.B bpc
+Programs in the source language: decompile, compile.
+.PP
+A folder named like a command is given as
+.IR ./NAME .
+.SH FILES
+.TP
+.I openbgi.json
+The engine profiles, the games OpenBGI knows and the launcher's
+settings.
+It is looked for in the game's folder, then beside the program, then in
+the user's data folder, where a new one is made when there is none.
+A file in one of those places that cannot be written is not used,
+unless it says
+.B "\(dqstaticConfig\(dq: true"
+at its top: then it is used as it is and never written.
+.TP
+.I $XDG_DATA_HOME/openbgi/
+The user's data folder
+.RI ( ~/.local/share/openbgi/
+by default): the settings, the launcher's pictures and icons, and what
+the games that are played from archives write.
+.SH ENVIRONMENT
+.TP
+.B BGI_GAMES
+The
+.I openbgi.json
+to use, as
+.BR \-\-games= .
+.TP
+.B BGI_LANG
+The language of the messages, as
+.BR \-\-lang= .
+.TP
+.B BGI_ENGINE
+The engine profile, as
+.BR \-\-engine= .
+.TP
+.B BGI_DATA
+Where the folders of the games that are played from archives go, in
+place of the user's data folder.
+.TP
+.B BGI_DPI
+The desktop's scale in dots per inch (96 is 100 %, 144 is 150 %), when
+it is read wrongly.
+.TP
+.B BGI_GL
+.B off
+never shows the picture through OpenGL;
+.B force
+uses OpenGL even when software draws it.
+.TP
+.BR BGI_FONT_GOTHIC ", " BGI_FONT_MINCHO ", " BGI_FONT
+A font file for the games' Gothic or Mincho text.
+.SH SEE ALSO
+The documents installed with the program, and https://openbgi.net.

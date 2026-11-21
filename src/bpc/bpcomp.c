@@ -2,12 +2,12 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * bpcomp.c - the program compiler: the C-like source (docs/bpc.md) to a
+ * bpcomp.c - the program compiler: the C-like source (docs/modding/programs.md) to a
  *            program file (interface in bpc.h, the code shapes in
  *            bpc_internal.h)
  *
  * A recursive-descent parser builds a tree of the program; the generator
- * then writes an assembler listing (docs/asm.md) the way the original
+ * then writes an assembler listing (docs/modding/programs.md) the way the original
  * compiler laid the code out - the frame prologue and the parameter
  * pops, every statement's value left on the stack, the arguments of a
  * function right to left and of an instruction left to right, conditions
@@ -35,6 +35,8 @@
  * decompiler can only write as `*(int*)(rec + 12)`.
  */
 #include "bpc_internal.h"
+
+#include "bgi/asmout.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -69,7 +71,7 @@ typedef struct Lex
 	const char* end;
 	int line;
 	int errors, warnings;
-	FILE* log;
+	AsmOut_t* log;
 	Token_t tok;
 	int peeked;
 	Token_t peek;
@@ -81,9 +83,9 @@ static void Message(Lex_t* l, int line, const char* kind, const char* fmt, va_li
 {
 	int srcLine;
 	const char* file = Prep_Where(l->prep, line, &srcLine);
-	fprintf(l->log, "%s:%d: %s: ", file, srcLine, kind);
-	vfprintf(l->log, fmt, ap);
-	fputc('\n', l->log);
+	AsmOut_Printf(l->log, "%s:%d: %s: ", file, srcLine, kind);
+	AsmOut_VPrintf(l->log, fmt, ap);
+	AsmOut_Putc(l->log, '\n');
 }
 
 // an error at a line (a token's or a node's `line`); only the first 50 are shown
@@ -154,7 +156,7 @@ static void SkipSpace(Lex_t* l)
 static const char* const kPuncts[] = {">>>", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "<-", "->", "(", ")", "{", "}", "[", "]", ",",
 	";", ":", "=", "<", ">", "+", "-", "*", "/", "%", "&", "|", "^", "!", "~", "?", "@", ".", NULL};
 
-static void ReadToken(Lex_t* l, Token_t* t)
+static void ReadToken(OpenBGI_t* o, Lex_t* l, Token_t* t)
 {
 	memset(t, 0, sizeof *t);
 	SkipSpace(l);
@@ -174,7 +176,7 @@ static void ReadToken(Lex_t* l, Token_t* t)
 		if(strcmp(t->text, "encoding") == 0)
 		{ // "#encoding utf-8": takes effect here, before the next literal is read
 			int ok;
-			l->p = Asm_EncodingDirective(l->p, l->end, &ok);
+			l->p = Asm_EncodingDirective(o, l->p, l->end, &ok);
 			if(!ok)
 				Errorf(l, l->line, "#encoding utf-8 or #encoding sjis");
 		}
@@ -192,7 +194,7 @@ static void ReadToken(Lex_t* l, Token_t* t)
 	if(*l->p == '"')
 	{
 		const char* next;
-		const char* err = Asm_ReadStringLiteral(l->p, l->end, &t->bytes, &t->len, &next);
+		const char* err = Asm_ReadStringLiteral(o, l->p, l->end, &t->bytes, &t->len, &next);
 		if(err)
 		{
 			Errorf(l, l->line, "%s", err);
@@ -264,10 +266,10 @@ static void ReadToken(Lex_t* l, Token_t* t)
 	}
 	Errorf(l, l->line, "unexpected character '%c'", *l->p);
 	l->p++;
-	ReadToken(l, t);
+	ReadToken(o, l, t);
 }
 
-static void Next(Lex_t* l)
+static void Next(OpenBGI_t* o, Lex_t* l)
 {
 	free(l->tok.bytes); // a string nobody took (after an error)
 	l->tok.bytes = NULL;
@@ -277,14 +279,14 @@ static void Next(Lex_t* l)
 		l->peeked = 0;
 	}
 	else
-		ReadToken(l, &l->tok);
+		ReadToken(o, l, &l->tok);
 }
 
-static Token_t* Peek(Lex_t* l)
+static Token_t* Peek(OpenBGI_t* o, Lex_t* l)
 {
 	if(!l->peeked)
 	{
-		ReadToken(l, &l->peek);
+		ReadToken(o, l, &l->peek);
 		l->peeked = 1;
 	}
 	return &l->peek;
@@ -300,24 +302,24 @@ static int IsIdent(const Lex_t* l, const char* name)
 	return l->tok.kind == T_IDENT && strcmp(l->tok.text, name) == 0;
 }
 
-static int Accept(Lex_t* l, const char* p)
+static int Accept(OpenBGI_t* o, Lex_t* l, const char* p)
 {
 	if(IsPunct(l, p))
 	{
-		Next(l);
+		Next(o, l);
 		return 1;
 	}
 	return 0;
 }
 
-static void Expect(Lex_t* l, const char* p)
+static void Expect(OpenBGI_t* o, Lex_t* l, const char* p)
 {
-	if(!Accept(l, p))
+	if(!Accept(o, l, p))
 	{
 		Errorf(l, l->tok.line, "'%s' expected, found '%s'", p, l->tok.kind == T_EOF ? "end of file" : l->tok.text);
 		// resynchronize a little
 		if(l->tok.kind != T_EOF)
-			Next(l);
+			Next(o, l);
 	}
 }
 
@@ -610,7 +612,7 @@ static int TypeKeyword(const Lex_t* l, int* elem)
 /* whether the lexer is at a type: `int`, `short` or `char`, or - when a
  * name or a `*` follows, as in a declaration - `func` or the name of a
  * record (those two are ordinary words anywhere else) */
-static int AtType(Parser_t* p)
+static int AtType(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	const Token_t* next;
@@ -621,18 +623,18 @@ static int AtType(Parser_t* p)
 		return 1;
 	if(!IsIdent(l, "func") && !FindRecord(p->unit, l->tok.text))
 		return 0;
-	next = Peek(l);
+	next = Peek(o, l);
 	return next->kind == T_IDENT || (next->kind == T_PUNCT && strcmp(next->text, "*") == 0);
 }
 
 static int EvalConst(Parser_t* p, const Node_t* n, const struct AreaVar* var, int leftmost, uint32_t* out);
-static Node_t* ParseBinary(Parser_t* p, int minPrec);
+static Node_t* ParseBinary(OpenBGI_t* o, Parser_t* p, int minPrec);
 
 /* the dimensions after a name, the lexer behind the `[`: `count]` or
  * `count][inner]` - a two-dimensional array is `count` rows of `inner`
  * elements, and indexing it once gives a row.  The counts are constant
  * expressions. */
-static void ParseDims(Parser_t* p, const char* name, uint32_t* count, uint32_t* inner)
+static void ParseDims(OpenBGI_t* o, Parser_t* p, const char* name, uint32_t* count, uint32_t* inner)
 {
 	Lex_t* l = &p->lex;
 	int line = l->tok.line, k;
@@ -640,18 +642,18 @@ static void ParseDims(Parser_t* p, const char* name, uint32_t* count, uint32_t* 
 	for(k = 0; k < 2; k++)
 	{
 		uint32_t* dst = k ? inner : count;
-		Node_t* e = ParseBinary(p, 0);
+		Node_t* e = ParseBinary(o, p, 0);
 		if(EvalConst(p, e, NULL, 1, dst) && *dst == 0)
 			Errorf(l, line, "%s: an array has at least one element", name);
 		FreeNode(e);
-		Expect(l, "]");
-		if(k || !Accept(l, "["))
+		Expect(o, l, "]");
+		if(k || !Accept(o, l, "["))
 			break;
 	}
 }
 
 // read the type the lexer is at (AtType): the type word and an optional `*` for a pointer to it
-static void ParseType(Parser_t* p, TypeRef_t* t)
+static void ParseType(OpenBGI_t* o, Parser_t* p, TypeRef_t* t)
 {
 	Lex_t* l = &p->lex;
 	int line = l->tok.line;
@@ -661,40 +663,40 @@ static void ParseType(Parser_t* p, TypeRef_t* t)
 		t->func = 1;
 	else if(!TypeKeyword(l, &t->elem))
 		t->rec = FindRecord(p->unit, l->tok.text);
-	Next(l);
+	Next(o, l);
 	(void)line;
-	while(Accept(l, "*")) // T* points to a T, T** to a T* (a table of addresses), func* to a table of functions
+	while(Accept(o, l, "*")) // T* points to a T, T** to a T* (a table of addresses), func* to a table of functions
 		t->ptr++;
 }
 
 // ---- expressions -------------------------------------------------------------------------------------
 
-static Node_t* ParseExpression(Parser_t* p);
-static Node_t* ParseAssignment(Parser_t* p);
+static Node_t* ParseExpression(OpenBGI_t* o, Parser_t* p);
+static Node_t* ParseAssignment(OpenBGI_t* o, Parser_t* p);
 
-static Node_t* StrNode(Parser_t* p)
+static Node_t* StrNode(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Node_t* n = NewNode(N_STR, l->tok.line);
 	n->bytes = l->tok.bytes;
 	n->len = l->tok.len;
 	l->tok.bytes = NULL;
-	Next(l);
+	Next(o, l);
 	return n;
 }
 
-static Node_t* ParseArgs(Parser_t* p, Node_t* call)
+static Node_t* ParseArgs(OpenBGI_t* o, Parser_t* p, Node_t* call)
 {
 	Lex_t* l = &p->lex;
-	Expect(l, "(");
+	Expect(o, l, "(");
 	if(!IsPunct(l, ")"))
 		for(;;)
 		{
-			AddItem(call, ParseAssignment(p));
-			if(!Accept(l, ","))
+			AddItem(call, ParseAssignment(o, p));
+			if(!Accept(o, l, ","))
 				break;
 		}
-	Expect(l, ")");
+	Expect(o, l, ")");
 	return call;
 }
 
@@ -715,7 +717,7 @@ static int LookupInstruction(const char* name, EngineGen_t gen, int* fam, int* o
 	return Asm_LookupName(name, strlen(name), gen, fam, op);
 }
 
-static Node_t* ParsePrimary(Parser_t* p)
+static Node_t* ParsePrimary(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Node_t* n;
@@ -725,26 +727,26 @@ static Node_t* ParsePrimary(Parser_t* p)
 		n = NewNode(N_NUM, line);
 		n->num = l->tok.num;
 		n->size = l->tok.wide ? 4 : 0; // a wide literal
-		Next(l);
+		Next(o, l);
 		return n;
 	}
 	if(l->tok.kind == T_STR)
-		return StrNode(p);
-	if(Accept(l, "("))
+		return StrNode(o, p);
+	if(Accept(o, l, "("))
 	{
 		int elem;
 		// a cast: (int*) / (char*) / (short*) followed by an operand - only in the *(T*)(e) form, handled in unary
-		if(TypeKeyword(l, &elem) && Peek(l)->kind == T_PUNCT && strcmp(Peek(l)->text, "*") == 0)
+		if(TypeKeyword(l, &elem) && Peek(o, l)->kind == T_PUNCT && strcmp(Peek(o, l)->text, "*") == 0)
 		{
 			Errorf(l, line, "a cast is written as *(type*)(address)");
-			Next(l);
-			Next(l);
-			Expect(l, ")");
-			return ParsePrimary(p);
+			Next(o, l);
+			Next(o, l);
+			Expect(o, l, ")");
+			return ParsePrimary(o, p);
 		}
 		n = NewNode(N_PAREN, line);
-		n->a = ParseExpression(p);
-		Expect(l, ")");
+		n->a = ParseExpression(o, p);
+		Expect(o, l, ")");
 		return n;
 	}
 	if(l->tok.kind == T_IDENT)
@@ -752,7 +754,7 @@ static Node_t* ParsePrimary(Parser_t* p)
 		char name[128];
 		int fam, op;
 		strcpy(name, l->tok.text);
-		Next(l);
+		Next(o, l);
 		if(strcmp(name, "sizeof") == 0 && IsPunct(l, "(") && !FindVar(p->func, name) && !FindFunc(p->unit, name))
 		{ // sizeof(type) / sizeof(variable): the number of bytes, a plain number in the code
 			TypeRef_t t;
@@ -760,29 +762,29 @@ static Node_t* ParsePrimary(Parser_t* p)
 			AreaVar_t* a;
 			int elem;
 			n = NewNode(N_NUM, line);
-			Next(l);
+			Next(o, l);
 			if(l->tok.kind == T_IDENT && (TypeKeyword(l, &elem) || IsIdent(l, "func") || FindRecord(p->unit, l->tok.text)))
 			{
-				ParseType(p, &t);
+				ParseType(o, p, &t);
 				n->num = TypeSize(&t);
 			}
 			else if(l->tok.kind == T_IDENT && (v = FindVar(p->func, l->tok.text)) != NULL)
 			{
 				n->num = v->size;
-				Next(l);
+				Next(o, l);
 			}
 			else if(l->tok.kind == T_IDENT && (a = FindArea(p->unit, l->tok.text)) != NULL)
 			{
 				n->num = (int64_t)TypeSize(&a->type) * a->count * (a->inner ? a->inner : 1);
-				Next(l);
+				Next(o, l);
 			}
 			else
 			{
 				Errorf(l, line, "sizeof takes a type or the name of a variable");
 				if(l->tok.kind != T_EOF && !IsPunct(l, ")"))
-					Next(l);
+					Next(o, l);
 			}
-			Expect(l, ")");
+			Expect(o, l, ")");
 			return n;
 		}
 		if(IsPunct(l, "("))
@@ -792,12 +794,12 @@ static Node_t* ParsePrimary(Parser_t* p)
 				n = NewNode(N_OPCALL, line);
 				n->op = (fam << 8) | op;
 				strcpy(n->text, name);
-				return ParseArgs(p, n);
+				return ParseArgs(o, p, n);
 			}
 			n = NewNode(N_CALL, line);
 			n->a = NewNode(N_NAME, line);
 			strcpy(n->a->text, name);
-			return ParseArgs(p, n);
+			return ParseArgs(o, p, n);
 		}
 		n = NewNode(N_NAME, line);
 		strcpy(n->text, name);
@@ -805,14 +807,14 @@ static Node_t* ParsePrimary(Parser_t* p)
 	}
 	Errorf(l, line, "an expression was expected, found '%s'", l->tok.kind == T_EOF ? "end of file" : l->tok.text);
 	if(l->tok.kind != T_EOF)
-		Next(l);
+		Next(o, l);
 	return NewNode(N_NUM, line);
 }
 
-static Node_t* ParsePostfix(Parser_t* p)
+static Node_t* ParsePostfix(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
-	Node_t* n = ParsePrimary(p);
+	Node_t* n = ParsePrimary(o, p);
 	for(;;)
 	{
 		int line = l->tok.line;
@@ -820,14 +822,14 @@ static Node_t* ParsePostfix(Parser_t* p)
 		{ // a call through a value: (expr)(args), table[i](args)
 			Node_t* call = NewNode(N_CALL, line);
 			call->a = n;
-			n = ParseArgs(p, call);
+			n = ParseArgs(o, p, call);
 		}
-		else if(Accept(l, "["))
+		else if(Accept(o, l, "["))
 		{ // a[index]: an element
 			Node_t* e = NewNode(N_INDEX, line);
 			e->a = n;
-			e->b = ParseExpression(p);
-			Expect(l, "]");
+			e->b = ParseExpression(o, p);
+			Expect(o, l, "]");
 			n = e;
 		}
 		else if(IsPunct(l, ".") || IsPunct(l, "->"))
@@ -835,13 +837,13 @@ static Node_t* ParsePostfix(Parser_t* p)
 			Node_t* m = NewNode(N_MEMBER, line);
 			m->op = IsPunct(l, "->");
 			m->a = n;
-			Next(l);
+			Next(o, l);
 			if(l->tok.kind != T_IDENT)
 				Errorf(l, line, "the name of a field was expected");
 			else
 			{
 				snprintf(m->text, sizeof m->text, "%s", l->tok.text);
-				Next(l);
+				Next(o, l);
 			}
 			n = m;
 		}
@@ -850,7 +852,7 @@ static Node_t* ParsePostfix(Parser_t* p)
 	}
 }
 
-static Node_t* ParseUnary(Parser_t* p)
+static Node_t* ParseUnary(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	int line = l->tok.line;
@@ -858,147 +860,147 @@ static Node_t* ParseUnary(Parser_t* p)
 	if(IsPunct(l, "-") || IsPunct(l, "~") || IsPunct(l, "!"))
 	{
 		char op = l->tok.text[0];
-		Next(l);
+		Next(o, l);
 		n = NewNode(N_UNARY, line);
 		n->op = op;
-		n->a = ParseUnary(p);
+		n->a = ParseUnary(o, p);
 		return n;
 	}
 	if(IsPunct(l, "&"))
 	{
-		Next(l);
+		Next(o, l);
 		if(l->tok.kind != T_IDENT)
 		{
 			Errorf(l, line, "& takes a variable name");
-			return ParseUnary(p);
+			return ParseUnary(o, p);
 		}
 		n = NewNode(N_ADDR, line); // &name, &name[index], &rec.field ..
-		n->a = ParsePostfix(p);
+		n->a = ParsePostfix(o, p);
 		return n;
 	}
 	if(IsPunct(l, "*"))
 	{
 		int elem = 4, cast = 0;
-		Next(l);
+		Next(o, l);
 		// *(type*)(address) or *(type*)number
-		if(Accept(l, "("))
+		if(Accept(o, l, "("))
 		{
 			if(!TypeKeyword(l, &elem))
 			{
 				Errorf(l, line, "*(type*) expected");
-				return ParseUnary(p);
+				return ParseUnary(o, p);
 			}
-			Next(l);
-			Expect(l, "*");
-			Expect(l, ")");
+			Next(o, l);
+			Expect(o, l, "*");
+			Expect(o, l, ")");
 			cast = 1;
 		}
 		n = NewNode(N_DEREF, line);
 		n->op = cast; // 0: a bare *p, which takes the size from p when p is declared a pointer
 		n->size = elem == 1 ? 0 : elem == 2 ? 1
 											: 2;
-		n->a = ParseUnary(p);
+		n->a = ParseUnary(o, p);
 		return n;
 	}
-	return ParsePostfix(p);
+	return ParsePostfix(o, p);
 }
 
 // the binary operators by precedence, lowest first; '?:' and assignments sit below them
-static Node_t* ParseBinary(Parser_t* p, int minPrec)
+static Node_t* ParseBinary(OpenBGI_t* o, Parser_t* p, int minPrec)
 {
 	Lex_t* l = &p->lex;
-	Node_t* left = ParseUnary(p);
+	Node_t* left = ParseUnary(o, p);
 	for(;;)
 	{
 		const BpcOperator_t* op = l->tok.kind == T_PUNCT ? BpcOp_ByText(l->tok.text, strlen(l->tok.text)) : NULL;
 		Node_t* n;
 		if(!op || op->prec < minPrec)
 			return left;
-		Next(l);
+		Next(o, l);
 		n = NewNode(N_BINARY, left->line);
 		n->op = op->op;
 		n->a = left;
-		n->b = ParseBinary(p, op->prec + 1);
+		n->b = ParseBinary(o, p, op->prec + 1);
 		left = n;
 	}
 }
 
-static Node_t* ParseSelect(Parser_t* p)
+static Node_t* ParseSelect(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
-	Node_t* c = ParseBinary(p, 0);
-	if(Accept(l, "?"))
+	Node_t* c = ParseBinary(o, p, 0);
+	if(Accept(o, l, "?"))
 	{
 		Node_t* n = NewNode(N_SELECT, c->line);
 		n->a = c;
-		n->b = ParseAssignment(p);
-		Expect(l, ":");
-		n->c = ParseSelect(p);
+		n->b = ParseAssignment(o, p);
+		Expect(o, l, ":");
+		n->c = ParseSelect(o, p);
 		return n;
 	}
 	return c;
 }
 
-static Node_t* ParseAssignment(Parser_t* p)
+static Node_t* ParseAssignment(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
-	Node_t* left = ParseSelect(p);
+	Node_t* left = ParseSelect(o, p);
 	if(IsPunct(l, "=") || IsPunct(l, "<-"))
 	{
 		int store = IsPunct(l, "<-");
 		Node_t* n;
-		Next(l);
+		Next(o, l);
 		n = NewNode(store ? N_ASSIGN2 : N_ASSIGN, left->line);
 		n->a = left;
 		if(IsPunct(l, "{"))
 		{ // an initializer list: a store_multi statement
 			Node_t* list = NewNode(N_INITLIST, l->tok.line);
-			Next(l);
+			Next(o, l);
 			if(!IsPunct(l, "}"))
 				for(;;)
 				{
-					AddItem(list, ParseAssignment(p));
-					if(!Accept(l, ","))
+					AddItem(list, ParseAssignment(o, p));
+					if(!Accept(o, l, ","))
 						break;
 				}
-			Expect(l, "}");
+			Expect(o, l, "}");
 			n->b = list;
 			return n;
 		}
-		n->b = ParseAssignment(p);
+		n->b = ParseAssignment(o, p);
 		return n;
 	}
 	return left;
 }
 
-static Node_t* ParseExpression(Parser_t* p)
+static Node_t* ParseExpression(OpenBGI_t* o, Parser_t* p)
 {
-	return ParseAssignment(p);
+	return ParseAssignment(o, p);
 }
 
 // ---- statements -------------------------------------------------------------------------------------
 
-static Node_t* ParseStatement(Parser_t* p);
-static int AreaDeclStart(Lex_t* l);
-static void SkipStatement(Lex_t* l);
+static Node_t* ParseStatement(OpenBGI_t* o, Parser_t* p);
+static int AreaDeclStart(OpenBGI_t* o, Lex_t* l);
+static void SkipStatement(OpenBGI_t* o, Lex_t* l);
 
-static Node_t* ParseBlock(Parser_t* p)
+static Node_t* ParseBlock(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Node_t* n = NewNode(N_BLOCK, l->tok.line);
-	Expect(l, "{");
+	Expect(o, l, "{");
 	while(!IsPunct(l, "}") && l->tok.kind != T_EOF)
 	{
-		Node_t* s = ParseStatement(p);
+		Node_t* s = ParseStatement(o, p);
 		if(s)
 			AddItem(n, s);
 	}
-	Expect(l, "}");
+	Expect(o, l, "}");
 	return n;
 }
 
 // `{ lines }` after __asm: the text between the braces, verbatim (braces inside strings are allowed)
-static Node_t* ParseAsmBlock(Parser_t* p)
+static Node_t* ParseAsmBlock(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Node_t* n = NewNode(N_ASM, l->tok.line);
@@ -1046,18 +1048,18 @@ static Node_t* ParseAsmBlock(Parser_t* p)
 	memcpy(n->bytes, s, n->len);
 	n->bytes[n->len] = 0;
 	l->p = q < l->end ? q + 1 : q;
-	Next(l);
+	Next(o, l);
 	return n;
 }
 
 // a local declaration, the lexer at its type: `type name;`, `type name[count];`, `type name = value;`
-static Node_t* ParseDeclaration(Parser_t* p)
+static Node_t* ParseDeclaration(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Node_t* n = NewNode(N_DECL, l->tok.line);
 	TypeRef_t type;
 	uint32_t elem, inner = 0;
-	ParseType(p, &type);
+	ParseType(o, p, &type);
 	elem = TypeSize(&type);
 	if(l->tok.kind != T_IDENT)
 	{
@@ -1067,21 +1069,21 @@ static Node_t* ParseDeclaration(Parser_t* p)
 	strcpy(n->text, l->tok.text);
 	n->size = (int)elem;
 	n->op = 1;
-	Next(l);
-	if(Accept(l, "["))
+	Next(o, l);
+	if(Accept(o, l, "["))
 	{
 		uint32_t count = 1;
-		ParseDims(p, n->text, &count, &inner);
+		ParseDims(o, p, n->text, &count, &inner);
 		n->op = (int)count;
 		n->num = 1; // an array
 	}
-	if(Accept(l, "="))
+	if(Accept(o, l, "="))
 	{
 		if(n->num == 1 || (type.rec && !type.ptr))
 			Errorf(l, n->line, "%s: only a single number or pointer can be given a value where it is declared", n->text);
-		n->a = ParseAssignment(p);
+		n->a = ParseAssignment(o, p);
 	}
-	Expect(l, ";");
+	Expect(o, l, ";");
 	if(p->func)
 	{
 		if(FindVar(p->func, n->text))
@@ -1096,48 +1098,48 @@ static Node_t* ParseDeclaration(Parser_t* p)
 	return n;
 }
 
-static Node_t* ParseStatement(Parser_t* p)
+static Node_t* ParseStatement(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	int line = l->tok.line;
 	Node_t* n;
 	if(IsPunct(l, "{"))
-		return ParseBlock(p);
-	if(Accept(l, ";"))
+		return ParseBlock(o, p);
+	if(Accept(o, l, ";"))
 		return NULL;
-	if(AtType(p) && !FindVar(p->func, l->tok.text))
-		return ParseDeclaration(p);
-	if(AreaDeclStart(l) >= 0 && !FindVar(p->func, l->tok.text) && !FindArea(p->unit, l->tok.text))
+	if(AtType(o, p) && !FindVar(p->func, l->tok.text))
+		return ParseDeclaration(o, p);
+	if(AreaDeclStart(o, l) >= 0 && !FindVar(p->func, l->tok.text) && !FindArea(p->unit, l->tok.text))
 	{ // (a variable that bears one of the words is just that: `dynamic[i] = 0;`)
 		Errorf(l, line, "a %s variable is declared outside the functions", l->tok.text);
-		SkipStatement(l);
+		SkipStatement(o, l);
 		return NULL;
 	}
 	if(l->tok.kind == T_IDENT)
 	{
-		if(Peek(l)->kind == T_PUNCT && strcmp(Peek(l)->text, ":") == 0 && !IsIdent(l, "default"))
+		if(Peek(o, l)->kind == T_PUNCT && strcmp(Peek(o, l)->text, ":") == 0 && !IsIdent(l, "default"))
 		{
 			n = NewNode(N_LABEL, line);
 			strcpy(n->text, l->tok.text);
-			Next(l);
-			Next(l);
+			Next(o, l);
+			Next(o, l);
 			return n;
 		}
 		if(IsIdent(l, "if"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_IF, line);
-			Expect(l, "(");
-			n->a = ParseExpression(p);
-			Expect(l, ")");
+			Expect(o, l, "(");
+			n->a = ParseExpression(o, p);
+			Expect(o, l, ")");
 			n->num = !IsPunct(l, "{");
-			n->b = ParseStatement(p);
+			n->b = ParseStatement(o, p);
 			if(!n->b)
 				n->b = NewNode(N_BLOCK, line);
 			if(IsIdent(l, "else"))
 			{
-				Next(l);
-				n->c = ParseStatement(p);
+				Next(o, l);
+				n->c = ParseStatement(o, p);
 				if(!n->c)
 					n->c = NewNode(N_BLOCK, line);
 			}
@@ -1145,95 +1147,95 @@ static Node_t* ParseStatement(Parser_t* p)
 		}
 		if(IsIdent(l, "while"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_WHILE, line);
-			Expect(l, "(");
-			n->a = ParseExpression(p);
-			Expect(l, ")");
-			n->b = ParseStatement(p);
+			Expect(o, l, "(");
+			n->a = ParseExpression(o, p);
+			Expect(o, l, ")");
+			n->b = ParseStatement(o, p);
 			if(!n->b)
 				n->b = NewNode(N_BLOCK, line);
 			return n;
 		}
 		if(IsIdent(l, "do"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_DOWHILE, line);
-			n->b = ParseStatement(p);
+			n->b = ParseStatement(o, p);
 			if(!n->b)
 				n->b = NewNode(N_BLOCK, line);
 			if(!IsIdent(l, "while"))
 				Errorf(l, l->tok.line, "'while' expected after the do body");
 			else
-				Next(l);
-			Expect(l, "(");
-			n->a = ParseExpression(p);
-			Expect(l, ")");
-			Expect(l, ";");
+				Next(o, l);
+			Expect(o, l, "(");
+			n->a = ParseExpression(o, p);
+			Expect(o, l, ")");
+			Expect(o, l, ";");
 			return n;
 		}
 		if(IsIdent(l, "for"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_FOR, line);
-			Expect(l, "(");
+			Expect(o, l, "(");
 			if(!IsPunct(l, ";"))
-				n->a = ParseExpression(p);
-			Expect(l, ";");
+				n->a = ParseExpression(o, p);
+			Expect(o, l, ";");
 			if(!IsPunct(l, ";"))
-				n->b = ParseExpression(p);
-			Expect(l, ";");
+				n->b = ParseExpression(o, p);
+			Expect(o, l, ";");
 			if(!IsPunct(l, ")"))
-				n->c = ParseExpression(p);
-			Expect(l, ")");
+				n->c = ParseExpression(o, p);
+			Expect(o, l, ")");
 			{
-				Node_t* body = ParseStatement(p);
+				Node_t* body = ParseStatement(o, p);
 				AddItem(n, body ? body : NewNode(N_BLOCK, line));
 			}
 			return n;
 		}
 		if(IsIdent(l, "break"))
 		{
-			Next(l);
-			Expect(l, ";");
+			Next(o, l);
+			Expect(o, l, ";");
 			return NewNode(N_BREAK, line);
 		}
 		if(IsIdent(l, "continue"))
 		{
-			Next(l);
-			Expect(l, ";");
+			Next(o, l);
+			Expect(o, l, ";");
 			return NewNode(N_CONTINUE, line);
 		}
 		if(IsIdent(l, "return"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_RETURN, line);
 			if(!IsPunct(l, ";"))
-				n->a = ParseExpression(p);
-			Expect(l, ";");
+				n->a = ParseExpression(o, p);
+			Expect(o, l, ";");
 			return n;
 		}
 		if(IsIdent(l, "goto"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_GOTO, line);
 			strcpy(n->text, l->tok.text);
-			Next(l);
-			Expect(l, ";");
+			Next(o, l);
+			Expect(o, l, ";");
 			return n;
 		}
 		if(IsIdent(l, "__asm"))
 		{
-			Next(l);
-			return ParseAsmBlock(p);
+			Next(o, l);
+			return ParseAsmBlock(o, p);
 		}
 		if(IsIdent(l, "__inline"))
 		{
-			Next(l);
+			Next(o, l);
 			n = NewNode(N_INLINE, line);
-			Expect(l, "(");
-			n->a = ParseAssignment(p);
-			Expect(l, ",");
+			Expect(o, l, "(");
+			n->a = ParseAssignment(o, p);
+			Expect(o, l, ",");
 			if(l->tok.kind != T_STR)
 				Errorf(l, line, "__inline takes a string literal");
 			else
@@ -1241,16 +1243,16 @@ static Node_t* ParseStatement(Parser_t* p)
 				n->bytes = l->tok.bytes;
 				n->len = l->tok.len;
 				l->tok.bytes = NULL;
-				Next(l);
+				Next(o, l);
 			}
-			Expect(l, ")");
-			Expect(l, ";");
+			Expect(o, l, ")");
+			Expect(o, l, ";");
 			return n;
 		}
 	}
 	n = NewNode(N_EXPR, line);
-	n->a = ParseExpression(p);
-	Expect(l, ";");
+	n->a = ParseExpression(o, p);
+	Expect(o, l, ";");
 	return n;
 }
 
@@ -1351,15 +1353,15 @@ static int EvalConst(Parser_t* p, const Node_t* n, const struct AreaVar* var, in
 }
 
 // past the next ';' (after an error in a declaration)
-static void SkipStatement(Lex_t* l)
+static void SkipStatement(OpenBGI_t* o, Lex_t* l)
 {
 	while(l->tok.kind != T_EOF && !IsPunct(l, ";"))
 	{
 		free(l->tok.bytes);
 		l->tok.bytes = NULL;
-		Next(l);
+		Next(o, l);
 	}
-	Accept(l, ";");
+	Accept(o, l, ";");
 }
 
 static int IsReserved(const char* name)
@@ -1378,7 +1380,7 @@ static int IsReserved(const char* name)
  * `dynamic` followed by its `[block]` - and which area (-1: it is not;
  * those words are ordinary names anywhere else, and a function may bear
  * one) */
-static int AreaDeclStart(Lex_t* l)
+static int AreaDeclStart(OpenBGI_t* o, Lex_t* l)
 {
 	int area;
 	const Token_t* next;
@@ -1389,7 +1391,7 @@ static int AreaDeclStart(Lex_t* l)
 			break;
 	if(area == AREA_COUNT)
 		return -1;
-	next = Peek(l);
+	next = Peek(o, l);
 	if(area == AREA_DYNAMIC)
 		return next->kind == T_PUNCT && strcmp(next->text, "[") == 0 ? area : -1;
 	return next->kind == T_IDENT ? area : -1; // a type, or a word that should have been one
@@ -1399,7 +1401,7 @@ static int AreaDeclStart(Lex_t* l)
  * address of a memory area.  Nothing is reserved and nothing is compiled
  * for it; the declaration only gives the address a name, a type (a
  * scalar, a record, a pointer or a func) and, for an array, a length. */
-static void ParseAreaDecl(Parser_t* p, int area)
+static void ParseAreaDecl(OpenBGI_t* o, Parser_t* p, int area)
 {
 	Lex_t* l = &p->lex;
 	Unit_t* u = p->unit;
@@ -1410,57 +1412,57 @@ static void ParseAreaDecl(Parser_t* p, int area)
 	v.area = area;
 	v.line = line;
 	v.count = 1;
-	Next(l); // the area
+	Next(o, l); // the area
 	if(area == AREA_DYNAMIC)
 	{ // dynamic[block]
-		Expect(l, "[");
-		e = ParseBinary(p, 0);
+		Expect(o, l, "[");
+		e = ParseBinary(o, p, 0);
 		if(!EvalConst(p, e, NULL, 1, &v.block))
 			v.broken = 1;
 		FreeNode(e);
-		Expect(l, "]");
+		Expect(o, l, "]");
 	}
-	if(!AtType(p))
+	if(!AtType(o, p))
 	{
 		Errorf(l, line, "a type (int, short, char, func or a record) was expected after %s", kAreaNames[area]);
-		SkipStatement(l);
+		SkipStatement(o, l);
 		return;
 	}
-	ParseType(p, &v.type);
+	ParseType(o, p, &v.type);
 	if(l->tok.kind != T_IDENT || IsReserved(l->tok.text))
 	{
 		Errorf(l, line, "a variable name was expected");
-		SkipStatement(l);
+		SkipStatement(o, l);
 		return;
 	}
 	snprintf(v.name, sizeof v.name, "%s", l->tok.text);
-	Next(l);
-	if(Accept(l, "["))
+	Next(o, l);
+	if(Accept(o, l, "["))
 	{
-		ParseDims(p, v.name, &v.count, &v.inner);
+		ParseDims(o, p, v.name, &v.count, &v.inner);
 		v.isArray = 1;
 	}
 	if(IsPunct(l, "="))
 	{
 		Errorf(l, line, "%s: a %s variable cannot be given a value where it is declared (the engine does not fill the script memory from a program); assign it in a function", v.name, kAreaNames[area]);
-		SkipStatement(l);
+		SkipStatement(o, l);
 		return;
 	}
-	if(!Accept(l, "@"))
+	if(!Accept(o, l, "@"))
 	{
 		Errorf(l, line, "%s: '@ address' was expected: a %s variable is declared at the address it has", v.name, kAreaNames[area]);
-		SkipStatement(l);
+		SkipStatement(o, l);
 		return;
 	}
-	v.addr = ParseBinary(p, 0);
+	v.addr = ParseBinary(o, p, 0);
 	if(IsPunct(l, "="))
 	{
 		Errorf(l, line, "%s: a %s variable cannot be given a value where it is declared (the engine does not fill the script memory from a program); assign it in a function", v.name, kAreaNames[area]);
-		SkipStatement(l);
+		SkipStatement(o, l);
 		FreeNode(v.addr);
 		return;
 	}
-	Expect(l, ";");
+	Expect(o, l, ";");
 	if(!EvalConst(p, v.addr, &v, 1, &v.value))
 	{
 		FreeNode(v.addr);
@@ -1491,16 +1493,16 @@ static void ParseAreaDecl(Parser_t* p, int area)
  * scalar, a record declared before, a pointer (to this record too) or a
  * func, or an array of those.  Like a variable at a fixed address, a
  * record compiles to nothing by itself. */
-static void ParseRecord(Parser_t* p)
+static void ParseRecord(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Unit_t* u = p->unit;
 	Record_t* r = (Record_t*)calloc(1, sizeof *r);
 	uint32_t next = 0;
 	int line = l->tok.line;
-	Next(l); // struct
+	Next(o, l); // struct
 	snprintf(r->name, sizeof r->name, "%s", l->tok.text);
-	Next(l);
+	Next(o, l);
 	if(IsReserved(r->name) || FindRecord(u, r->name) || FindFunc(u, r->name) || FindArea(u, r->name))
 		Errorf(l, line, "%s: the name of the record is taken", r->name);
 	if(u->recordCount == u->recordCap)
@@ -1509,7 +1511,7 @@ static void ParseRecord(Parser_t* p)
 		u->records = (Record_t**)realloc(u->records, (size_t)u->recordCap * sizeof *u->records);
 	}
 	u->records[u->recordCount++] = r; // known from here on, so that a field can point to its own record
-	Expect(l, "{");
+	Expect(o, l, "{");
 	while(!IsPunct(l, "}") && l->tok.kind != T_EOF)
 	{
 		Field_t f;
@@ -1517,36 +1519,36 @@ static void ParseRecord(Parser_t* p)
 		int fline = l->tok.line;
 		memset(&f, 0, sizeof f);
 		f.count = 1;
-		if(!AtType(p))
+		if(!AtType(o, p))
 		{
 			Errorf(l, fline, "%s: a field starts with its type (int, short, char, func or a record)", r->name);
-			SkipStatement(l);
+			SkipStatement(o, l);
 			continue;
 		}
-		ParseType(p, &f.type);
+		ParseType(o, p, &f.type);
 		if(f.type.rec == r && !f.type.ptr)
 			Errorf(l, fline, "%s: a record cannot contain itself (a pointer to it can: %s*)", r->name, r->name);
 		if(l->tok.kind != T_IDENT || IsReserved(l->tok.text))
 		{
 			Errorf(l, fline, "%s: the name of a field was expected", r->name);
-			SkipStatement(l);
+			SkipStatement(o, l);
 			continue;
 		}
 		snprintf(f.name, sizeof f.name, "%s", l->tok.text);
-		Next(l);
-		if(Accept(l, "["))
+		Next(o, l);
+		if(Accept(o, l, "["))
 		{
-			ParseDims(p, f.name, &f.count, &f.inner);
+			ParseDims(o, p, f.name, &f.count, &f.inner);
 			f.isArray = 1;
 		}
 		f.off = next;
-		if(Accept(l, "@"))
+		if(Accept(o, l, "@"))
 		{
-			e = ParseBinary(p, 0);
+			e = ParseBinary(o, p, 0);
 			EvalConst(p, e, NULL, 1, &f.off);
 			FreeNode(e);
 		}
-		Expect(l, ";");
+		Expect(o, l, ";");
 		if(FindField(r, f.name))
 		{
 			Errorf(l, fline, "%s.%s is declared twice", r->name, f.name);
@@ -1562,15 +1564,15 @@ static void ParseRecord(Parser_t* p)
 		if(next > r->size)
 			r->size = next;
 	}
-	Expect(l, "}");
-	Accept(l, ";");
+	Expect(o, l, "}");
+	Accept(o, l, ";");
 	if(r->size == 0)
 		Errorf(l, line, "%s: a record has at least one field", r->name);
 }
 
 // ---- the unit ----------------------------------------------------------------------------------------
 
-static void ParseDirective(Parser_t* p)
+static void ParseDirective(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Unit_t* u = p->unit;
@@ -1578,7 +1580,7 @@ static void ParseDirective(Parser_t* p)
 	int line = l->tok.line;
 	strcpy(name, l->tok.text);
 	strcpy(arg, l->tok.arg);
-	Next(l);
+	Next(o, l);
 	if(strcmp(name, "engine") == 0)
 	{
 		EngineGen_t g = GEN_COUNT;
@@ -1600,47 +1602,47 @@ static void ParseDirective(Parser_t* p)
 	Errorf(l, line, "unknown directive #%s", name);
 }
 
-static void ParseUnit(Parser_t* p)
+static void ParseUnit(OpenBGI_t* o, Parser_t* p)
 {
 	Lex_t* l = &p->lex;
 	Unit_t* u = p->unit;
-	Next(l);
+	Next(o, l);
 	while(l->tok.kind != T_EOF)
 	{
 		int line = l->tok.line;
 		if(l->tok.kind == T_DIRECTIVE)
 		{
-			ParseDirective(p);
+			ParseDirective(o, p);
 			continue;
 		}
 		if(IsIdent(l, "__program"))
 		{
 			Node_t* a;
-			Next(l);
-			a = ParseAsmBlock(p);
+			Next(o, l);
+			a = ParseAsmBlock(o, p);
 			u->program = (char*)a->bytes;
 			a->bytes = NULL;
 			FreeNode(a);
 			continue;
 		}
 		{
-			int area = AreaDeclStart(l);
+			int area = AreaDeclStart(o, l);
 			if(area >= 0)
 			{
-				ParseAreaDecl(p, area);
+				ParseAreaDecl(o, p, area);
 				continue;
 			}
 		}
-		if(IsIdent(l, "struct") && Peek(l)->kind == T_IDENT)
+		if(IsIdent(l, "struct") && Peek(o, l)->kind == T_IDENT)
 		{
-			ParseRecord(p);
+			ParseRecord(o, p);
 			continue;
 		}
 		if(l->tok.kind == T_IDENT)
 		{
 			Func_t* f = (Func_t*)calloc(1, sizeof *f);
 			snprintf(f->name, sizeof f->name, "%s", l->tok.text);
-			Next(l);
+			Next(o, l);
 			if(FindFunc(u, f->name))
 				Errorf(l, line, "function %s is defined twice", f->name);
 			if(FindArea(u, f->name))
@@ -1653,7 +1655,7 @@ static void ParseUnit(Parser_t* p)
 				u->funcs = (Func_t**)realloc(u->funcs, (size_t)u->funcCap * sizeof *u->funcs);
 			}
 			u->funcs[u->funcCount++] = f;
-			Expect(l, "(");
+			Expect(o, l, "(");
 			if(!IsPunct(l, ")"))
 				for(;;)
 				{
@@ -1661,9 +1663,9 @@ static void ParseUnit(Parser_t* p)
 					TypeRef_t type;
 					memset(&type, 0, sizeof type);
 					type.elem = 4;
-					if(AtType(p))
+					if(AtType(o, p))
 					{
-						ParseType(p, &type);
+						ParseType(o, p, &type);
 						if(TypeSize(&type) != 4 || (type.rec && !type.ptr))
 							Errorf(l, l->tok.line, "a parameter is one word: an int, a pointer or a func");
 					}
@@ -1674,18 +1676,18 @@ static void ParseUnit(Parser_t* p)
 					}
 					AddVar(f, l->tok.text, &type, 4, 0);
 					f->params++;
-					Next(l);
-					if(!Accept(l, ","))
+					Next(o, l);
+					if(!Accept(o, l, ","))
 						break;
 				}
-			Expect(l, ")");
+			Expect(o, l, ")");
 			{ // the parameters lie in the frame in reverse order: the last one at its lowest address
 				int k;
 				for(k = 0; k < f->params; k++)
 					f->vars[k].off = (uint32_t)(f->params - 1 - k) * 4;
 			}
 			p->func = f;
-			f->body = ParseBlock(p);
+			f->body = ParseBlock(o, p);
 			p->func = NULL;
 			if(f->body->count == 1 && f->body->items[0]->kind == N_ASM)
 			{
@@ -1695,7 +1697,7 @@ static void ParseUnit(Parser_t* p)
 			continue;
 		}
 		Errorf(l, line, "a function definition was expected, found '%s'", l->tok.text);
-		Next(l);
+		Next(o, l);
 	}
 }
 
@@ -1728,7 +1730,7 @@ typedef struct Gen
 	Unit_t* u;
 	Lex_t* lex;
 	Func_t* func;
-	FILE* out; // the listing
+	AsmOut_t* out; // the listing (in memory)
 	int labels;
 	int errors;
 	// the string table: appended in order of appearance
@@ -1750,6 +1752,11 @@ typedef struct Gen
 		int label;
 	} named[512];
 	int namedCount;
+	char opName[16]; // OpMnemonic's "0x.." for an opcode without a name
+	/* a program whose code and strings do not fit the 32 KB a relative
+	 * reference spans: its strings and functions are named by their full
+	 * addresses (push_i32) instead */
+	int far;
 } Gen_t;
 
 static void GenError(Gen_t* g, int line, const char* fmt, ...)
@@ -1766,11 +1773,11 @@ static void GenError(Gen_t* g, int line, const char* fmt, ...)
 static void Emit(Gen_t* g, const char* fmt, ...)
 {
 	va_list ap;
-	fputc('\t', g->out);
+	AsmOut_Putc(g->out, '\t');
 	va_start(ap, fmt);
-	vfprintf(g->out, fmt, ap);
+	AsmOut_VPrintf(g->out, fmt, ap);
 	va_end(ap);
-	fputc('\n', g->out);
+	AsmOut_Putc(g->out, '\n');
 }
 
 static int NewLabel(Gen_t* g)
@@ -1780,7 +1787,7 @@ static int NewLabel(Gen_t* g)
 
 static void PlaceLabel(Gen_t* g, int label)
 {
-	fprintf(g->out, "L%d:\n", label);
+	AsmOut_Printf(g->out, "L%d:\n", label);
 }
 
 // an unconditional jump to a label
@@ -1836,11 +1843,10 @@ static void GenCond(Gen_t* g, Node_t* n, int trueLabel, int falseLabel, int true
 static const char* OpMnemonic(Gen_t* g, int op)
 {
 	const char* name = Asm_OpName(0, op, g->u->gen);
-	static char buf[16];
 	if(name)
 		return name;
-	snprintf(buf, sizeof buf, "0x%02x", op);
-	return buf;
+	snprintf(g->opName, sizeof g->opName, "0x%02x", op);
+	return g->opName;
 }
 
 // a variable reference: its frame address (push_local_addr F - off)
@@ -1971,9 +1977,9 @@ typedef struct Obj
 } Obj_t;
 
 // a record that lies at the address (not a pointer to one): it has no value of its own, its name stands for the address
-static int IsRecordObj(const Obj_t* o)
+static int IsRecordObj(const Obj_t* obj)
 {
-	return o->type.rec && !IsPointerType(&o->type);
+	return obj->type.rec && !IsPointerType(&obj->type);
 }
 
 // the name an lvalue starts with, for the messages
@@ -2059,11 +2065,11 @@ static int ObjType(Gen_t* g, const Node_t* n, Obj_t* out)
  * rows of a two-dimensional array among them. */
 static int DerefSize(Gen_t* g, const Node_t* n)
 {
-	Obj_t o;
-	if(n->op || !ObjType(g, n->a, &o) || o.type.rec || o.type.func)
+	Obj_t obj;
+	if(n->op || !ObjType(g, n->a, &obj) || obj.type.rec || obj.type.func)
 		return n->size;
-	if(o.isArray ? !o.type.ptr && !o.inner : o.type.ptr == 1)
-		return SizeCode(o.type.elem);
+	if(obj.isArray ? !obj.type.ptr && !obj.inner : obj.type.ptr == 1)
+		return SizeCode(obj.type.elem);
 	return n->size;
 }
 
@@ -2212,14 +2218,14 @@ static int IsCallNode(const Node_t* n)
 // the address of something that can be assigned and the size code of the access
 static int GenLvalue(Gen_t* g, Node_t* n)
 {
-	Obj_t o;
-	if(!GenObject(g, n, &o))
+	Obj_t obj;
+	if(!GenObject(g, n, &obj))
 		return 2;
-	if(o.isArray)
+	if(obj.isArray)
 		GenError(g, n->line, "%s is an array", ObjName(n));
-	else if(IsRecordObj(&o))
+	else if(IsRecordObj(&obj))
 		GenError(g, n->line, "%s is a record: assign its fields, or copy it with memcpy", ObjName(n));
-	return SizeCode((int)TypeSize(&o.type));
+	return SizeCode((int)TypeSize(&obj.type));
 }
 
 /* the value of an lvalue: its address and a load - except for an array
@@ -2227,9 +2233,9 @@ static int GenLvalue(Gen_t* g, Node_t* n)
  * rec.name)` and `memcpy(dst, rec, sizeof(Rec))` read as they do in C) */
 static void GenObjectValue(Gen_t* g, Node_t* n)
 {
-	Obj_t o;
-	if(GenObject(g, n, &o) && !o.isArray && !IsRecordObj(&o))
-		Emit(g, "load %d", SizeCode((int)TypeSize(&o.type)));
+	Obj_t obj;
+	if(GenObject(g, n, &obj) && !obj.isArray && !IsRecordObj(&obj))
+		Emit(g, "load %d", SizeCode((int)TypeSize(&obj.type)));
 }
 
 static void GenCall(Gen_t* g, Node_t* n)
@@ -2275,7 +2281,7 @@ static void GenCall(Gen_t* g, Node_t* n)
 	for(i = n->count - 1; i >= 0; i--)
 		GenExpr(g, n->items[i]);
 	if(n->a->kind == N_NAME && FindFunc(g->u, n->a->text) && !FindVar(g->func, n->a->text) && !FindArea(g->u, n->a->text))
-		Emit(g, "push_code_off %s", n->a->text);
+		Emit(g, g->far ? "push_i32 %s" : "push_code_off %s", n->a->text);
 	else
 		GenExpr(g, n->a);
 	Emit(g, "call");
@@ -2291,21 +2297,21 @@ static void GenExpr(Gen_t* g, Node_t* n)
 			else
 				EmitPush(g, (uint32_t)n->num);
 			break;
-		case N_STR: Emit(g, "push_code_addr str_%d", InternString(g, n->bytes, n->len)); break;
+		case N_STR: Emit(g, g->far ? "push_i32 code(str_%d)" : "push_code_addr str_%d", InternString(g, n->bytes, n->len)); break;
 		case N_NAME:
 			if(strcmp(n->text, "__pop") == 0)
 				break; // the value already on the stack: nothing to emit
 			if(FindVar(g->func, n->text) || FindArea(g->u, n->text))
 				GenObjectValue(g, n); // a variable's value; an array's name is its address
 			else if(FindFunc(g->u, n->text))
-				Emit(g, "push_code_off %s", n->text);
+				Emit(g, g->far ? "push_i32 %s" : "push_code_off %s", n->text);
 			else
 				GenError(g, n->line, "unknown name %s", n->text);
 			break;
 		case N_ADDR:
 		{
-			Obj_t o;
-			GenObject(g, n->a, &o);
+			Obj_t obj;
+			GenObject(g, n->a, &obj);
 			break;
 		}
 		case N_INDEX:
@@ -2354,13 +2360,13 @@ static void GenExpr(Gen_t* g, Node_t* n)
 			if(n->b->kind == N_INITLIST)
 			{ // a list of values stored from the address on: `*(int*)a = {1, 2};`, or `a = {1, 2};` with an array's name
 				int i;
-				Obj_t o;
+				Obj_t obj;
 				size = 2;
-				if(GenObject(g, n->a, &o))
+				if(GenObject(g, n->a, &obj))
 				{
-					if(IsRecordObj(&o))
+					if(IsRecordObj(&obj))
 						GenError(g, n->line, "%s is a record: a list of values needs the type of its elements, *(int*)%s = {..}", ObjName(n->a), ObjName(n->a));
-					size = SizeCode((int)TypeSize(&o.type));
+					size = SizeCode((int)TypeSize(&obj.type));
 				}
 				for(i = 0; i < n->b->count; i++)
 					GenExpr(g, n->b->items[i]);
@@ -2459,7 +2465,7 @@ static void GenCond(Gen_t* g, Node_t* n, int trueLabel, int falseLabel, int true
 	}
 }
 
-static void GenStatements(Gen_t* g, Node_t* block);
+static void GenStatements(OpenBGI_t* o, Gen_t* g, Node_t* block);
 
 static int IsJumpStatement(const Node_t* s)
 {
@@ -2492,7 +2498,7 @@ static void GenJump(Gen_t* g, Node_t* s)
 	}
 }
 
-static void EmitAsmLines(Gen_t* g, const char* text, int line)
+static void EmitAsmLines(OpenBGI_t* o, Gen_t* g, const char* text, int line)
 {
 	const char* p = text;
 	while(*p)
@@ -2511,7 +2517,7 @@ static void EmitAsmLines(Gen_t* g, const char* text, int line)
 				uint8_t* bytes;
 				uint32_t len;
 				const char* next;
-				const char* err = Asm_ReadStringLiteral(s + k + 15, s + n, &bytes, &len, &next);
+				const char* err = Asm_ReadStringLiteral(o, s + k + 15, s + n, &bytes, &len, &next);
 				if(err)
 					GenError(g, line, "in __asm: %s", err);
 				else
@@ -2521,7 +2527,7 @@ static void EmitAsmLines(Gen_t* g, const char* text, int line)
 				}
 			}
 			else
-				fprintf(g->out, "%.*s\n", (int)(n - k), s + k);
+				AsmOut_Printf(g->out, "%.*s\n", (int)(n - k), s + k);
 		}
 		if(!e)
 			break;
@@ -2529,11 +2535,11 @@ static void EmitAsmLines(Gen_t* g, const char* text, int line)
 	}
 }
 
-static void GenStatement(Gen_t* g, Node_t* s)
+static void GenStatement(OpenBGI_t* o, Gen_t* g, Node_t* s)
 {
 	switch(s->kind)
 	{
-		case N_BLOCK: GenStatements(g, s); break;
+		case N_BLOCK: GenStatements(o, g, s); break;
 		case N_EXPR: GenExpr(g, s->a); break;
 		case N_DECL:
 			if(s->a)
@@ -2568,12 +2574,12 @@ static void GenStatement(Gen_t* g, Node_t* s)
 			}
 			GenCond(g, s->a, thenLabel, elseLabel, 1);
 			PlaceLabel(g, thenLabel);
-			GenStatement(g, s->b);
+			GenStatement(o, g, s->b);
 			if(s->c)
 			{
 				EmitJump(g, endLabel);
 				PlaceLabel(g, elseLabel);
-				GenStatement(g, s->c);
+				GenStatement(o, g, s->c);
 			}
 			else
 				PlaceLabel(g, elseLabel);
@@ -2595,7 +2601,7 @@ static void GenStatement(Gen_t* g, Node_t* s)
 			g->breakLabel[g->depth] = end;
 			g->continueLabel[g->depth] = head;
 			g->depth++;
-			GenStatement(g, s->b);
+			GenStatement(o, g, s->b);
 			g->depth--;
 			EmitJump(g, head);
 			PlaceLabel(g, end);
@@ -2618,7 +2624,7 @@ static void GenStatement(Gen_t* g, Node_t* s)
 			g->breakLabel[g->depth] = end;
 			g->continueLabel[g->depth] = s->c ? incr : head;
 			g->depth++;
-			GenStatement(g, s->items[0]);
+			GenStatement(o, g, s->items[0]);
 			g->depth--;
 			PlaceLabel(g, incr);
 			if(s->c)
@@ -2639,7 +2645,7 @@ static void GenStatement(Gen_t* g, Node_t* s)
 			g->breakLabel[g->depth] = end;
 			g->continueLabel[g->depth] = cond;
 			g->depth++;
-			GenStatement(g, s->b);
+			GenStatement(o, g, s->b);
 			g->depth--;
 			PlaceLabel(g, cond);
 			GenCond(g, s->a, head, end, 0);
@@ -2655,16 +2661,16 @@ static void GenStatement(Gen_t* g, Node_t* s)
 			EmitJump(g, g->exitLabel);
 			break;
 		case N_LABEL: PlaceLabel(g, NamedLabel(g, s->text, s->line)); break;
-		case N_ASM: EmitAsmLines(g, (const char*)s->bytes, s->line); break;
+		case N_ASM: EmitAsmLines(o, g, (const char*)s->bytes, s->line); break;
 		case N_INLINE:
 		{
 			uint32_t i;
 			char* list;
-			size_t o = 0;
+			size_t off = 0;
 			GenExpr(g, s->a);
 			list = (char*)malloc(s->len * 6 + 16);
 			for(i = 0; i < s->len; i++)
-				o += (size_t)sprintf(list + o, "%s0x%02x", i ? ", " : "", s->bytes[i]);
+				off += (size_t)sprintf(list + off, "%s0x%02x", i ? ", " : "", s->bytes[i]);
 			Emit(g, "store_inline %s", list);
 			free(list);
 			break;
@@ -2673,23 +2679,23 @@ static void GenStatement(Gen_t* g, Node_t* s)
 	}
 }
 
-static void GenStatements(Gen_t* g, Node_t* block)
+static void GenStatements(OpenBGI_t* o, Gen_t* g, Node_t* block)
 {
 	int i;
 	for(i = 0; i < block->count; i++)
-		GenStatement(g, block->items[i]);
+		GenStatement(o, g, block->items[i]);
 }
 
-static void GenFunction(Gen_t* g, Func_t* f)
+static void GenFunction(OpenBGI_t* o, Gen_t* g, Func_t* f)
 {
 	int i;
 	g->func = f;
 	g->namedCount = 0;
 	g->depth = 0;
-	fprintf(g->out, "%s:\n", f->name);
+	AsmOut_Printf(g->out, "%s:\n", f->name);
 	if(f->isAsm)
 	{
-		EmitAsmLines(g, (const char*)f->asmNode->bytes, f->asmNode->line);
+		EmitAsmLines(o, g, (const char*)f->asmNode->bytes, f->asmNode->line);
 		return;
 	}
 	g->exitLabel = NewLabel(g);
@@ -2702,7 +2708,7 @@ static void GenFunction(Gen_t* g, Func_t* f)
 		Emit(g, "push_local_addr 0x%x", (unsigned)(f->frame - f->vars[i].off));
 		Emit(g, "store 2");
 	}
-	GenStatements(g, f->body);
+	GenStatements(o, g, f->body);
 	PlaceLabel(g, g->exitLabel);
 	Emit(g, "push_fp");
 	EmitPush(g, f->frame);
@@ -2711,24 +2717,24 @@ static void GenFunction(Gen_t* g, Func_t* f)
 	Emit(g, "ret");
 }
 
-void Bpc_Compile(const char* text, size_t len, const char* fileName, EngineGen_t gen, const PrepIncludes_t* inc, FILE* log, BpcResult_t* out)
+// Bpc_Compile and Bpc_CompileText: the messages go to `log`, a stream or a text
+static void Compile(OpenBGI_t* o, const char* text, size_t len, const char* fileName, EngineGen_t gen, const PrepIncludes_t* inc, AsmOut_t* log,
+	BpcResult_t* out)
 {
 	Parser_t p;
 	Unit_t unit;
 	Gen_t g;
 	PrepText_t pre;
-	FILE* mem;
-	char* listing;
-	long n;
-	int i;
+	int i, far;
 	AsmResult_t ar;
-	Asm_ResetStringEncoding(); // the default, until an #encoding line says otherwise
+	Asm_ResetStringEncoding(o); // the default, until an #encoding line says otherwise
 	memset(out, 0, sizeof *out);
 	memset(&p, 0, sizeof p);
 	memset(&unit, 0, sizeof unit);
 	memset(&g, 0, sizeof g);
+	memset(&ar, 0, sizeof ar);
 	// the includes and the defined names first: the lexer reads the expanded text
-	Prep_Expand(text, len, fileName, inc, log, &pre);
+	Prep_ExpandTo(text, len, fileName, inc, log, &pre);
 	if(pre.errors)
 	{
 		out->errors = pre.errors;
@@ -2739,10 +2745,10 @@ void Bpc_Compile(const char* text, size_t len, const char* fileName, EngineGen_t
 	p.lex.p = pre.text;
 	p.lex.end = pre.text + pre.len;
 	p.lex.line = 1;
-	p.lex.log = log ? log : stderr;
+	p.lex.log = log;
 	p.lex.prep = &pre;
 	p.unit = &unit;
-	ParseUnit(&p);
+	ParseUnit(o, &p);
 	if(p.lex.peeked)
 		free(p.lex.peek.bytes);
 	if(!p.lex.errors && !unit.funcCount && !unit.program)
@@ -2755,56 +2761,89 @@ void Bpc_Compile(const char* text, size_t len, const char* fileName, EngineGen_t
 		Prep_Free(&pre);
 		return;
 	}
-	mem = tmpfile();
-	if(!mem)
+	/* The listing, and the file the assembler makes of it.  A string and
+	 * a function are named by where they are relative to the instruction
+	 * (16 bits), which a program of more than 32 KB cannot do everywhere:
+	 * when the assembler says so, the listing is written again with full
+	 * addresses for both.  The first attempt's messages are kept back
+	 * until it is known whether they stand.  Both the listing and the
+	 * messages kept back are texts in memory: a compile uses no file. */
+	for(far = 0; far < 2; far++)
 	{
-		out->errors = 1;
-		FreeUnit(&unit);
-		Prep_Free(&pre);
-		return;
-	}
-	g.u = &unit;
-	g.lex = &p.lex;
-	g.out = mem;
-	fprintf(mem, ".engine %s\n", unit.gen == GEN_COUNT ? "any" : kGenNames[unit.gen]);
-	if(unit.program)
-		fputs(unit.program, mem);
-	else
-	{
-		for(i = 0; i < unit.funcCount; i++)
-			GenFunction(&g, unit.funcs[i]);
-		fprintf(mem, "__codeend:\n");  // where the code ends, for the decompiler's comparison
-		fprintf(mem, "\t.align 16\n"); // the code is padded even when no string follows
-		for(i = 0; i < g.strings; i++)
+		AsmOut_t mem, held;
+		int hold = !(far || unit.program || unit.gen == GEN_COUNT);
+		int warned = p.lex.warnings, again = 0;
+		memset(&mem, 0, sizeof mem);
+		memset(&held, 0, sizeof held);
+		if(hold)
+			p.lex.log = &held;
+		memset(&g, 0, sizeof g);
+		g.u = &unit;
+		g.lex = &p.lex;
+		g.out = &mem;
+		g.far = far;
+		AsmOut_Printf(&mem, ".engine %s\n", unit.gen == GEN_COUNT ? "any" : kGenNames[unit.gen]);
+		if(unit.program)
+			AsmOut_Puts(&mem, unit.program);
+		else
 		{
-			fprintf(mem, "str_%d:\n\t.str ", i);
-			Asm_WriteStringLiteral(mem, g.strTab[i].bytes, g.strTab[i].len);
-			fputc('\n', mem);
+			for(i = 0; i < unit.funcCount; i++)
+				GenFunction(o, &g, unit.funcs[i]);
+			AsmOut_Puts(&mem, "__codeend:\n");  // where the code ends, for the decompiler's comparison
+			AsmOut_Puts(&mem, "\t.align 16\n"); // the code is padded even when no string follows
+			for(i = 0; i < g.strings; i++)
+			{
+				AsmOut_Printf(&mem, "str_%d:\n\t.str ", i);
+				AsmOut_StringLiteral(o, &mem, g.strTab[i].bytes, g.strTab[i].len);
+				AsmOut_Putc(&mem, '\n');
+			}
+			if(g.strings)
+				AsmOut_Puts(&mem, "\t.align 16\n");
 		}
-		if(g.strings)
-			fprintf(mem, "\t.align 16\n");
+		out->errors = g.errors;
+		for(i = 0; i < g.strings; i++)
+			free(g.strTab[i].bytes);
+		free(g.strTab);
+		memset(&ar, 0, sizeof ar);
+		if(!out->errors && (mem.failed || !mem.text))
+		{
+			AsmOut_Printf(p.lex.log, "%s: error: out of memory\n", fileName ? fileName : "source");
+			out->errors = 1;
+		}
+		else if(!out->errors)
+		{
+			Asm_AssembleTo(o, mem.text, mem.len, unit.gen, p.lex.log, &ar);
+			out->errors = ar.errors;
+		}
+		free(mem.text);
+		if(hold)
+		{ // what the attempt said: for good, unless all that is wrong is the reach of its references
+			int reach = 0, other = 0;
+			const char* q = held.text ? held.text : "";
+			p.lex.log = log;
+			while(*q)
+			{
+				const char* nl = strchr(q, '\n');
+				size_t n = nl ? (size_t)(nl - q) + 1 : strlen(q);
+				char line[0x400];
+				snprintf(line, sizeof line, "%.*s", (int)(n < sizeof line - 1 ? n : sizeof line - 1), q);
+				if(strstr(line, "is out of the 16-bit range"))
+					reach++;
+				else if(strstr(line, ": error: "))
+					other++;
+				q += n;
+			}
+			again = reach && !other && !g.errors;
+			if(!again && held.text)
+				AsmOut_Write(log, held.text, held.len);
+			free(held.text);
+		}
+		if(!again)
+			break;
+		BGI_Free(ar.file);
+		BGI_Free(ar.labels);
+		p.lex.warnings = warned;
 	}
-	out->errors = g.errors;
-	for(i = 0; i < g.strings; i++)
-		free(g.strTab[i].bytes);
-	free(g.strTab);
-	if(out->errors)
-	{
-		fclose(mem);
-		FreeUnit(&unit);
-		Prep_Free(&pre);
-		return;
-	}
-	n = ftell(mem);
-	fseek(mem, 0, SEEK_SET);
-	listing = (char*)malloc((size_t)n + 1);
-	if(fread(listing, 1, (size_t)n, mem) != (size_t)n)
-		n = 0;
-	listing[n] = 0;
-	fclose(mem);
-	Asm_Assemble(listing, (size_t)n, unit.gen, p.lex.log, &ar);
-	free(listing);
-	out->errors = ar.errors;
 	out->warnings = p.lex.warnings + ar.warnings;
 	out->file = ar.file;
 	out->size = ar.size;
@@ -2812,4 +2851,21 @@ void Bpc_Compile(const char* text, size_t len, const char* fileName, EngineGen_t
 	out->labelCount = ar.labelCount;
 	FreeUnit(&unit);
 	Prep_Free(&pre);
+}
+
+void Bpc_Compile(OpenBGI_t* o, const char* text, size_t len, const char* fileName, EngineGen_t gen, const PrepIncludes_t* inc, FILE* log, BpcResult_t* out)
+{
+	AsmOut_t w;
+	memset(&w, 0, sizeof w);
+	w.fp = log ? log : stderr;
+	Compile(o, text, len, fileName, gen, inc, &w, out);
+}
+
+void Bpc_CompileText(OpenBGI_t* o, const char* text, size_t len, const char* fileName, EngineGen_t gen, const PrepIncludes_t* inc, char** messages,
+	BpcResult_t* out)
+{
+	AsmOut_t w;
+	memset(&w, 0, sizeof w);
+	Compile(o, text, len, fileName, gen, inc, &w, out);
+	*messages = w.text;
 }

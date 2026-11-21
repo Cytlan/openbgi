@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * blit_scale.c - the whole-picture scalers of "91 1C" / BmpOp_Resample and
- * the gathering add of "91 1B" (inc/bgi/gfx/bitmap.h; Blit_InitMmxTables
- * is declared in inc/bgi/gfx.h):
+ * the gathering add of "91 1B" (src/include/bgi/gfx/bitmap.h; Blit_InitMmxTables
+ * is declared in src/include/bgi/gfx.h):
  *
  *   Blit_InitMmxTables  the 257-entry MMX weight table
  *   Blit_ScaleNearest   point sampling
@@ -301,7 +301,7 @@ void Blit_Scale(Bmp_t* dst, const Bmp_t* src, int32_t sx16, int32_t sy16)
 	}
 }
 
-/* "91 1B" of 1.494 on: the gathering add.
+/* "91 1B" of 1.492 on: the gathering add.
  *
  * Every source pixel is scattered onto the destination at
  *   x = ((w - 1) cx) / 2 + i (1 - cx),  y = ((h - 1) cy) / 2 + j (1 - cy)

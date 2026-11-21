@@ -5,7 +5,7 @@
  * window_internal.h - shared between the files of the message Window
  *                     display object (window.c, window_layers.c,
  *                     window_text.c); the public interface is
- *                     inc/bgi/gfx/window.h
+ *                     src/include/bgi/gfx/window.h
  *
  * The three files split the object by layer: window.c owns the object
  * itself and the composite, window_layers.c the frame, the items and the

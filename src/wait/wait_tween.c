@@ -27,10 +27,12 @@
 #include "bgi/msg.h"
 #include "bgi/sys.h"
 #include "bgi/input.h"
+#include "bgi/inputmap.h"
 #include "bgi/display.h"
 #include "bgi/gfx.h"
 #include "bgi/gfx/text.h"
 #include "bgi/gfx/path.h"
+#include "bgi/core.h"
 
 typedef struct WaitTween // 0xb0 bytes
 {
@@ -112,20 +114,20 @@ typedef struct WaitObjQuake // 0xd0 bytes
 typedef struct TweenVtbl
 {
 	WaitVtbl_t base;
-	int (*step)(WaitTween_t* w);
+	int (*step)(OpenBGI_t* o, WaitTween_t* w);
 } TweenVtbl_t;
-#define STEP(w) (((const TweenVtbl_t*)(w)->w.vt)->step(w))
+#define STEP(o, w) (((const TweenVtbl_t*)(w)->w.vt)->step(o, w))
 
-static void WaitTween_Destroy(Wait_t* w);
-static int WaitTween_Poll(Wait_t* w);
-static void WaitTween_OnMessage(Wait_t* w, WaitMsg_t* m);
-static int WaitTween_Step(WaitTween_t* w);
-static void WaitPath_Destroy(Wait_t* w);
-static int WaitPath_Step(WaitTween_t* w);
-static void WaitMove2_Destroy(Wait_t* w);
-static int WaitMove2_Step(WaitTween_t* w);
-static void WaitObjQuake_Destroy(Wait_t* w);
-static int WaitObjQuake_Step(WaitTween_t* w);
+static void WaitTween_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitTween_Poll(OpenBGI_t* o, Wait_t* w);
+static void WaitTween_OnMessage(OpenBGI_t* o, Wait_t* w, WaitMsg_t* m);
+static int WaitTween_Step(OpenBGI_t* o, WaitTween_t* w);
+static void WaitPath_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitPath_Step(OpenBGI_t* o, WaitTween_t* w);
+static void WaitMove2_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitMove2_Step(OpenBGI_t* o, WaitTween_t* w);
+static void WaitObjQuake_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitObjQuake_Step(OpenBGI_t* o, WaitTween_t* w);
 
 static const TweenVtbl_t WaitTween_Vtbl = {
 	{WaitTween_Destroy, WaitTween_Poll, Wait_SetTimer, Wait_IsDirtyBase, WaitTween_OnMessage}, WaitTween_Step};
@@ -141,12 +143,12 @@ static const TweenVtbl_t WaitObjQuake_Vtbl = {
 // ========================================================================
 
 // the shared constructor: resolves the handle in the text manager (the starters check it exists)
-void WaitTween_Ctor(WaitTween_t* w, Thread_t* t, uint32_t h)
+void WaitTween_Ctor(OpenBGI_t* o, WaitTween_t* w, Thread_t* t, uint32_t h)
 {
-	Wait_Ctor(&w->w, t);
+	Wait_Ctor(o, &w->w, t);
 	w->w.vt = &WaitTween_Vtbl.base;
 	w->handle = h;
-	w->obj = Gfx_FindObject(gTextGfx, h);
+	w->obj = Gfx_FindObject(o->text.textGfx, h);
 	w->skipOn = 0;
 	w->layersPushed = 0;
 	w->prevMouseTop = 0;
@@ -157,19 +159,19 @@ void WaitTween_Ctor(WaitTween_t* w, Thread_t* t, uint32_t h)
 }
 
 // pops the input layers the skip option pushed
-void WaitTween_Dtor(WaitTween_t* w)
+void WaitTween_Dtor(OpenBGI_t* o, WaitTween_t* w)
 {
 	if(w->layersPushed)
 	{
-		MouseLayer_Pop(LAYER_KEY(w->prio));
-		KeyLayer_Pop(LAYER_KEY(w->prio));
+		MouseLayer_Pop(o, LAYER_KEY(w->prio));
+		KeyLayer_Pop(o, LAYER_KEY(w->prio));
 	}
-	Wait_Dtor(&w->w);
+	Wait_Dtor(o, &w->w);
 }
 
-static void WaitTween_Destroy(Wait_t* w)
+static void WaitTween_Destroy(OpenBGI_t* o, Wait_t* w)
 {
-	WaitTween_Dtor((WaitTween_t*)w);
+	WaitTween_Dtor(o, (WaitTween_t*)w);
 	BGI_Free(w);
 }
 
@@ -177,69 +179,69 @@ static void WaitTween_Destroy(Wait_t* w)
  * from the object's current position, level and progress towards (x, y),
  * level and progress.  The object is made visible; the first step runs
  * after 1 ms. */
-static void WaitTween_Start(WaitTween_t* w, int32_t x, int32_t y, int curve, int level, int levelCurve, int progress,
+static void WaitTween_Start(OpenBGI_t* o, WaitTween_t* w, int32_t x, int32_t y, int curve, int level, int levelCurve, int progress,
 	int duration, int fps, int maxSkip)
 {
 	int32_t pos[2];
 	w->cur = 0;
 	w->duration = duration ? duration : 1;
 	w->frameMs = 1;
-	w->obj->vt->getPos(w->obj, pos);
+	w->obj->vt->getPos(o, w->obj, pos);
 	w->startX = pos[0];
 	w->startY = pos[1];
 	w->dx = x - pos[0];
 	w->dy = y - pos[1];
 	w->curve = curve;
-	w->startLevel = w->obj->vt->getLevel(w->obj);
+	w->startLevel = w->obj->vt->getLevel(o, w->obj);
 	w->dLevel = level - w->startLevel;
 	w->levelCurve = levelCurve;
 	w->startProg = DispObj_GetProgressInt(w->obj);
 	w->dProg = progress < 0 ? 0 : progress - w->startProg; // -1 (1.69/472 on): keep the progress
 	w->lastX = w->lastY = (int32_t)0x80000000;
 	w->lastLevel = w->lastProg = -1;
-	w->obj->vt->setVisible(w->obj, 1);
-	w->obj->vt->invalidate(w->obj);
+	w->obj->vt->setVisible(o, w->obj, 1);
+	w->obj->vt->invalidate(o, w->obj);
 	w->fps = fps;
 	w->maxSkip = maxSkip;
 	w->updates = 0;
-	w->startTicks = GetTicks();
+	w->startTicks = GetTicks(o);
 	w->stepMs = w->limitMs = maxSkip * 1000 / fps;
-	w->w.vt->setTimer(&w->w, 1);
+	w->w.vt->setTimer(o, &w->w, 1);
 }
 
 // position + level, the progress stays
-static void WaitTween_StartMove(WaitTween_t* w, int32_t x, int32_t y, int curve, int level, int duration, int fps,
+static void WaitTween_StartMove(OpenBGI_t* o, WaitTween_t* w, int32_t x, int32_t y, int curve, int level, int duration, int fps,
 	int maxSkip)
 {
-	WaitTween_Start(w, x, y, curve, level, 0, DispObj_GetProgressInt(w->obj), duration, fps, maxSkip);
+	WaitTween_Start(o, w, x, y, curve, level, 0, DispObj_GetProgressInt(w->obj), duration, fps, maxSkip);
 }
 
 // level only, the position stays
-static void WaitTween_StartInPlace(WaitTween_t* w, int level, int duration, int fps, int maxSkip)
+static void WaitTween_StartInPlace(OpenBGI_t* o, WaitTween_t* w, int level, int duration, int fps, int maxSkip)
 {
 	int32_t pos[2];
-	w->obj->vt->getPos(w->obj, pos);
-	WaitTween_StartMove(w, pos[0], pos[1], 0, level, duration, fps, maxSkip);
+	w->obj->vt->getPos(o, w->obj, pos);
+	WaitTween_StartMove(o, w, pos[0], pos[1], 0, level, duration, fps, maxSkip);
 }
 
 /* the skip option: with `on` the wait pushes a mouse and a key layer at
  * `prio` and remembers the click / key counters so poll() can see a new
  * press */
-static void WaitTween_SetSkip(WaitTween_t* w, int on, uint32_t prio)
+static void WaitTween_SetSkip(OpenBGI_t* o, WaitTween_t* w, int on, uint32_t prio)
 {
 	w->skipOn = on;
 	if(!on)
 		return;
 	if(w->layersPushed)
 	{
-		MouseLayer_Pop(LAYER_KEY(w->prio));
-		KeyLayer_Pop(LAYER_KEY(w->prio));
+		MouseLayer_Pop(o, LAYER_KEY(w->prio));
+		KeyLayer_Pop(o, LAYER_KEY(w->prio));
 	}
 	w->prio = (int32_t)prio;
-	MouseLayer_Push(LAYER_KEY(prio));
-	KeyLayer_Push(LAYER_KEY(prio));
-	w->prevClicks = CountKeysByMask(1);
-	w->prevKeys = CountKeysByMask(Input_TweenKeyMask()); // 0x2180 in the reference
+	MouseLayer_Push(o, LAYER_KEY(prio));
+	KeyLayer_Push(o, LAYER_KEY(prio));
+	w->prevClicks = CountKeysByMask(o, 1);
+	w->prevKeys = CountKeysByMask(o, Input_TweenKeyMask(o)); // 0x2180 in the reference
 	w->layersPushed = 1;
 }
 
@@ -250,52 +252,52 @@ static void WaitTween_SetSkip(WaitTween_t* w, int on, uint32_t prio)
  * frame interval and then pushes (updates * 1000 / duration, interrupted).
  * In non-blocking mode it ends at once with the results so far
  * (interrupted = -1). */
-static int WaitTween_Poll(Wait_t* base)
+static int WaitTween_Poll(OpenBGI_t* o, Wait_t* base)
 {
 	WaitTween_t* w = (WaitTween_t*)base;
 	int blocking;
-	w->obj = Gfx_FindObject(gTextGfx, w->handle);
+	w->obj = Gfx_FindObject(o->text.textGfx, w->handle);
 	if(!w->obj)
-		ScriptError(MSG_OBJ_HANDLE_DELETED, base->thread);
-	Wait_Tick(base);
+		ScriptError(o, MSG_OBJ_HANDLE_DELETED, base->thread);
+	Wait_Tick(o, base);
 	w->breakReason = 0;
 	if(w->skipOn)
 	{
 		uint32_t key = LAYER_KEY(w->prio);
-		int clicks = CountKeysByMask(1);
-		int mouseTop = MouseLayer_Hit(key);
+		int clicks = CountKeysByMask(o, 1);
+		int mouseTop = MouseLayer_Hit(o, key);
 		int keys, keyTop;
 		if(mouseTop && w->prevMouseTop && (uint32_t)clicks > (uint32_t)w->prevClicks)
 			w->breakReason = 1;
-		keys = CountKeysByMask(Input_TweenKeyMask());
-		keyTop = KeyLayer_IsTop(key);
+		keys = CountKeysByMask(o, Input_TweenKeyMask(o));
+		keyTop = KeyLayer_IsTop(o, key);
 		if(keyTop && w->prevKeyTop && (uint32_t)keys > (uint32_t)w->prevKeys)
 			w->breakReason = 0x100;
-		if(Input_CheckSkip())
+		if(Input_CheckSkip(o))
 			w->breakReason = (int32_t)0x80000000;
 		if(w->breakReason)
-			Input_Poll(key, key); // consume the triggers
+			Input_Poll(o, key, key); // consume the triggers
 		w->prevKeys = keys;
 		w->prevMouseTop = mouseTop;
 		w->prevKeyTop = keyTop;
 		w->prevClicks = clicks;
 	}
-	blocking = Wait_IsBlocking(base);
+	blocking = Wait_IsBlocking(o, base);
 	if(!w->finished && blocking)
 	{
-		if(Wait_TimerExpired(base) || w->breakReason || w->cancelMsg)
+		if(Wait_TimerExpired(o, base) || w->breakReason || w->cancelMsg)
 		{
-			if(STEP(w))
+			if(STEP(o, w))
 			{
 				w->finished = 1;
 				w->interrupted = (w->breakReason || w->cancelMsg) ? 1 : 0;
 			}
-			Wait_Flush(base);
+			Wait_Flush(o, base);
 			w->updates++;
 		}
 		return 0;
 	}
-	if(!Wait_TimerExpired(base) && blocking)
+	if(!Wait_TimerExpired(o, base) && blocking)
 		return 0;
 	Thread_Push(base->thread, (uint32_t)(w->updates * 1000 / w->duration));
 	Thread_Push(base->thread, (uint32_t)w->interrupted);
@@ -303,7 +305,7 @@ static int WaitTween_Poll(Wait_t* base)
 }
 
 // "80 4C" with a = 1 ends the wait (b != 0, or any b while skipping is on)
-static void WaitTween_OnMessage(Wait_t* base, WaitMsg_t* m)
+static void WaitTween_OnMessage(OpenBGI_t* o, Wait_t* base, WaitMsg_t* m)
 {
 	WaitTween_t* w = (WaitTween_t*)base;
 	if(m->a == 1 && (m->b != 0 || w->skipOn))
@@ -314,27 +316,27 @@ static void WaitTween_OnMessage(Wait_t* base, WaitMsg_t* m)
  * frameMs to the timer and counts a frame, at most maxSkip frames and
  * never past duration; 1 when cur reached duration (the timer is re-armed
  * then so poll() lingers for one frame). */
-static int WaitTween_AdvanceFrames(WaitTween_t* w)
+static int WaitTween_AdvanceFrames(OpenBGI_t* o, WaitTween_t* w)
 {
 	int n = 0;
-	if(Wait_TimerExpired(&w->w))
+	if(Wait_TimerExpired(o, &w->w))
 	{
 		while(w->cur + n < w->duration)
 		{
 			Wait_TimerAdd(&w->w, (uint32_t)w->frameMs);
 			n++;
-			if(Wait_TimerExpired(&w->w) && n == w->maxSkip)
+			if(Wait_TimerExpired(o, &w->w) && n == w->maxSkip)
 			{ // the clock fell too far behind: drop the backlog and start afresh
-				w->w.vt->setTimer(&w->w, (uint32_t)w->frameMs);
+				w->w.vt->setTimer(o, &w->w, (uint32_t)w->frameMs);
 				break;
 			}
-			if(!Wait_TimerExpired(&w->w))
+			if(!Wait_TimerExpired(o, &w->w))
 				break;
 		}
 	}
 	w->cur += n;
-	if(Wait_TimerExpired(&w->w) && w->cur == w->duration)
-		w->w.vt->setTimer(&w->w, (uint32_t)w->frameMs);
+	if(Wait_TimerExpired(o, &w->w) && w->cur == w->duration)
+		w->w.vt->setTimer(o, &w->w, (uint32_t)w->frameMs);
 	return w->cur == w->duration;
 }
 
@@ -347,9 +349,9 @@ static int32_t TweenFactor(const WaitTween_t* w, int curve)
 /* the clock classes' time keeping: cur = elapsed ms, limited to maxSkip
  * frames past the previous update and to duration; 1 when the end is
  * reached */
-static int WaitTween_Clock(WaitTween_t* w)
+static int WaitTween_Clock(OpenBGI_t* o, WaitTween_t* w)
 {
-	int32_t elapsed = (int32_t)(GetTicks() - w->startTicks);
+	int32_t elapsed = (int32_t)(GetTicks(o) - w->startTicks);
 	if(w->maxSkip == 0)
 		w->cur = elapsed;
 	else
@@ -386,20 +388,20 @@ static int TweenBroken(WaitTween_t* w)
 }
 
 // the timer after a step: one frame interval at the end, 1 ms otherwise
-static void TweenRearm(WaitTween_t* w, int done)
+static void TweenRearm(OpenBGI_t* o, WaitTween_t* w, int done)
 {
-	w->w.vt->setTimer(&w->w, done ? (uint32_t)Present_GetInterval() : 1u);
+	w->w.vt->setTimer(o, &w->w, done ? (uint32_t)Present_GetInterval(o) : 1u);
 }
 
 // apply the position, level and progress of the current time; the object is touched only when something changed
-static int WaitTween_Step(WaitTween_t* w)
+static int WaitTween_Step(OpenBGI_t* o, WaitTween_t* w)
 {
 	int done;
 	int32_t x, y, level, prog;
 	if(TweenBroken(w))
 		done = 1;
 	else
-		done = WaitTween_Clock(w);
+		done = WaitTween_Clock(o, w);
 	if(done)
 	{
 		x = w->startX + w->dx;
@@ -418,14 +420,14 @@ static int WaitTween_Step(WaitTween_t* w)
 		w->lastY = y;
 		w->lastLevel = level;
 		w->lastProg = prog;
-		w->obj->vt->invalidate(w->obj);
-		w->obj->vt->setPos(w->obj, x, y);
-		w->obj->vt->setLevel(w->obj, level);
-		w->obj->vt->setProgress(w->obj, 1, prog);
-		w->obj->vt->invalidate(w->obj);
+		w->obj->vt->invalidate(o, w->obj);
+		w->obj->vt->setPos(o, w->obj, x, y);
+		w->obj->vt->setLevel(o, w->obj, level);
+		w->obj->vt->setProgress(o, w->obj, 1, prog);
+		w->obj->vt->invalidate(o, w->obj);
 		Wait_MarkDirty(&w->w);
 	}
-	TweenRearm(w, done);
+	TweenRearm(o, w, done);
 	return done;
 }
 
@@ -433,26 +435,26 @@ static int WaitTween_Step(WaitTween_t* w)
 // WaitPath
 // ========================================================================
 
-static void WaitPath_Ctor(WaitPath_t* w, Thread_t* t, uint32_t h)
+static void WaitPath_Ctor(OpenBGI_t* o, WaitPath_t* w, Thread_t* t, uint32_t h)
 {
-	WaitTween_Ctor(&w->t, t, h);
+	WaitTween_Ctor(o, &w->t, t, h);
 	w->t.w.vt = &WaitPath_Vtbl.base;
 	w->path = Path_New();
 }
 
-static void WaitPath_Destroy(Wait_t* base)
+static void WaitPath_Destroy(OpenBGI_t* o, Wait_t* base)
 {
 	WaitPath_t* w = (WaitPath_t*)base;
 	if(w->path)
 		Path_Delete(w->path);
-	WaitTween_Dtor(&w->t);
+	WaitTween_Dtor(o, &w->t);
 	BGI_Free(w);
 }
 
 /* the tween runs towards the last control point; the path starts at the
  * object's current fixed position followed by the n points (x, y, z, pad -
  * 16.16 each), parametrised 0 .. 0x10000.  0x80000001 without points. */
-static int WaitPath_Start(WaitPath_t* w, int n, const int32_t* points, int curve, int level, int levelCurve,
+static int WaitPath_Start(OpenBGI_t* o, WaitPath_t* w, int n, const int32_t* points, int curve, int level, int levelCurve,
 	int progress, int duration, int fps, int maxSkip)
 {
 	const int32_t* last = points + (n - 1) * 4;
@@ -460,8 +462,8 @@ static int WaitPath_Start(WaitPath_t* w, int n, const int32_t* points, int curve
 	int i;
 	if(n <= 0)
 		return (int)0x80000001;
-	WaitTween_Start(&w->t, last[0], last[1], curve, level, levelCurve, progress, duration, fps, maxSkip);
-	w->t.obj->vt->getFixedPos(w->t.obj, cur);
+	WaitTween_Start(o, &w->t, last[0], last[1], curve, level, levelCurve, progress, duration, fps, maxSkip);
+	w->t.obj->vt->getFixedPos(o, w->t.obj, cur);
 	Path_Clear(w->path);
 	Path_AddPoint(w->path, cur[0], cur[1], cur[2]);
 	for(i = 0; i < n; i++)
@@ -472,7 +474,7 @@ static int WaitPath_Start(WaitPath_t* w, int n, const int32_t* points, int curve
 }
 
 // evaluate the path at the eased time and apply it as the fixed position (with level and progress)
-static int WaitPath_Step(WaitTween_t* base)
+static int WaitPath_Step(OpenBGI_t* o, WaitTween_t* base)
 {
 	WaitPath_t* w = (WaitPath_t*)base;
 	int done;
@@ -480,7 +482,7 @@ static int WaitPath_Step(WaitTween_t* base)
 	if(TweenBroken(base))
 		done = 1;
 	else
-		done = WaitTween_Clock(base);
+		done = WaitTween_Clock(o, base);
 	if(done)
 	{
 		p[0] = w->end[0];
@@ -498,15 +500,15 @@ static int WaitPath_Step(WaitTween_t* base)
 		w->lastFz = p[2];
 		base->lastLevel = level;
 		base->lastProg = prog;
-		base->obj->vt->invalidate(base->obj);
-		base->obj->vt->setFixedPos(base->obj, p[0], p[1], p[2]);
-		base->obj->vt->setLevel(base->obj, level);
-		base->obj->vt->setProgress(base->obj, 1, prog);
-		base->obj->vt->invalidate(base->obj);
-		Gfx_Resort(gTextGfx, base->obj); // the depth may have changed
+		base->obj->vt->invalidate(o, base->obj);
+		base->obj->vt->setFixedPos(o, base->obj, p[0], p[1], p[2]);
+		base->obj->vt->setLevel(o, base->obj, level);
+		base->obj->vt->setProgress(o, base->obj, 1, prog);
+		base->obj->vt->invalidate(o, base->obj);
+		Gfx_Resort(o, o->text.textGfx, base->obj); // the depth may have changed
 		Wait_MarkDirty(&base->w);
 	}
-	TweenRearm(base, done);
+	TweenRearm(o, base, done);
 	return done;
 }
 
@@ -576,18 +578,18 @@ static int Curve_Build(int32_t* out, int32_t x0, int32_t y0, int32_t x1, int32_t
 	return 1;
 }
 
-static void WaitMove2_Ctor(WaitMove2_t* w, Thread_t* t, uint32_t h)
+static void WaitMove2_Ctor(OpenBGI_t* o, WaitMove2_t* w, Thread_t* t, uint32_t h)
 {
-	WaitTween_Ctor(&w->t, t, h);
+	WaitTween_Ctor(o, &w->t, t, h);
 	w->t.w.vt = &WaitMove2_Vtbl.base;
 	w->curve = NULL;
 }
 
-static void WaitMove2_Destroy(Wait_t* base)
+static void WaitMove2_Destroy(OpenBGI_t* o, Wait_t* base)
 {
 	WaitMove2_t* w = (WaitMove2_t*)base;
 	BGI_Free(w->curve);
-	WaitTween_Dtor(&w->t);
+	WaitTween_Dtor(o, &w->t);
 	BGI_Free(w);
 }
 
@@ -595,7 +597,7 @@ static void WaitMove2_Destroy(Wait_t* base)
  * plus one, from the object's position through (viaX, viaY) to (x, y); the
  * level goes linearly to `level`.  0x80000001 fps < 1, 0x80000002 the
  * curve cannot be built (x not monotonic). */
-static int WaitMove2_Start(WaitMove2_t* w, int32_t viaX, int32_t viaY, int32_t x, int32_t y, int curve, int level,
+static int WaitMove2_Start(OpenBGI_t* o, WaitMove2_t* w, int32_t viaX, int32_t viaY, int32_t x, int32_t y, int curve, int level,
 	int duration, int fps, int maxSkip)
 {
 	WaitTween_t* t = &w->t;
@@ -607,19 +609,19 @@ static int WaitMove2_Start(WaitMove2_t* w, int32_t viaX, int32_t viaY, int32_t x
 	frames = (uint32_t)(duration * fps) / 1000u;
 	t->duration = (int32_t)(frames ? frames : 1);
 	t->frameMs = t->duration > 1 ? (int32_t)(1000u / (uint32_t)fps) : duration; // a single frame takes the whole duration
-	t->obj->vt->getPos(t->obj, pos);
+	t->obj->vt->getPos(o, t->obj, pos);
 	BGI_Free(w->curve);
 	w->curve = (int32_t*)BGI_Alloc((size_t)t->duration * 8 + 8);
 	if(!Curve_Build(w->curve, pos[0], pos[1], viaX, viaY, x, y, (uint32_t)t->duration + 1))
 		return (int)0x80000002;
 	t->curve = curve;
-	t->startLevel = t->obj->vt->getLevel(t->obj);
+	t->startLevel = t->obj->vt->getLevel(o, t->obj);
 	t->dLevel = level - t->startLevel;
 	t->lastLevel = -1;
 	t->lastX = t->lastY = (int32_t)0x80000000;
-	t->obj->vt->setVisible(t->obj, 1);
-	t->obj->vt->invalidate(t->obj);
-	t->w.vt->setTimer(&t->w, (uint32_t)t->frameMs);
+	t->obj->vt->setVisible(o, t->obj, 1);
+	t->obj->vt->invalidate(o, t->obj);
+	t->w.vt->setTimer(o, &t->w, (uint32_t)t->frameMs);
 	w->targetLevel = level;
 	t->fps = fps;
 	t->maxSkip = maxSkip;
@@ -630,7 +632,7 @@ static int WaitMove2_Start(WaitMove2_t* w, int32_t viaX, int32_t viaY, int32_t x
 }
 
 // pick the curve point of the eased frame index and apply it with the linear level
-static int WaitMove2_Step(WaitTween_t* base)
+static int WaitMove2_Step(OpenBGI_t* o, WaitTween_t* base)
 {
 	WaitMove2_t* w = (WaitMove2_t*)base;
 	int done;
@@ -638,7 +640,7 @@ static int WaitMove2_Step(WaitTween_t* base)
 	if(TweenBroken(base))
 		done = 1;
 	else
-		done = WaitTween_AdvanceFrames(base);
+		done = WaitTween_AdvanceFrames(o, base);
 	if(done)
 	{
 		x = w->targetX;
@@ -658,10 +660,10 @@ static int WaitMove2_Step(WaitTween_t* base)
 		base->lastX = x;
 		base->lastY = y;
 		base->lastLevel = level;
-		base->obj->vt->invalidate(base->obj);
-		base->obj->vt->setPos(base->obj, x, y);
-		base->obj->vt->setLevel(base->obj, level);
-		base->obj->vt->invalidate(base->obj);
+		base->obj->vt->invalidate(o, base->obj);
+		base->obj->vt->setPos(o, base->obj, x, y);
+		base->obj->vt->setLevel(o, base->obj, level);
+		base->obj->vt->invalidate(o, base->obj);
 		Wait_MarkDirty(&base->w);
 	}
 	return done;
@@ -671,20 +673,20 @@ static int WaitMove2_Step(WaitTween_t* base)
 // WaitObjQuake
 // ========================================================================
 
-static void WaitObjQuake_Ctor(WaitObjQuake_t* w, Thread_t* t, uint32_t h)
+static void WaitObjQuake_Ctor(OpenBGI_t* o, WaitObjQuake_t* w, Thread_t* t, uint32_t h)
 {
-	WaitTween_Ctor(&w->t, t, h);
+	WaitTween_Ctor(o, &w->t, t, h);
 	w->t.w.vt = &WaitObjQuake_Vtbl.base;
 	w->amps = NULL;
 	w->wave = NULL;
 }
 
-static void WaitObjQuake_Destroy(Wait_t* base)
+static void WaitObjQuake_Destroy(OpenBGI_t* o, Wait_t* base)
 {
 	WaitObjQuake_t* w = (WaitObjQuake_t*)base;
 	BGI_Free(w->amps);
 	BGI_Free(w->wave);
-	WaitTween_Dtor(&w->t);
+	WaitTween_Dtor(o, &w->t);
 	BGI_Free(w);
 }
 
@@ -694,7 +696,7 @@ static void WaitObjQuake_Destroy(Wait_t* base)
  * and the amplitude of every cycle.  0x80000001 bad pattern, 0x80000002
  * frequency < 1, 0x80000003 repeat < 1, 0x80000004 fps < 1 or below the
  * frequency. */
-static int WaitObjQuake_Start(WaitObjQuake_t* w, int pattern, int amplitude, int frequency, int repeat, int decay,
+static int WaitObjQuake_Start(OpenBGI_t* o, WaitObjQuake_t* w, int pattern, int amplitude, int frequency, int repeat, int decay,
 	int fps)
 {
 	WaitTween_t* t = &w->t;
@@ -721,13 +723,13 @@ static int WaitObjQuake_Start(WaitObjQuake_t* w, int pattern, int amplitude, int
 	t->cur = 0;
 	w->cycleFrames = (int32_t)(1000u / (uint32_t)(t->frameMs * frequency));
 	t->duration = w->cycleFrames * repeat;
-	t->obj->vt->getPos(t->obj, pos);
+	t->obj->vt->getPos(o, t->obj, pos);
 	t->startX = pos[0];
 	t->startY = pos[1];
 	t->lastX = t->lastY = (int32_t)0x80000000;
-	t->obj->vt->setVisible(t->obj, 1);
-	t->obj->vt->invalidate(t->obj);
-	t->w.vt->setTimer(&t->w, (uint32_t)t->frameMs);
+	t->obj->vt->setVisible(o, t->obj, 1);
+	t->obj->vt->invalidate(o, t->obj);
+	t->w.vt->setTimer(o, &t->w, (uint32_t)t->frameMs);
 
 	// the amplitude of each cycle, decaying
 	BGI_Free(w->amps);
@@ -763,7 +765,7 @@ static int WaitObjQuake_Start(WaitObjQuake_t* w, int pattern, int amplitude, int
 }
 
 // offset the start position by the current cycle's amplitude times the wave sample of the frame
-static int WaitObjQuake_Step(WaitTween_t* base)
+static int WaitObjQuake_Step(OpenBGI_t* o, WaitTween_t* base)
 {
 	WaitObjQuake_t* w = (WaitObjQuake_t*)base;
 	int done;
@@ -771,7 +773,7 @@ static int WaitObjQuake_Step(WaitTween_t* base)
 	if(TweenBroken(base))
 		done = 1;
 	else
-		done = WaitTween_AdvanceFrames(base);
+		done = WaitTween_AdvanceFrames(o, base);
 	if(!done)
 	{
 		uint32_t cycle = (uint32_t)base->cur / (uint32_t)w->cycleFrames;
@@ -787,9 +789,9 @@ static int WaitObjQuake_Step(WaitTween_t* base)
 	{
 		base->lastX = x;
 		base->lastY = y;
-		base->obj->vt->invalidate(base->obj);
-		base->obj->vt->setPos(base->obj, x, y);
-		base->obj->vt->invalidate(base->obj);
+		base->obj->vt->invalidate(o, base->obj);
+		base->obj->vt->setPos(o, base->obj, x, y);
+		base->obj->vt->invalidate(o, base->obj);
 		Wait_MarkDirty(&base->w);
 	}
 	return done;
@@ -802,117 +804,139 @@ static int WaitObjQuake_Step(WaitTween_t* base)
 /* "90 20" .. "90 23": tween the level to `level` over `duration` ms and,
  * with `move`, the position to (x, y) along `curve`.  0 ok, 0x80000001
  * fps < 1, -1 no such object. */
-int StartObjTween(Thread_t* t, uint32_t h, int32_t x, int32_t y, int curve, int move, int level, int duration,
+int StartObjTween(OpenBGI_t* o, Thread_t* t, uint32_t h, int32_t x, int32_t y, int curve, int move, int level, int duration,
 	int fps, int maxSkip, int skip, uint32_t prio)
 {
 	WaitTween_t* w;
 	if((uint32_t)fps < 1)
 		return (int)0x80000001;
-	if(!Gfx_FindObject(gGfx, h))
+	if(!Gfx_FindObject(o->gfx.gfx, h))
 		return -1;
 	w = (WaitTween_t*)BGI_Alloc(sizeof *w);
-	WaitTween_Ctor(w, t, h);
+	WaitTween_Ctor(o, w, t, h);
 	if(move)
-		WaitTween_StartMove(w, x, y, curve, level, duration, fps, maxSkip);
+		WaitTween_StartMove(o, w, x, y, curve, level, duration, fps, maxSkip);
 	else
-		WaitTween_StartInPlace(w, level, duration, fps, maxSkip);
-	WaitTween_SetSkip(w, skip, prio);
-	Thread_SetWait(t, &w->w);
+		WaitTween_StartInPlace(o, w, level, duration, fps, maxSkip);
+	WaitTween_SetSkip(o, w, skip, prio);
+	Thread_SetWait(o, t, &w->w);
 	return 0;
 }
 
 /* "90 24": move through (viaX, viaY) to (x, y) on a cubic curve while the
  * level goes to `level`.  0 ok, -1 no such object, 0x80000001 fps < 1,
  * 0x80000002 the x values are not monotonic. */
-int StartObjMove2(Thread_t* t, uint32_t h, int32_t viaX, int32_t viaY, int32_t x, int32_t y, int curve, int level,
+int StartObjMove2(OpenBGI_t* o, Thread_t* t, uint32_t h, int32_t viaX, int32_t viaY, int32_t x, int32_t y, int curve, int level,
 	int duration, int fps, int maxSkip, int skip, uint32_t prio)
 {
 	WaitMove2_t* w;
 	int r;
-	if(!Gfx_FindObject(gGfx, h))
+	if(!Gfx_FindObject(o->gfx.gfx, h))
 		return -1;
 	w = (WaitMove2_t*)BGI_Alloc(sizeof *w);
-	WaitMove2_Ctor(w, t, h);
-	r = WaitMove2_Start(w, viaX, viaY, x, y, curve, level, duration, fps, maxSkip);
+	WaitMove2_Ctor(o, w, t, h);
+	r = WaitMove2_Start(o, w, viaX, viaY, x, y, curve, level, duration, fps, maxSkip);
 	if(r != 0)
 	{
-		Wait_Release(&w->t.w);
+		Wait_Release(o, &w->t.w);
 		return r; // (the original hands back the object pointer for a code it does not recognise; the start has none)
 	}
-	WaitTween_SetSkip(&w->t, skip, prio);
-	Thread_SetWait(t, &w->t.w);
+	WaitTween_SetSkip(o, &w->t, skip, prio);
+	Thread_SetWait(o, t, &w->t.w);
 	return 0;
 }
 
 /* "90 28": tween the position to (x, y) along `curve`, the level to
  * `level` along `levelCurve` and the progress to `progress` (-1 keeps it).
  * 0 ok, 0x80000001 fps < 1, -1 no such object. */
-int StartObjTweenFull(Thread_t* t, uint32_t h, int32_t x, int32_t y, int curve, int level, int levelCurve, int progress,
+int StartObjTweenFull(OpenBGI_t* o, Thread_t* t, uint32_t h, int32_t x, int32_t y, int curve, int level, int levelCurve, int progress,
 	int duration, int fps, int maxSkip, int skip, uint32_t prio)
 {
 	WaitTween_t* w;
 	if((uint32_t)fps < 1)
 		return (int)0x80000001;
-	if(!Gfx_FindObject(gGfx, h))
+	if(!Gfx_FindObject(o->gfx.gfx, h))
 		return -1;
 	w = (WaitTween_t*)BGI_Alloc(sizeof *w);
-	WaitTween_Ctor(w, t, h);
-	WaitTween_Start(w, x, y, curve, level, levelCurve, progress, duration, fps, maxSkip);
-	WaitTween_SetSkip(w, skip, prio);
-	Thread_SetWait(t, &w->w);
+	WaitTween_Ctor(o, w, t, h);
+	WaitTween_Start(o, w, x, y, curve, level, levelCurve, progress, duration, fps, maxSkip);
+	WaitTween_SetSkip(o, w, skip, prio);
+	Thread_SetWait(o, t, &w->w);
 	return 0;
 }
 
 /* "90 29": move along the spline through the `n` control points (x, y, z,
  * pad in 16.16 each) with level and progress as "90 28".  0 ok, 0x80000001
  * fps < 1, -1 no such object, 0x80000003 n < 1. */
-int StartObjPath(Thread_t* t, uint32_t h, int n, const int32_t* points, int curve, int level, int levelCurve,
+int StartObjPath(OpenBGI_t* o, Thread_t* t, uint32_t h, int n, const int32_t* points, int curve, int level, int levelCurve,
 	int progress, int duration, int fps, int maxSkip, int skip, uint32_t prio)
 {
 	WaitPath_t* w;
 	int r;
 	if((uint32_t)fps < 1)
 		return (int)0x80000001;
-	if(!Gfx_FindObject(gGfx, h))
+	if(!Gfx_FindObject(o->gfx.gfx, h))
 		return -1;
 	w = (WaitPath_t*)BGI_Alloc(sizeof *w);
-	WaitPath_Ctor(w, t, h);
-	r = WaitPath_Start(w, n, points, curve, level, levelCurve, progress, duration, fps, maxSkip);
+	WaitPath_Ctor(o, w, t, h);
+	r = WaitPath_Start(o, w, n, points, curve, level, levelCurve, progress, duration, fps, maxSkip);
 	if(r == (int)0x80000001)
 	{
-		Wait_Release(&w->t.w);
+		Wait_Release(o, &w->t.w);
 		return (int)0x80000003;
 	}
 	if(r != 0)
 		return r; // the original returns the object pointer here; unreachable, the start has no other code
-	WaitTween_SetSkip(&w->t, skip, prio);
-	Thread_SetWait(t, &w->t.w);
+	WaitTween_SetSkip(o, &w->t, skip, prio);
+	Thread_SetWait(o, t, &w->t.w);
 	return 0;
 }
 
 /* "90 2C": shake the object (see WaitObjQuake_Start for the patterns and
  * the codes); 0 ok, -1 no such object */
-int StartObjQuake(Thread_t* t, uint32_t h, int pattern, int amplitude, int frequency, int repeat, int decay, int fps,
+int StartObjQuake(OpenBGI_t* o, Thread_t* t, uint32_t h, int pattern, int amplitude, int frequency, int repeat, int decay, int fps,
 	int skip, uint32_t prio)
 {
 	WaitObjQuake_t* w;
 	int r;
-	if(!Gfx_FindObject(gGfx, h))
+	if(!Gfx_FindObject(o->gfx.gfx, h))
 		return -1;
 	w = (WaitObjQuake_t*)BGI_Alloc(sizeof *w);
-	WaitObjQuake_Ctor(w, t, h);
-	r = WaitObjQuake_Start(w, pattern, amplitude, frequency, repeat, decay, fps);
+	WaitObjQuake_Ctor(o, w, t, h);
+	r = WaitObjQuake_Start(o, w, pattern, amplitude, frequency, repeat, decay, fps);
 	if(r != 0)
 	{
-		Wait_Release(&w->t.w); // the original leaks the object on these errors
+		Wait_Release(o, &w->t.w); // the original leaks the object on these errors
 		return r;
 	}
-	WaitTween_SetSkip(&w->t, skip, prio);
-	Thread_SetWait(t, &w->t.w);
+	WaitTween_SetSkip(o, &w->t, skip, prio);
+	Thread_SetWait(o, t, &w->t.w);
 	return 0;
 }
 
 // the name of a wait class of this file, for the debugger (NULL: not one of these)
+/* The targets of this file's classes (bgi/inputmap.h): a tween that may
+ * be skipped is cut short by a click anywhere on its layer (one that is
+ * on top in two polls in a row); 1 when `w` is one of this file's
+ * classes. */
+int WaitTween_Targets(OpenBGI_t* o, Wait_t* w, TargetSink_t* s)
+{
+	const WaitTween_t* t = (const WaitTween_t*)w;
+	TargetDesc_t d;
+	if(WaitTween_ClassName(w->vt) == NULL)
+		return 0;
+	if(!t->skipOn || !t->layersPushed)
+		return 1;
+	TargetDesc_Init(&d, OPENBGI_TARGET_WAIT, LAYER_KEY(t->prio));
+	TargetSink_Claim(s, d.layer);
+	d.flags = OPENBGI_TARGET_ANYWHERE;
+	d.whole = 1;
+	d.owner = Thread_GetId(w->thread);
+	d.reach = Target_ReachLayer;
+	TargetSink_Add(s, &d);
+	return 1;
+}
+
 const char* WaitTween_ClassName(const WaitVtbl_t* vt)
 {
 	if(vt == &WaitTween_Vtbl.base)

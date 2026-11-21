@@ -3,25 +3,26 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * dbg.c - the debugger's window, run control and the views' plumbing
- * (inc/bgi/dbg.h for the engine, dbg_internal.h for the views)
+ * (src/include/bgi/dbg.h for the engine, dbg_internal.h for the views)
  *
  * The window is a surface of DBG_W x DBG_H pixels presented through the
- * OS layer's debug window, or over the game's picture when the back end
- * has none ("overlay").  Each pass of the main loop calls Dbg_Pass, which
- * redraws at most every 40 ms; the input arrives through the OS event
- * handlers between passes and is queued, so that the views see a
- * consistent engine state while they draw and act.
+ * host's debugger's window, or over the game's picture when the host has
+ * none ("overlay").  Each pass of the main loop calls Dbg_Pass, which
+ * redraws at most every 40 ms; the input arrives through the host's calls
+ * (OpenBGI_DebugKey and its kin) between passes and is queued, so that
+ * the views see a consistent engine state while they draw and act.
  *
  * Keys in the debugger: F5 run / pause, F6 step a pass, F7 step one
  * instruction (per runnable thread), F9 breakpoint on the selected
- * listing line, T trace into the log, 1 .. 7 the views, Tab the next
+ * listing line, T trace into the log, 1 .. 8 the views, Tab the next
  * view, Escape or F12 close.  The game's window keeps its keys; F12 there
- * toggles the debugger.  docs/debugger.md describes the tool.
+ * toggles the debugger.  docs/modding/debugger.md describes the tool.
  */
 #include "dbg_internal.h"
 #include "bgi/display.h"
 #include "bgi/vm.h"
 #include "bgi/version.h"
+#include "bgi/core.h"
 
 #include <stdarg.h>
 
@@ -30,67 +31,42 @@
 #define TAB_H    28 // the tab bar at the top
 #define STATUS_H 20 // the status line at the bottom
 
-// ---- shared state ------------------------------------------------------------------------
-
-DbgLogLine_t gDbgLog[DBG_LOG_LINES];
-int gDbgLogCount, gDbgLogNext;
-uint32_t gDbgThreadId = 1;
-int gDbgPaused;
-int gDbgTrace;
-int gDbgHooked;
-uint32_t gDbgInsnLimit = 0x100000;
-DbgBreak_t gDbgBreaks[DBG_MAX_BREAKS];
-int gDbgBreakCount;
-
-static int gOpen, gOverlay, gWantOpen;       // the window is open / draws over the game / --debug asked for it
-static int gView = DBG_VIEW_THREADS;         // the current tab
-static int gStep;                            // 0 none, 1 a pass, 2 an instruction
-static uint32_t gLastDraw;                   // OS_TicksMs of the last redraw
-static int gMouseX = -1, gMouseY = -1;       // the last mouse position seen (for the wheel)
-static uint32_t gPassCount;                  // passes of the main loop (the status line)
-static uint32_t gSkipThread = ~0u, gSkipOff; // the breakpoint to pass over once (the one just hit)
+// ---- the views and the input queue -------------------------------------------------------
 
 static const DbgViewOps_t* const kViews[DBG_VIEW_COUNT] = {
-	&kDbgViewThreads, &kDbgViewPrograms, &kDbgViewBitmaps, &kDbgViewObjects, &kDbgViewSound, &kDbgViewMemory, &kDbgViewLog};
+	&kDbgViewThreads, &kDbgViewPrograms, &kDbgViewBitmaps, &kDbgViewObjects, &kDbgViewSound, &kDbgViewMemory, &kDbgViewLog,
+	&kDbgViewTargets};
 
 // queued input: the events come from the pump, between passes
-typedef struct DbgEvent
-{
-	int type;       // 1 key, 2 mouse, 3 wheel, 4 close
-	int a, b, c, d; // key: vk, down, ch; mouse: x, y, button, down; wheel: delta
-} DbgEvent_t;
-#define EVENT_QUEUE 128 // events kept; further ones are dropped until the next pass
-static DbgEvent_t gEvents[EVENT_QUEUE];
-static int gEventHead, gEventCount;
 
 // append an event to the queue (dropped when the queue is full)
-static void Queue(int type, int a, int b, int c, int d)
+static void Queue(OpenBGI_t* o, int type, int a, int b, int c, int d)
 {
 	DbgEvent_t* e;
-	if(gEventCount == EVENT_QUEUE)
+	if(o->dbg.eventCount == DBG_EVENT_QUEUE)
 		return;
-	e = &gEvents[(gEventHead + gEventCount) % EVENT_QUEUE];
+	e = &o->dbg.events[(o->dbg.eventHead + o->dbg.eventCount) % DBG_EVENT_QUEUE];
 	e->type = type;
 	e->a = a;
 	e->b = b;
 	e->c = c;
 	e->d = d;
-	gEventCount++;
+	o->dbg.eventCount++;
 }
 
 // ---- the log ------------------------------------------------------------------------------
 
 // Format a line into the log ring (DBG_LOG_LINES kept, the oldest overwritten); usable while the debugger is closed.
-void Dbg_Log(const char* fmt, ...)
+void Dbg_Log(OpenBGI_t* o, const char* fmt, ...)
 {
 	va_list ap;
-	DbgLogLine_t* l = &gDbgLog[gDbgLogNext];
+	DbgLogLine_t* l = &o->dbg.dbgLog[o->dbg.dbgLogNext];
 	va_start(ap, fmt);
 	vsnprintf(l->text, sizeof l->text, fmt, ap);
 	va_end(ap);
-	gDbgLogNext = (gDbgLogNext + 1) % DBG_LOG_LINES;
-	if(gDbgLogCount < DBG_LOG_LINES)
-		gDbgLogCount++;
+	o->dbg.dbgLogNext = (o->dbg.dbgLogNext + 1) % DBG_LOG_LINES;
+	if(o->dbg.dbgLogCount < DBG_LOG_LINES)
+		o->dbg.dbgLogCount++;
 }
 
 // ---- lists ---------------------------------------------------------------------------------
@@ -156,34 +132,35 @@ int DbgList_Hit(const DbgList_t* l, int x, int y)
 
 // ---- threads and breakpoints ------------------------------------------------------------------
 
-/* The thread with id gDbgThreadId; when it is gone, the first thread of
- * the scheduler becomes the selected one.  NULL before the VM exists. */
-Thread_t* Dbg_SelectedThread(void)
+/* The thread with id o->dbg.dbgThreadId; when it is gone, the first
+ * thread of the scheduler becomes the selected one.  NULL before the VM
+ * exists. */
+Thread_t* Dbg_SelectedThread(OpenBGI_t* o)
 {
 	Thread_t* t;
-	if(!gRootThread)
+	if(!o->vm.rootThread)
 		return NULL;
-	for(t = Thread_Next(gRootThread); t; t = Thread_Next(t))
-		if(t->id == gDbgThreadId)
+	for(t = Thread_Next(o->vm.rootThread); t; t = Thread_Next(t))
+		if(t->id == o->dbg.dbgThreadId)
 			return t;
-	t = Thread_Next(gRootThread);
+	t = Thread_Next(o->vm.rootThread);
 	if(t)
-		gDbgThreadId = t->id;
+		o->dbg.dbgThreadId = t->id;
 	return t;
 }
 
 // the scheduler calls Dbg_OnInsn only while there is something for it to do
-static void Rehook(void)
+static void Rehook(OpenBGI_t* o)
 {
-	gDbgHooked = gDbgBreakCount > 0 || gDbgTrace;
+	o->vm.dbgHooked = o->dbg.dbgBreakCount > 0 || o->dbg.dbgTrace;
 }
 
 // Is there a breakpoint at offset `off` of module `module`?
-int Dbg_HasBreak(const char* module, uint32_t off)
+int Dbg_HasBreak(OpenBGI_t* o, const char* module, uint32_t off)
 {
 	int i;
-	for(i = 0; i < gDbgBreakCount; i++)
-		if(gDbgBreaks[i].off == off && strcmp(gDbgBreaks[i].module, module) == 0)
+	for(i = 0; i < o->dbg.dbgBreakCount; i++)
+		if(o->dbg.dbgBreaks[i].off == off && strcmp(o->dbg.dbgBreaks[i].module, module) == 0)
 			return 1;
 	return 0;
 }
@@ -191,26 +168,26 @@ int Dbg_HasBreak(const char* module, uint32_t off)
 /* Clear the breakpoint at (module, off) when there is one, else set it:
  * 1 set, 0 cleared (or not set because DBG_MAX_BREAKS exist already).
  * Either way the log gets a line. */
-int Dbg_ToggleBreak(const char* module, uint32_t off)
+int Dbg_ToggleBreak(OpenBGI_t* o, const char* module, uint32_t off)
 {
 	int i;
-	for(i = 0; i < gDbgBreakCount; i++)
+	for(i = 0; i < o->dbg.dbgBreakCount; i++)
 	{
-		if(gDbgBreaks[i].off == off && strcmp(gDbgBreaks[i].module, module) == 0)
+		if(o->dbg.dbgBreaks[i].off == off && strcmp(o->dbg.dbgBreaks[i].module, module) == 0)
 		{
-			gDbgBreaks[i] = gDbgBreaks[--gDbgBreakCount];
-			Dbg_Log("breakpoint cleared: %s+0x%x", module, (unsigned)off);
-			Rehook();
+			o->dbg.dbgBreaks[i] = o->dbg.dbgBreaks[--o->dbg.dbgBreakCount];
+			Dbg_Log(o, "breakpoint cleared: %s+0x%x", module, (unsigned)off);
+			Rehook(o);
 			return 0;
 		}
 	}
-	if(gDbgBreakCount == DBG_MAX_BREAKS)
+	if(o->dbg.dbgBreakCount == DBG_MAX_BREAKS)
 		return 0;
-	snprintf(gDbgBreaks[gDbgBreakCount].module, sizeof gDbgBreaks[0].module, "%s", module);
-	gDbgBreaks[gDbgBreakCount].off = off;
-	gDbgBreakCount++;
-	Dbg_Log("breakpoint set: %s+0x%x", module, (unsigned)off);
-	Rehook();
+	snprintf(o->dbg.dbgBreaks[o->dbg.dbgBreakCount].module, sizeof o->dbg.dbgBreaks[0].module, "%s", module);
+	o->dbg.dbgBreaks[o->dbg.dbgBreakCount].off = off;
+	o->dbg.dbgBreakCount++;
+	Dbg_Log(o, "breakpoint set: %s+0x%x", module, (unsigned)off);
+	Rehook(o);
 	return 1;
 }
 
@@ -219,21 +196,16 @@ int Dbg_ToggleBreak(const char* module, uint32_t off)
 /* May the threads run this pass?  Yes while running; while paused only
  * when a step was asked for, and then with the instruction limit the
  * step needs (1 per turn for a step by instruction). */
-int Dbg_GateRun(void)
+int Dbg_GateRun(OpenBGI_t* o)
 {
-	if(!gDbgPaused)
+	if(!o->dbg.dbgPaused)
 		return 1;
-	if(gStep)
+	if(o->dbg.step)
 	{
-		gDbgInsnLimit = gStep == 2 ? 1 : 0x100000;
+		o->vm.dbgInsnLimit = o->dbg.step == 2 ? 1 : 0x100000;
 		return 1;
 	}
 	return 0;
-}
-
-uint32_t Dbg_InsnLimit(void)
-{
-	return gDbgInsnLimit;
 }
 
 /* Before an instruction of thread t at code offset opIP (op is its first
@@ -241,233 +213,228 @@ uint32_t Dbg_InsnLimit(void)
  * thread, open the window when it is closed and return 1 so that the turn
  * ends before the instruction.  The breakpoint the pause was resumed from
  * is passed once by the same thread. */
-int Dbg_OnInsn(Thread_t* t, uint32_t opIP, int op)
+int Dbg_OnInsn(OpenBGI_t* o, Thread_t* t, uint32_t opIP, int op)
 {
 	const char* module;
 	uint32_t base, size;
-	if(gDbgTrace)
+	if(o->dbg.dbgTrace)
 	{
 		if(Dbg_ModuleAt(t, opIP, &module, &base, &size))
-			Dbg_Log("t%u %s+%04x: %02x %02x", (unsigned)t->id, module, (unsigned)(opIP - base), op,
+			Dbg_Log(o, "t%u %s+%04x: %02x %02x", (unsigned)t->id, module, (unsigned)(opIP - base), op,
 				opIP + 1 < t->codeSize ? t->code[opIP + 1] : 0);
 	}
-	if(gDbgBreakCount && Dbg_ModuleAt(t, opIP, &module, &base, &size) && Dbg_HasBreak(module, opIP - base))
+	if(o->dbg.dbgBreakCount && Dbg_ModuleAt(t, opIP, &module, &base, &size) && Dbg_HasBreak(o, module, opIP - base))
 	{
-		if(gSkipThread == t->id && gSkipOff == opIP)
+		if(o->dbg.skipThread == t->id && o->dbg.skipOff == opIP)
 		{ // resumed from this very breakpoint: it is passed once
-			gSkipThread = ~0u;
+			o->dbg.skipThread = ~0u;
 			return 0;
 		}
-		gDbgPaused = 1;
-		gStep = 0;
-		gDbgThreadId = t->id;
-		gSkipThread = t->id;
-		gSkipOff = opIP;
-		Dbg_Log("breakpoint: thread %u at %s+0x%x", (unsigned)t->id, module, (unsigned)(opIP - base));
-		if(!gOpen)
-			Dbg_Toggle();
+		o->dbg.dbgPaused = 1;
+		o->dbg.step = 0;
+		o->dbg.dbgThreadId = t->id;
+		o->dbg.skipThread = t->id;
+		o->dbg.skipOff = opIP;
+		Dbg_Log(o, "breakpoint: thread %u at %s+0x%x", (unsigned)t->id, module, (unsigned)(opIP - base));
+		if(!o->dbg.open)
+			Dbg_Toggle(o);
 		return 1;
 	}
 	return 0;
 }
 
 // let the threads run again, any pending step forgotten
-static void Resume(void)
+static void Resume(OpenBGI_t* o)
 {
-	gDbgPaused = 0;
-	gStep = 0;
-	gDbgInsnLimit = 0x100000;
+	o->dbg.dbgPaused = 0;
+	o->dbg.step = 0;
+	o->vm.dbgInsnLimit = 0x100000;
 }
 
 // hold the threads from the next pass on
-static void Pause(void)
+static void Pause(OpenBGI_t* o)
 {
-	gDbgPaused = 1;
-	gStep = 0;
-	gDbgInsnLimit = 0x100000;
+	o->dbg.dbgPaused = 1;
+	o->dbg.step = 0;
+	o->vm.dbgInsnLimit = 0x100000;
 }
 
 // ---- opening and closing ----------------------------------------------------------------------------
 
-void Dbg_Init(void)
+void Dbg_Init(OpenBGI_t* o)
 {
-	gOpen = 0;
-	gOverlay = 0;
-	gDbgLogCount = gDbgLogNext = 0;
+	o->dbg.open = 0;
+	o->dbg.overlay = 0;
+	o->dbg.dbgLogCount = o->dbg.dbgLogNext = 0;
 }
 
-void Dbg_Shutdown(void)
+void Dbg_Shutdown(OpenBGI_t* o)
 {
-	if(gOpen)
-		Dbg_Toggle();
-	DbgListing_FreeAll();
+	if(o->dbg.open)
+		Dbg_Toggle(o);
+	DbgListing_FreeAll(o);
 }
 
 // --debug: the next Dbg_Pass opens the window (the main window exists by then); --debug=pause holds the threads
-void Dbg_RequestOpen(int paused)
+void Dbg_RequestOpen(OpenBGI_t* o, int paused)
 {
-	gWantOpen = 1;
+	o->dbg.wantOpen = 1;
 	if(paused)
-		Pause();
+		Pause(o);
 }
 
-int Dbg_IsOpen(void)
-{
-	return gOpen;
-}
-
-/* Open the window: a debug window of the OS layer sized DBG_W x DBG_H, or
- * the overlay over the game's picture when the OS layer has none (or
+/* Open the window: the host's debugger window sized DBG_W x DBG_H, or the
+ * overlay over the game's picture when the host has none (or
  * BGI_DEBUG_OVERLAY is set); the surface is created to match.  Nothing
  * happens when the surface cannot be made. */
-static void Open(void)
+static void Open(OpenBGI_t* o)
 {
-	if(gOpen)
+	if(o->dbg.open)
 		return;
 	// BGI_DEBUG_OVERLAY=1 forces the overlay, to try that path on a platform with a window
-	gOverlay = (getenv("BGI_DEBUG_OVERLAY") && *getenv("BGI_DEBUG_OVERLAY") != '0') ||
-		!OS_DebugWindowOpen(DBG_W, DBG_H, "OpenBGI debugger");
-	if(gOverlay)
+	o->dbg.overlay = (getenv("BGI_DEBUG_OVERLAY") && *getenv("BGI_DEBUG_OVERLAY") != '0') ||
+		!MainWin_DebugOpen(o, DBG_W, DBG_H, "OpenBGI debugger");
+	if(o->dbg.overlay)
 	{ // over the game's picture: the surface is the window's client area
 		int w = 0, h = 0;
-		Display_GetWindowSize(&w, &h);
+		Display_GetWindowSize(o, &w, &h);
 		if(w < 320 || h < 240)
 		{
 			w = 800;
 			h = 600;
 		}
-		if(!DbgDraw_Init(w, h))
+		if(!DbgDraw_Init(o, w, h))
 			return;
 	}
-	else if(!DbgDraw_Init(DBG_W, DBG_H))
+	else if(!DbgDraw_Init(o, DBG_W, DBG_H))
 	{
-		OS_DebugWindowClose();
+		MainWin_DebugClose(o);
 		return;
 	}
-	gOpen = 1;
-	gLastDraw = 0;
-	Dbg_Log("debugger opened%s", gOverlay ? " (over the game's window: no second window on this platform)" : "");
+	o->dbg.open = 1;
+	o->dbg.lastDraw = 0;
+	Dbg_Log(o, "debugger opened%s", o->dbg.overlay ? " (over the game's window: no second window on this platform)" : "");
 }
 
 // Close the window, drop the queued input and the listings, and resume the VM when it was paused.
-static void Close(void)
+static void Close(OpenBGI_t* o)
 {
-	if(!gOpen)
+	if(!o->dbg.open)
 		return;
-	if(!gOverlay)
-		OS_DebugWindowClose();
+	if(!o->dbg.overlay)
+		MainWin_DebugClose(o);
 	else
-		Present_RequestFull(); // the game's picture back over the overlay, whether or not anything changed
-	DbgDraw_Shutdown();
-	DbgListing_FreeAll();
-	gOpen = 0;
-	gEventCount = 0;
-	if(gDbgPaused)
-		Resume(); // nothing would show the pause any more
+		Present_RequestFull(o); // the game's picture back over the overlay, whether or not anything changed
+	DbgDraw_Shutdown(o);
+	DbgListing_FreeAll(o);
+	o->dbg.open = 0;
+	o->dbg.eventCount = 0;
+	if(o->dbg.dbgPaused)
+		Resume(o); // nothing would show the pause any more
 }
 
-void Dbg_Toggle(void)
+void Dbg_Toggle(OpenBGI_t* o)
 {
-	if(gOpen)
-		Close();
+	if(o->dbg.open)
+		Close(o);
 	else
-		Open();
+		Open(o);
 }
 
 // ---- the window's events (queued) --------------------------------------------------------------------
 
 // a key of the debug window: the virtual key, down / up, and the character it produces (0 none)
-void Dbg_OnKey(int vk, int down, int ch)
+void Dbg_OnKey(OpenBGI_t* o, int vk, int down, int ch)
 {
-	Queue(1, vk, down, ch, 0);
+	Queue(o, 1, vk, down, ch, 0);
 }
 
 // a mouse button (down / up) at (x, y), or a move when button is -1
-void Dbg_OnMouse(int x, int y, int button, int down)
+void Dbg_OnMouse(OpenBGI_t* o, int x, int y, int button, int down)
 {
 	if(button < 0)
 	{ // a move: only the position matters, and only the last one
-		gMouseX = x;
-		gMouseY = y;
+		o->dbg.mouseX = x;
+		o->dbg.mouseY = y;
 		return;
 	}
-	Queue(2, x, y, button, down);
+	Queue(o, 2, x, y, button, down);
 }
 
-void Dbg_OnWheel(int delta)
+void Dbg_OnWheel(OpenBGI_t* o, int delta)
 {
-	Queue(3, delta, 0, 0, 0);
+	Queue(o, 3, delta, 0, 0, 0);
 }
 
 // the window's close box
-void Dbg_OnClose(void)
+void Dbg_OnClose(OpenBGI_t* o)
 {
-	Queue(4, 0, 0, 0, 0);
+	Queue(o, 4, 0, 0, 0, 0);
 }
 
 // The game window's keys while the overlay is up: queued as the debugger's; 1 when consumed.
-int Dbg_OverlayKey(int vk, int down)
+int Dbg_OverlayKey(OpenBGI_t* o, int vk, int down)
 {
 	int ch = 0;
-	if(!gOpen || !gOverlay)
+	if(!o->dbg.open || !o->dbg.overlay)
 		return 0;
 	// the game window reports virtual keys only: the letters and digits the debugger uses map directly
 	if(vk >= '0' && vk <= '9')
 		ch = vk;
 	else if(vk >= 'A' && vk <= 'Z')
 		ch = vk - 'A' + 'a';
-	Queue(1, vk, down, ch, 0);
+	Queue(o, 1, vk, down, ch, 0);
 	return 1;
 }
 
-int Dbg_OverlayMouse(int x, int y, int button, int down)
+int Dbg_OverlayMouse(OpenBGI_t* o, int x, int y, int button, int down)
 {
-	if(!gOpen || !gOverlay)
+	if(!o->dbg.open || !o->dbg.overlay)
 		return 0;
-	Dbg_OnMouse(x, y, button, down);
+	Dbg_OnMouse(o, x, y, button, down);
 	return 1;
 }
 
-int Dbg_OverlayWheel(int delta)
+int Dbg_OverlayWheel(OpenBGI_t* o, int delta)
 {
-	if(!gOpen || !gOverlay)
+	if(!o->dbg.open || !o->dbg.overlay)
 		return 0;
-	Dbg_OnWheel(delta);
+	Dbg_OnWheel(o, delta);
 	return 1;
 }
 
 // ---- drawing -------------------------------------------------------------------------------------
 
 // the tab bar: one tab per view, numbered, the current one raised; the run state at the right
-static void DrawTabs(void)
+static void DrawTabs(OpenBGI_t* o)
 {
 	int i, x = 8;
-	DbgDraw_Fill(0, 0, gDbgSurf.w, TAB_H, DBG_PANEL);
-	DbgDraw_HLine(0, TAB_H - 1, gDbgSurf.w, DBG_LINE);
+	DbgDraw_Fill(o, 0, 0, o->dbg.dbgSurf.w, TAB_H, DBG_PANEL);
+	DbgDraw_HLine(o, 0, TAB_H - 1, o->dbg.dbgSurf.w, DBG_LINE);
 	for(i = 0; i < DBG_VIEW_COUNT; i++)
 	{
-		int w = DbgDraw_TextWidth(kViews[i]->name) + 24;
-		if(i == gView)
+		int w = DbgDraw_TextWidth(o, kViews[i]->name) + 24;
+		if(i == o->dbg.view)
 		{
-			DbgDraw_Fill(x, 2, w, TAB_H - 3, DBG_BG);
-			DbgDraw_Frame(x, 2, w, TAB_H - 2, DBG_LINE);
+			DbgDraw_Fill(o, x, 2, w, TAB_H - 3, DBG_BG);
+			DbgDraw_Frame(o, x, 2, w, TAB_H - 2, DBG_LINE);
 		}
-		DbgDraw_TextF(x + 12, 6, i == gView ? DBG_ACCENT : DBG_TEXT, "%d %s", i + 1, kViews[i]->name);
+		DbgDraw_TextF(o, x + 12, 6, i == o->dbg.view ? DBG_ACCENT : DBG_TEXT, "%d %s", i + 1, kViews[i]->name);
 		x += w + 4;
 	}
-	DbgDraw_TextF(gDbgSurf.w - 8 - DbgDraw_TextWidth(gDbgPaused ? "PAUSED" : "running"), 6, gDbgPaused ? DBG_RED : DBG_GREEN,
-		gDbgPaused ? "PAUSED" : "running");
+	DbgDraw_TextF(o, o->dbg.dbgSurf.w - 8 - DbgDraw_TextWidth(o, o->dbg.dbgPaused ? "PAUSED" : "running"), 6, o->dbg.dbgPaused ? DBG_RED : DBG_GREEN,
+		o->dbg.dbgPaused ? "PAUSED" : "running");
 }
 
 // the tab under (x, y), -1 none (the layout of DrawTabs)
-static int TabHit(int x, int y)
+static int TabHit(OpenBGI_t* o, int x, int y)
 {
 	int i, tx = 8;
 	if(y >= TAB_H)
 		return -1;
 	for(i = 0; i < DBG_VIEW_COUNT; i++)
 	{
-		int w = DbgDraw_TextWidth(kViews[i]->name) + 24;
+		int w = DbgDraw_TextWidth(o, kViews[i]->name) + 24;
 		if(x >= tx && x < tx + w)
 			return i;
 		tx += w + 4;
@@ -476,63 +443,61 @@ static int TabHit(int x, int y)
 }
 
 // the status line: the key help, the pass counter, the engine generation, whether breakpoints exist
-static void DrawStatus(void)
+static void DrawStatus(OpenBGI_t* o)
 {
-	int y = gDbgSurf.h - STATUS_H;
-	DbgDraw_Fill(0, y, gDbgSurf.w, STATUS_H, DBG_PANEL);
-	DbgDraw_HLine(0, y, gDbgSurf.w, DBG_LINE);
-	DbgDraw_TextF(8, y + 2, DBG_DIM,
-		"F5 run/pause  F6 step pass  F7 step insn  F9 breakpoint  T trace%s  Tab/1-7 views  Left/Right pane  Esc close   pass %u  %s%s",
-		gDbgTrace ? " [on]" : "", (unsigned)gPassCount, gEngine ? gEngine->name : "?",
-		gDbgBreakCount ? "  (breakpoints set)" : "");
+	int y = o->dbg.dbgSurf.h - STATUS_H;
+	DbgDraw_Fill(o, 0, y, o->dbg.dbgSurf.w, STATUS_H, DBG_PANEL);
+	DbgDraw_HLine(o, 0, y, o->dbg.dbgSurf.w, DBG_LINE);
+	DbgDraw_TextF(o, 8, y + 2, DBG_DIM,
+		"F5 run/pause  F6 step pass  F7 step insn  F9 breakpoint  T trace%s  Tab/1-8 views  Left/Right pane  Esc close   pass %u  %s%s",
+		o->dbg.dbgTrace ? " [on]" : "", (unsigned)o->dbg.passCount, o->engine.profile ? o->engine.profile->name : "?",
+		o->dbg.dbgBreakCount ? "  (breakpoints set)" : "");
 }
 
 // the whole surface: tabs, the current view clipped to the area between the bars, the status line
-static void Draw(void)
+static void Draw(OpenBGI_t* o)
 {
-	DbgDraw_Clip(0, 0, 0, 0);
-	DbgDraw_Fill(0, 0, gDbgSurf.w, gDbgSurf.h, DBG_BG);
-	DrawTabs();
-	DbgDraw_Clip(0, TAB_H, gDbgSurf.w, gDbgSurf.h - TAB_H - STATUS_H);
-	kViews[gView]->draw(0, TAB_H, gDbgSurf.w, gDbgSurf.h - TAB_H - STATUS_H);
-	DbgDraw_Clip(0, 0, 0, 0);
-	DrawStatus();
+	DbgDraw_Clip(o, 0, 0, 0, 0);
+	DbgDraw_Fill(o, 0, 0, o->dbg.dbgSurf.w, o->dbg.dbgSurf.h, DBG_BG);
+	DrawTabs(o);
+	DbgDraw_Clip(o, 0, TAB_H, o->dbg.dbgSurf.w, o->dbg.dbgSurf.h - TAB_H - STATUS_H);
+	kViews[o->dbg.view]->draw(o, 0, TAB_H, o->dbg.dbgSurf.w, o->dbg.dbgSurf.h - TAB_H - STATUS_H);
+	DbgDraw_Clip(o, 0, 0, 0, 0);
+	DrawStatus(o);
 }
 
 // the surface to the screen: into the game's window (overlay) or the debug window
-static void Present(void)
+static void Present(OpenBGI_t* o)
 {
-	OsSurface_t s;
-	s.pixels = gDbgSurf.px;
-	s.pitch = gDbgSurf.w * 4;
-	s.width = gDbgSurf.w;
-	s.height = gDbgSurf.h;
-	s.bpp = 32;
-	if(gOverlay)
+	if(o->dbg.overlay)
 	{
-		OsDc_t* dc = OS_WindowGetDc();
-		if(dc)
-		{
-			OS_BlitToWindow(dc, 0, 0, s.width, s.height, &s, 0, 0);
-			OS_WindowReleaseDc(dc);
-		}
+		Bmp_t b;
+		b.pixels = (uint8_t*)o->dbg.dbgSurf.px;
+		b.pitch = o->dbg.dbgSurf.w * 4;
+		b.w = o->dbg.dbgSurf.w;
+		b.h = o->dbg.dbgSurf.h;
+		b.mode = PM_RGB32;
+		b.bpp = 4;
+		Screen_Copy(o, 0, 0, &b, 0, 0, b.w, b.h);
 	}
 	else
-		OS_DebugWindowPresent(&s);
+	{
+		MainWin_DebugPresent(o, (const uint8_t*)o->dbg.dbgSurf.px, o->dbg.dbgSurf.w * 4, o->dbg.dbgSurf.w, o->dbg.dbgSurf.h);
+	}
 }
 
 // After the engine presented its frame: the overlay goes over it (the debug window presents from Dbg_Pass).
-void Dbg_OverlayPresent(void)
+void Dbg_OverlayPresent(OpenBGI_t* o)
 {
-	if(gOpen && gOverlay)
-		Present();
+	if(o->dbg.open && o->dbg.overlay)
+		Present(o);
 }
 
 // ---- the events, applied between passes ------------------------------------------------------------
 
 /* a key press: the global keys (close, run control, the view tabs, the
  * trace) here, everything else to the current view */
-static void HandleKey(int vk, int down, int ch)
+static void HandleKey(OpenBGI_t* o, int vk, int down, int ch)
 {
 	if(!down)
 		return;
@@ -540,69 +505,69 @@ static void HandleKey(int vk, int down, int ch)
 	{
 		case 0x1b: // Escape
 		case 0x7b: // F12
-			Close();
+			Close(o);
 			return;
 		case 0x74: // F5
-			if(gDbgPaused)
-				Resume();
+			if(o->dbg.dbgPaused)
+				Resume(o);
 			else
-				Pause();
-			Dbg_Log(gDbgPaused ? "paused" : "running");
+				Pause(o);
+			Dbg_Log(o, o->dbg.dbgPaused ? "paused" : "running");
 			return;
 		case 0x75: // F6: a pass
-			gDbgPaused = 1;
-			gStep = 1;
+			o->dbg.dbgPaused = 1;
+			o->dbg.step = 1;
 			return;
 		case 0x76: // F7: an instruction
-			gDbgPaused = 1;
-			gStep = 2;
+			o->dbg.dbgPaused = 1;
+			o->dbg.step = 2;
 			return;
 		case 0x09: // Tab
-			gView = (gView + 1) % DBG_VIEW_COUNT;
+			o->dbg.view = (o->dbg.view + 1) % DBG_VIEW_COUNT;
 			return;
 		default:
 			break;
 	}
 	if(ch >= '1' && ch < '1' + DBG_VIEW_COUNT)
 	{
-		gView = ch - '1';
+		o->dbg.view = ch - '1';
 		return;
 	}
 	if(ch == 't' || ch == 'T')
 	{
-		gDbgTrace = !gDbgTrace;
-		Rehook();
-		Dbg_Log("trace %s", gDbgTrace ? "on" : "off");
+		o->dbg.dbgTrace = !o->dbg.dbgTrace;
+		Rehook(o);
+		Dbg_Log(o, "trace %s", o->dbg.dbgTrace ? "on" : "off");
 		return;
 	}
-	kViews[gView]->key(vk, ch);
+	kViews[o->dbg.view]->key(o, vk, ch);
 }
 
 // drain the queue: keys to HandleKey, a button press to the tabs or the view, the wheel to the view at the last mouse position
-static void HandleEvents(void)
+static void HandleEvents(OpenBGI_t* o)
 {
-	while(gEventCount)
+	while(o->dbg.eventCount)
 	{
-		DbgEvent_t e = gEvents[gEventHead];
-		gEventHead = (gEventHead + 1) % EVENT_QUEUE;
-		gEventCount--;
+		DbgEvent_t e = o->dbg.events[o->dbg.eventHead];
+		o->dbg.eventHead = (o->dbg.eventHead + 1) % DBG_EVENT_QUEUE;
+		o->dbg.eventCount--;
 		switch(e.type)
 		{
-			case 1: HandleKey(e.a, e.b, e.c); break;
+			case 1: HandleKey(o, e.a, e.b, e.c); break;
 			case 2:
 				if(e.d)
 				{
-					int tab = TabHit(e.a, e.b);
+					int tab = TabHit(o, e.a, e.b);
 					if(tab >= 0)
-						gView = tab;
+						o->dbg.view = tab;
 					else
-						kViews[gView]->click(e.a, e.b, e.c);
+						kViews[o->dbg.view]->click(o, e.a, e.b, e.c);
 				}
 				break;
-			case 3: kViews[gView]->wheel(gMouseX, gMouseY, e.a); break;
-			case 4: Close(); break;
+			case 3: kViews[o->dbg.view]->wheel(o, o->dbg.mouseX, o->dbg.mouseY, e.a); break;
+			case 4: Close(o); break;
 		}
-		if(!gOpen)
+		if(!o->dbg.open)
 			return;
 	}
 }
@@ -611,37 +576,32 @@ static void HandleEvents(void)
  * window when --debug asked for it, close it when the OS window went
  * away, apply the queued input, and redraw at most every 40 ms while the
  * VM runs (16 ms while paused, when nothing but the debugger changes). */
-void Dbg_Pass(void)
+void Dbg_Pass(OpenBGI_t* o)
 {
 	uint32_t now;
-	gPassCount++;
-	if(gStep)
+	o->dbg.passCount++;
+	if(o->dbg.step)
 	{ // the step ran: paused again
-		gStep = 0;
-		gDbgInsnLimit = 0x100000;
+		o->dbg.step = 0;
+		o->vm.dbgInsnLimit = 0x100000;
 	}
-	if(gWantOpen)
+	if(o->dbg.wantOpen)
 	{
-		gWantOpen = 0;
-		Open();
+		o->dbg.wantOpen = 0;
+		Open(o);
 	}
-	if(!gOpen)
+	if(!o->dbg.open)
 		return;
-	if(!gOverlay && !OS_DebugWindowAlive())
-	{
-		Close();
+	HandleEvents(o);
+	if(!o->dbg.open)
 		return;
-	}
-	HandleEvents();
-	if(!gOpen)
+	now = Clock_HostMs(o);
+	if(now - o->dbg.lastDraw < 40 && !o->dbg.dbgPaused)
 		return;
-	now = OS_TicksMs();
-	if(now - gLastDraw < 40 && !gDbgPaused)
+	if(now - o->dbg.lastDraw < 16)
 		return;
-	if(now - gLastDraw < 16)
-		return;
-	gLastDraw = now;
-	Draw();
-	if(!gOverlay)
-		Present();
+	o->dbg.lastDraw = now;
+	Draw(o);
+	if(!o->dbg.overlay)
+		Present(o);
 }

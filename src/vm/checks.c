@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * checks.c - operand validators of the graphics and sound instruction
- *            families (declared in inc/bgi/vm.h, used by the ops_gfx*.c,
+ *            families (declared in src/include/bgi/vm.h, used by the ops_gfx*.c,
  *            ops_snd.c and ops_ext*.c handlers)
  *
  * Each one raises a script error (which never returns) when the operand is
@@ -16,79 +16,73 @@
 #include "bgi/error.h"
 #include "bgi/msg.h"
 #include "bgi/gfx/bmpops.h"
+#include "bgi/core.h"
 
 // format the message `fmt` with the offending value `v` and raise it on thread `t`
-#define CHECK_ERROR(t, fmt, v)     \
+#define CHECK_ERROR(o, t, fmt, v)  \
 	do                             \
 	{                              \
 		char msg_[0x100];          \
 		sprintf(msg_, (fmt), (v)); \
-		ScriptError(msg_, (t));    \
+		ScriptError(o, msg_, (t)); \
 	} while(0)
 
-void CheckSeSlot(uint32_t slot, Thread_t* t) // 0.. 63: a sound-effect slot
+void CheckSeSlot(OpenBGI_t* o, uint32_t slot, Thread_t* t) // 0.. 63: a sound-effect slot
 {
 	if(slot >= 0x40)
-		CHECK_ERROR(t, MSG_BAD_SE_SLOT, (int)slot);
+		CHECK_ERROR(o, t, MSG_BAD_SE_SLOT, (int)slot);
 }
 
-void CheckPan(int32_t pan, Thread_t* t) // 0.. 128: 64 is the centre
+void CheckPan(OpenBGI_t* o, int32_t pan, Thread_t* t) // 0.. 128: 64 is the centre
 {
 	if(pan < 0 || pan > 0x80)
-		CHECK_ERROR(t, MSG_BAD_PAN, pan);
+		CHECK_ERROR(o, t, MSG_BAD_PAN, pan);
 }
 
-void CheckVolume(int32_t volume, Thread_t* t) // 0.. 128
+void CheckVolume(OpenBGI_t* o, int32_t volume, Thread_t* t) // 0.. 128
 {
 	if(volume < 0 || volume > 0x80)
-		CHECK_ERROR(t, MSG_BAD_VOLUME, volume);
+		CHECK_ERROR(o, t, MSG_BAD_VOLUME, volume);
 }
 
-void CheckBgmChannel(uint32_t channel, Thread_t* t) // 0.. 15
+void CheckBgmChannel(OpenBGI_t* o, uint32_t channel, Thread_t* t) // 0.. 15
 {
 	if(channel >= 0x10)
-		CHECK_ERROR(t, MSG_BAD_BGM_CHANNEL, (int)channel);
+		CHECK_ERROR(o, t, MSG_BAD_BGM_CHANNEL, (int)channel);
 }
 
-void CheckDivCount(int32_t n, Thread_t* t) // 1.. 256: the step count of a text scroll or fade ("90 95", "90 96")
+void CheckDivCount(OpenBGI_t* o, int32_t n, Thread_t* t) // 1.. 256: the step count of a text scroll or fade ("90 95", "90 96")
 {
 	if(n < 1 || n > 0x100)
-		CHECK_ERROR(t, MSG_BAD_DIV_COUNT, n);
+		CHECK_ERROR(o, t, MSG_BAD_DIV_COUNT, n);
 }
 
-void CheckFontNo(int32_t no, Thread_t* t) // a font number FontNameByNo knows (0, 1 or a registered face)
+void CheckFontNo(OpenBGI_t* o, int32_t no, Thread_t* t) // a font number FontNameByNo knows (0, 1 or a registered face)
 {
-	if(!FontNameByNo(no))
-		CHECK_ERROR(t, MSG_BAD_FONT_NO, no);
+	if(!FontNameByNo(o, no))
+		CHECK_ERROR(o, t, MSG_BAD_FONT_NO, no);
 }
 
-// 0.. 255; raises the error without thread context (the message carries no value either)
-void CheckVirtualKey(int32_t vk)
+void CheckBitmapNo(OpenBGI_t* o, int32_t no, Thread_t* t) // 0.. 4095; 0.. 16383 from 1.69 build 472 on (BMP_NO_LIMIT)
 {
-	if(vk > 0xff || vk < 0)
-		ThrowScriptError(MSG_BAD_VKEY);
+	if(no < 0 || no >= BMP_NO_LIMIT(o))
+		CHECK_ERROR(o, t, MSG_BAD_BITMAP_NO, no);
 }
 
-void CheckBitmapNo(int32_t no, Thread_t* t) // 0.. 4095; 0.. 16383 from 1.69 build 472 on (BMP_NO_LIMIT)
+void CheckPriority(OpenBGI_t* o, uint32_t prio, Thread_t* t) // a display priority: 0.. 4095; 0 .. 65535 from 1.529 on
 {
-	if(no < 0 || no >= BMP_NO_LIMIT)
-		CHECK_ERROR(t, MSG_BAD_BITMAP_NO, no);
+	if(prio >= (o->engine.profile->gen >= GEN_1_529 ? 0x10000u : 0x1000u))
+		CHECK_ERROR(o, t, MSG_BAD_PRIORITY, (int)prio);
 }
 
-void CheckPriority(uint32_t prio, Thread_t* t) // a display priority: 0.. 4095; 0 .. 65535 from 1.529 on
+void ErrBitmapNotRegistered(OpenBGI_t* o, int32_t no, Thread_t* t) // always raises: bitmap `no` has no image
 {
-	if(prio >= (gEngine->gen >= GEN_1_529 ? 0x10000u : 0x1000u))
-		CHECK_ERROR(t, MSG_BAD_PRIORITY, (int)prio);
-}
-
-void ErrBitmapNotRegistered(int32_t no, Thread_t* t) // always raises: bitmap `no` has no image
-{
-	CHECK_ERROR(t, MSG_BITMAP_NOT_REGISTERED, no);
+	CHECK_ERROR(o, t, MSG_BITMAP_NOT_REGISTERED, no);
 }
 
 /* the effect modes the blitters know: 0..9, 0x20..0x27, 0x40,
  * 0x41, 0x80, 0xC0, 0xC1, 0xF0 and 0xFF; anything else is an error */
-void CheckEffectMode(uint32_t mode, Thread_t* t)
+void CheckEffectMode(OpenBGI_t* o, uint32_t mode, Thread_t* t)
 {
 	int ok;
 	if(mode <= 9 || (mode >= 0x20 && mode <= 0x27) || mode == 0x40 || mode == 0x41)
@@ -96,23 +90,23 @@ void CheckEffectMode(uint32_t mode, Thread_t* t)
 	else
 		ok = mode == 0x80 || mode == 0xc0 || mode == 0xc1 || mode == 0xf0 || mode == 0xff;
 	if(!ok)
-		CHECK_ERROR(t, MSG_BAD_EFFECT_MODE, (int)mode);
+		CHECK_ERROR(o, t, MSG_BAD_EFFECT_MODE, (int)mode);
 }
 
-void CheckAlpha(uint32_t level, Thread_t* t) // 0.. 256: an effect level, the `level` of Bmp_Blit
+void CheckAlpha(OpenBGI_t* o, uint32_t level, Thread_t* t) // 0.. 256: an effect level, the `level` of Bmp_Blit
 {
 	if(level > 0x100)
-		CHECK_ERROR(t, MSG_BAD_EFFECT_LEVEL, (int)level);
+		CHECK_ERROR(o, t, MSG_BAD_EFFECT_LEVEL, (int)level);
 }
 
-void CheckMixRatio(uint32_t ratio, Thread_t* t) // 0.. 256
+void CheckMixRatio(OpenBGI_t* o, uint32_t ratio, Thread_t* t) // 0.. 256
 {
 	if(ratio > 0x100)
-		CHECK_ERROR(t, MSG_BAD_MIX_RATIO, (int)ratio);
+		CHECK_ERROR(o, t, MSG_BAD_MIX_RATIO, (int)ratio);
 }
 
-void CheckTransparency(uint32_t level, Thread_t* t) // 0.. 256
+void CheckTransparency(OpenBGI_t* o, uint32_t level, Thread_t* t) // 0.. 256
 {
 	if(level > 0x100)
-		CHECK_ERROR(t, MSG_BAD_TRANSPARENCY, (int)level);
+		CHECK_ERROR(o, t, MSG_BAD_TRANSPARENCY, (int)level);
 }

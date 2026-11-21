@@ -2,7 +2,7 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * bmpmgr.c - the bitmap manager (inc/bgi/gfx/bmpmgr.h): slots, generation
+ * bmpmgr.c - the bitmap manager (src/include/bgi/gfx/bmpmgr.h): slots, generation
  * counters, raw pixel import/export, ripple tables and the text drawing
  * front end
  */
@@ -10,8 +10,7 @@
 #include <math.h>
 #include "bgi/strutil.h"
 #include "bgi/gfx/text.h" // the text direction of the OpenBGI extensions
-
-BmpMgr_t* gBmpMgr;
+#include "bgi/core.h"
 
 // ========================================================================
 // manager life cycle
@@ -28,7 +27,7 @@ BmpMgr_t* BmpMgr_New(int count)
 	for(i = 0; i < count; i++)
 	{
 		m->slots[i].buf = NULL;
-		m->slots[i].baseW = m->slots[i].baseH = 0;
+		m->slots[i].baseW = m->slots[i].baseH = -1; // no base size, as after a release
 	}
 	m->nextGen = 0;
 	m->keepGen = 0;
@@ -82,7 +81,7 @@ int BmpMgr_Generation(BmpMgr_t* m, int no)
 }
 
 /* Allocate slot `no` as a w x h bitmap in pixel mode `mode`, freeing the
- * bitmap that was there; the pixels are not initialised.  1 ok, 0 for an
+ * bitmap that was there; the pixels are zero (black).  1 ok, 0 for an
  * invalid slot number, a mode above 6 or a failed allocation.  The old
  * bitmap is freed before the mode is checked, so a bad mode still empties
  * the slot. */
@@ -152,7 +151,7 @@ int BmpMgr_GetBaseSize(BmpMgr_t* m, int32_t* out, int no)
 	return 1;
 }
 
-/* "90 17" of 1.494 on: relabel a 32-bit bitmap
+/* "90 17" of 1.492 on: relabel a 32-bit bitmap
  * with alpha (mode 2) as one without (mode 1); the pixels stay.  0 ok,
  * 0xb no bitmap, 0x15 any other conversion (the same mode is ok). */
 uint32_t BmpMgr_SetMode(BmpMgr_t* m, int no, int mode)
@@ -184,13 +183,13 @@ int BmpMgr_Clear(BmpMgr_t* m, int no, uint32_t colour)
 }
 
 /* An ARGB32 picture that was composited over the key colour
- * gBmpOption gets its original colours back:
+ * o->gfx.bmpOption gets its original colours back:
  *   c = clamp((c - key * (255 - a) / 255) * 255 / a)   for 0 < a < 255
  * 1 when done, 0 when there is no key colour or the picture is not
  * ARGB32. */
-int Bmp_Uncomposite(Bmp_t* b)
+int Bmp_Uncomposite(OpenBGI_t* o, Bmp_t* b)
 {
-	uint32_t key = (uint32_t)Gfx_GetBmpOption();
+	uint32_t key = (uint32_t)Gfx_GetBmpOption(o);
 	int y, x, i;
 	if(key == 0 || b->mode != PM_ARGB32)
 		return 0;
@@ -220,9 +219,9 @@ int Bmp_Uncomposite(Bmp_t* b)
 
 /* Create slot `no` and fill it from packed rows of pixels: 24 bpp B G R
  * for RGB32, the mode's own pixel size otherwise.  An ARGB32 result is
- * un-composited against gBmpOption.  1 ok, 0 when the slot could not be
- * created. */
-int BmpMgr_PutPixels(BmpMgr_t* m, int no, int w, int h, int mode, const void* data)
+ * un-composited against o->gfx.bmpOption.  1 ok, 0 when the slot could
+ * not be created. */
+int BmpMgr_PutPixels(OpenBGI_t* o, BmpMgr_t* m, int no, int w, int h, int mode, const void* data)
 {
 	Bmp_t b;
 	if(!BmpMgr_Create(m, no, w, h, mode))
@@ -250,7 +249,7 @@ int BmpMgr_PutPixels(BmpMgr_t* m, int no, int w, int h, int mode, const void* da
 				d[x] = (uint32_t)s[0] | (uint32_t)s[1] << 8 | (uint32_t)s[2] << 16;
 		}
 	}
-	Bmp_Uncomposite(&b);
+	Bmp_Uncomposite(o, &b);
 	return 1;
 }
 
@@ -484,15 +483,15 @@ int BmpMgr_RippleFill(BmpMgr_t* m, uint32_t* table, int no, int selector, int le
 // fonts and text
 // ========================================================================
 
-int BmpMgr_FontOpen(BmpMgr_t* m, int* handle, const char* name, int size, int widthPct, int bold)
+int BmpMgr_FontOpen(OpenBGI_t* o, BmpMgr_t* m, int* handle, const char* name, int size, int widthPct, int bold)
 {
-	return FontCache_Open(m->fonts, handle, name, size, widthPct, bold);
+	return FontCache_Open(o, m->fonts, handle, name, size, widthPct, bold);
 }
 
-int BmpMgr_FontOpenExtra(BmpMgr_t* m, int* handle, const char* name, int size, int widthPct, int bold, int extraUpright,
+int BmpMgr_FontOpenExtra(OpenBGI_t* o, BmpMgr_t* m, int* handle, const char* name, int size, int widthPct, int bold, int extraUpright,
 	int extraItalic)
 {
-	return FontCache_OpenExtra(m->fonts, handle, name, size, widthPct, bold, extraUpright, extraItalic);
+	return FontCache_OpenExtra(o, m->fonts, handle, name, size, widthPct, bold, extraUpright, extraItalic);
 }
 
 int BmpMgr_FontInfo(BmpMgr_t* m, FontInfo_t* out, int handle)
@@ -512,7 +511,7 @@ int BmpMgr_FontRequest(BmpMgr_t* m, const char* name, int size, int widthPct, in
  * `wrap` a line also breaks when the next glyph would pass the right
  * edge, except that one kinsoku (line-head-prohibited) character may
  * overhang.  1 ok, 0 unknown font. */
-int BmpMgr_DrawTextEx(BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const char* str, int handle,
+int BmpMgr_DrawTextEx(OpenBGI_t* o, BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const char* str, int handle,
 	uint32_t colour, int effect, int level, int proportional, int wrap, int spacingPct)
 {
 	FontInfo_t info;
@@ -524,7 +523,7 @@ int BmpMgr_DrawTextEx(BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const
 	if(!FontCache_GetInfo(m->fonts, &info, handle))
 		return 0;
 	size = info.size;
-	Bmp_AllocScreen(&cell, size * 2, size, 1);
+	Bmp_AllocScreen(o, &cell, size * 2, size, 1);
 	glyphW = (info.widthPct * size) / 100;
 	maxX = dst->w - glyphW;
 	spacing = Font_Percent(size, spacingPct);
@@ -533,8 +532,8 @@ int BmpMgr_DrawTextEx(BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const
 	while(*s)
 	{
 		uint32_t code;
-		int len = TextGetChar(&code, s);
-		int dbcs = TextIsWide(code, len);
+		int len = TextGetChar(o, &code, s);
+		int dbcs = TextIsWide(o, code, len);
 		Bmp_t view;
 		int gap = 0, advance;
 
@@ -553,7 +552,7 @@ int BmpMgr_DrawTextEx(BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const
 			continue;
 		}
 
-		Font_PaintGlyph(&cell, &glyph, (int)code, info.font, colour);
+		Font_PaintGlyph(o, &cell, &glyph, (int)code, info.font, colour);
 		view = cell;
 		if(proportional)
 		{
@@ -568,7 +567,7 @@ int BmpMgr_DrawTextEx(BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const
 		}
 		if(wrap && (uint32_t)(advance + 2 * gap + x) > (uint32_t)maxX)
 		{
-			if(!overhang && IsKinsokuChar(code))
+			if(!overhang && IsKinsokuChar(o, code))
 			{
 				overhang = 1; // a line-head-prohibited character may stick out once
 			}
@@ -599,19 +598,19 @@ int BmpMgr_DrawTextEx(BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const
  * (OpenBGI: while the text direction of "EF 01" is not 0 the string goes
  * through the bidirectional layout, so that a caption in Arabic or Hebrew
  * is joined and ordered like the message text.) */
-int BmpMgr_DrawText(BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const char* str, int handle,
+int BmpMgr_DrawText(OpenBGI_t* o, BmpMgr_t* m, Bmp_t* dst, int* measure, int x, int y, const char* str, int handle,
 	uint32_t colour, int effect, int level, int proportional)
 {
-	if(gTextDirection != 0 && m == gTextBmpMgr)
-		return Text_DrawBidiLine(dst, measure, x, y, str, handle, colour, effect, level, proportional);
-	return BmpMgr_DrawTextEx(m, dst, measure, x, y, str, handle, colour, effect, level, proportional, 0, 0);
+	if(o->text.textDirection != 0 && m == o->text.textBmpMgr)
+		return Text_DrawBidiLine(o, dst, measure, x, y, str, handle, colour, effect, level, proportional);
+	return BmpMgr_DrawTextEx(o, m, dst, measure, x, y, str, handle, colour, effect, level, proportional, 0, 0);
 }
 
 /* "7D": a hex dump of `len` bytes into `dst`: one line of up to
  * 16 bytes per text row ("OOOO : xx xx ..."), each drawn into a black line
  * bitmap of the destination's mode that is then copied to (x, y + n*size).
  * Always 0; an unknown font draws nothing. */
-int BmpMgr_DrawHexDump(BmpMgr_t* m, Bmp_t* dst, int x, int y, const void* data, int len, int handle, uint32_t colour)
+int BmpMgr_DrawHexDump(OpenBGI_t* o, BmpMgr_t* m, Bmp_t* dst, int x, int y, const void* data, int len, int handle, uint32_t colour)
 {
 	FontInfo_t fi;
 	Bmp_t line;
@@ -642,7 +641,7 @@ int BmpMgr_DrawHexDump(BmpMgr_t* m, Bmp_t* dst, int x, int y, const void* data, 
 			strcpy(hex, tmp);
 		}
 		sprintf(text, "%.4X : %s", offset, hex);
-		BmpMgr_DrawText(m, &line, &measure, 0, 0, text, handle, colour, 0, 0, 0);
+		BmpMgr_DrawText(o, m, &line, &measure, 0, 0, text, handle, colour, 0, 0, 0);
 		Bmp_Blit(dst, x, y, &line, 0x80, 0);
 		y += fi.size;
 		offset += 16;

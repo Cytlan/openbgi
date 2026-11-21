@@ -14,20 +14,21 @@
  * inline markup, underline or Latin word handling.
  */
 #include "layout_internal.h"
+#include "bgi/core.h"
 
 /* The layout core: one node per glyph, top to bottom, columns `adv`
  * pixels apart from right to left, from the cursor `cur` (the column's x
- * is its right edge) inside `area`.  A control byte 4 .. 8
- * at the start is consumed (with `hang` and gHangBrackets it, or an
- * opening bracket as the first character, hangs by one cell: later
- * columns start that much down); 0x0A in the text is a column break,
- * other control bytes are skipped.  With `hang` closing punctuation stays
- * in its column (it may run into the bottom reserve of one size) and an
- * opening bracket never ends one.  With `rubyOn` every column keeps the
- * ruby size on its right and starts at the indent, and a dictionary word
- * is kept together.  *outLines receives the column count, `cur` the
- * cursor behind the text.  1 ok, 0 when the font is unknown. */
-int Text_LayoutCoreV(RichState_t* rich, int32_t* outLines, const char* str, int rubyOn, RubyDict_t* dict,
+ * is its right edge) inside `area`.  A control byte 4 .. 8 at the start
+ * is consumed (with `hang` and o->text.hangBrackets it, or an opening
+ * bracket as the first character, hangs by one cell: later columns start
+ * that much down); 0x0A in the text is a column break, other control
+ * bytes are skipped.  With `hang` closing punctuation stays in its column
+ * (it may run into the bottom reserve of one size) and an opening bracket
+ * never ends one.  With `rubyOn` every column keeps the ruby size on its
+ * right and starts at the indent, and a dictionary word is kept together.
+ * *outLines receives the column count, `cur` the cursor behind the text.
+ * 1 ok, 0 when the font is unknown. */
+int Text_LayoutCoreV(OpenBGI_t* o, RichState_t* rich, int32_t* outLines, const char* str, int rubyOn, RubyDict_t* dict,
 	int32_t cur[2], const Rect_t* area, int adv, int font, int proportional,
 	int hang, uint32_t colour, const int32_t style[5])
 {
@@ -42,7 +43,7 @@ int Text_LayoutCoreV(RichState_t* rich, int32_t* outLines, const char* str, int 
 	int pos = 0;
 	char word[0x400], run[0x100];
 
-	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+	if(!BmpMgr_FontInfo(o->text.textBmpMgr, &fi, font))
 		return 0;
 	// only the bracket control bytes matter here; the bracket itself is not needed
 	if((uint8_t)str[0] >= 4 && (uint8_t)str[0] <= 8)
@@ -52,33 +53,33 @@ int Text_LayoutCoreV(RichState_t* rich, int32_t* outLines, const char* str, int 
 	}
 	size = fi.size;
 	half = (size + 1) >> 1;
-	rubySize = rubyOn ? Text_RubySize(size) : 0;
+	rubySize = rubyOn ? Text_RubySize(o, size) : 0;
 	sdx = Layout_Min1(Layout_Pct(size, style[1]));
 	sdy = Layout_Min1(Layout_Pct(size, style[2]));
 	sdxOn = style[0] ? sdx : 0;
 	sdyOn = style[0] ? sdy : 0;
-	Bmp_AllocScreen(&cell, size, size, 1);
+	Bmp_AllocScreen(o, &cell, size, size, 1);
 
 	if(hang)
 	{
 		hangSize = size;
-		if(gHangBrackets)
+		if(o->text.hangBrackets)
 		{
 			// a leading control byte hangs a full cell; a bracket as the first
 			// character hangs its own width (a full or a half cell)
-			int isBracket = Text_IsHangBracket(str);
+			int isBracket = Text_IsHangBracket(o, str);
 			if(!isBracket)
 			{
 				if(hasLeading)
-					lineStartOffset = size + gCharPitch;
+					lineStartOffset = size + o->text.charPitch;
 			}
 			else if(hasLeading)
-				lineStartOffset = size + gCharPitch;
+				lineStartOffset = size + o->text.charPitch;
 			else
 			{
 				uint32_t code;
-				int l = TextGetChar(&code, str);
-				lineStartOffset = (TextIsWide(code, l) ? size : half) + gCharPitch;
+				int l = TextGetChar(o, &code, str);
+				lineStartOffset = (TextIsWide(o, code, l) ? size : half) + o->text.charPitch;
 			}
 		}
 	}
@@ -86,8 +87,8 @@ int Text_LayoutCoreV(RichState_t* rich, int32_t* outLines, const char* str, int 
 	{
 		// the ruby margin ("91 98"): the first column only when it starts at the top
 		if(cur[1] == area->t)
-			cur[1] += Text_GetIndent();
-		lineStartOffset += Text_GetIndent();
+			cur[1] += Text_GetIndent(o);
+		lineStartOffset += Text_GetIndent(o);
 	}
 
 	*outLines = 1;
@@ -115,17 +116,17 @@ int Text_LayoutCoreV(RichState_t* rich, int32_t* outLines, const char* str, int 
 			continue;
 		}
 
-		node = Layout_NewNode(delay);
-		len = TextGetChar(&code, p); // (every vertical cell is a full square: the width flag is not needed)
+		node = Layout_NewNode(o, delay);
+		len = TextGetChar(o, &code, p); // (every vertical cell is a full square: the width flag is not needed)
 		Bmp_Fill(&view, NULL, 0);
-		Text_PaintGlyph(&view, &g, (int)code, fi.font, colour);
-		Text_VertClass(cls, p);
+		Text_PaintGlyph(o, &view, &g, (int)code, fi.font, colour);
+		Text_VertClass(o, cls, p);
 		if(cls[0])
 			Bmp_RotateSquare(&view);
 		node->kind = cls[2] != 0; // shifted small kana / punctuation
-		Layout_GlyphBitmap(&node->glyph, size + sdxOn, size + sdyOn, &view, &g, (int)code, fi.font, style, sdx, sdy, cls[0]);
+		Layout_GlyphBitmap(o, &node->glyph, size + sdxOn, size + sdyOn, &view, &g, (int)code, fi.font, style, sdx, sdy, cls[0]);
 
-		step = size + gCharPitch;
+		step = size + o->text.charPitch;
 		nextPos = pos + len;
 		nextPtr = str + nextPos;
 		if(rubyOn)
@@ -135,13 +136,13 @@ int Text_LayoutCoreV(RichState_t* rich, int32_t* outLines, const char* str, int 
 			else if(RubyDict_MatchPrefix(word, p, dict))
 			{
 				// the reading needs (half the byte count) full cells
-				int ext = (int)((uint32_t)strlen(word) >> 1) * (size + gCharPitch);
+				int ext = (int)((uint32_t)strlen(word) >> 1) * (size + o->text.charPitch);
 				int n;
 				if(step < ext)
 					step = ext;
 				node->rubyWord = BGI_Strdup(word);
 				node->rubyExtent = ext;
-				n = SjisCodes(NULL, word) - 1;
+				n = SjisCodes(o, NULL, word) - 1;
 				rubySkip = rubyCharsLeft = n;
 				nextPtr = p + strlen(word);
 			}
@@ -152,7 +153,7 @@ int Text_LayoutCoreV(RichState_t* rich, int32_t* outLines, const char* str, int 
 				punctSkip--;
 			else
 			{
-				int n = Text_CollectClosing(run, nextPtr);
+				int n = Text_CollectClosing(o, run, nextPtr);
 				if(n > 0)
 				{
 					// closing punctuation must stay in this column: reserve its
@@ -160,21 +161,21 @@ int Text_LayoutCoreV(RichState_t* rich, int32_t* outLines, const char* str, int 
 					// be placed when the column is full
 					char ch[TEXT_CHAR_MAX];
 					// (the original counts the run's bytes / 2: its closers are all double-byte)
-					int chars = gTextUtf8 ? SjisCodes(NULL, run) : (int)((uint32_t)strlen(run) >> 1);
-					step += chars * (size + gCharPitch);
+					int chars = o->enc.textUtf8 ? SjisCodes(o, NULL, run) : (int)((uint32_t)strlen(run) >> 1);
+					step += chars * (size + o->text.charPitch);
 					punctSkip = n + rubyCharsLeft;
-					Text_NthChar(ch, run, n - 1);
+					Text_NthChar(o, ch, run, n - 1);
 					// (text function 0 of 1.573 on switches this rule off)
-					closingFollows = gTextFunc[0] ? Text_IsClosing(ch) : 0;
+					closingFollows = o->text.textFunc[0] ? Text_IsClosing(o, ch) : 0;
 					if(closingFollows)
-						TextGetChar(&pendingClose, ch);
+						TextGetChar(o, &pendingClose, ch);
 				}
-				else if(Text_IsOpening(p) && *nextPtr)
+				else if(Text_IsOpening(o, p) && *nextPtr)
 				{
 					// an opening bracket never ends a column: room for the next character too
 					uint32_t nc;
-					int nl = TextGetChar(&nc, nextPtr);
-					step += TextIsWide(nc, nl) ? size : half;
+					int nl = TextGetChar(o, &nc, nextPtr);
+					step += TextIsWide(o, nc, nl) ? size : half;
 				}
 			}
 		}
@@ -196,10 +197,10 @@ int Text_LayoutCoreV(RichState_t* rich, int32_t* outLines, const char* str, int 
 		// the right; a shifted character moves by its class percentages
 		node->x = cur[0] + Layout_Pct(size, cls[1]) - rubySize - size + 1;
 		node->y = cur[1] + Layout_Pct(size, cls[2]);
-		cur[1] += size + gCharPitch;
+		cur[1] += size + o->text.charPitch;
 		*link = node;
 		link = &node->next;
-		delay += gRubyCharDelay;
+		delay += o->text.rubyCharDelay;
 		pos = nextPos;
 	}
 	BGI_Free(cell.pixels);
@@ -212,7 +213,7 @@ int Text_LayoutCoreV(RichState_t* rich, int32_t* outLines, const char* str, int 
  * recoloured shadow is not rotated (as in the original).  Each glyph gets
  * a share of the word's reveal delay; the new nodes (kind 2) are spliced
  * in behind `base`. */
-static void RubyEmitV(RichChar_t* base, const RubyNode_t* entry, const FontInfo_t* rfi, uint32_t colour,
+static void RubyEmitV(OpenBGI_t* o, RichChar_t* base, const RubyNode_t* entry, const FontInfo_t* rfi, uint32_t colour,
 	const int32_t style[5], int x, int y, int extent, int delay)
 {
 	int size = rfi->size;
@@ -230,30 +231,30 @@ static void RubyEmitV(RichChar_t* base, const RubyNode_t* entry, const FontInfo_
 	if(perChar < size)
 		perChar = size;
 	startY = y + size / 8 + (extent - (n - 1) * perChar - size) / 2;
-	delayStep = (int)((uint32_t)(entry->wordChars * gRubyCharDelay) / (uint32_t)n);
+	delayStep = (int)((uint32_t)(entry->wordChars * o->text.rubyCharDelay) / (uint32_t)n);
 	curDelay = delay + (int)((uint32_t)delayStep >> 1);
-	Bmp_AllocScreen(&cell, size, size, 1);
+	Bmp_AllocScreen(o, &cell, size, size, 1);
 	for(i = 0; i < n; i++)
 	{
 		int code = entry->readingCodes[i];
 		Glyph_t g;
 		int32_t cls[3];
 		char buf[3];
-		RichChar_t* node = Layout_NewNode(curDelay);
+		RichChar_t* node = Layout_NewNode(o, curDelay);
 
 		node->x = x;
 		node->y = startY;
 		node->kind = 2;
 		Bmp_Fill(&cell, NULL, 0);
-		Font_PaintGlyph(&cell, &g, code, rfi->font, colour);
+		Font_PaintGlyph(o, &cell, &g, code, rfi->font, colour);
 		// the class tables want a string: rebuild the character's bytes
 		buf[0] = (char)(code >= 0x100 ? code >> 8 : code);
 		buf[1] = (char)(code >= 0x100 ? code & 0xff : 0);
 		buf[2] = 0;
-		Text_VertClass(cls, buf);
+		Text_VertClass(o, cls, buf);
 		if(cls[0])
 			Bmp_RotateSquare(&cell);
-		Layout_GlyphBitmap(&node->glyph, size + sdxOn, size + sdyOn, &cell, &g, code, rfi->font, style, sdx, sdy, 0);
+		Layout_GlyphBitmap(o, &node->glyph, size + sdxOn, size + sdyOn, &cell, &g, code, rfi->font, style, sdx, sdy, 0);
 		*link = node;
 		link = &node->next;
 		curDelay += delayStep;
@@ -269,30 +270,30 @@ static void RubyEmitV(RichChar_t* base, const RubyNode_t* entry, const FontInfo_
  * dictionary word, running down from the node's top, `rsz` right of its
  * left edge (plus the "91 97" offset).  1 ok, 0 when the base font is
  * unknown or the ruby font cannot be opened. */
-int Text_RubyPlaceV(RichState_t* rich, int font, uint32_t colour, const int32_t style[5], RubyDict_t* dict)
+int Text_RubyPlaceV(OpenBGI_t* o, RichState_t* rich, int font, uint32_t colour, const int32_t style[5], RubyDict_t* dict)
 {
 	FontInfo_t fi, rfi;
 	int handle, rsz;
 	int32_t rstyle[5];
 	RichChar_t* c;
 
-	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+	if(!BmpMgr_FontInfo(o->text.textBmpMgr, &fi, font))
 		return 0;
-	rsz = gRubySizeFixed > 0 ? gRubySizeFixed : Text_RubySize(fi.size);
-	if(BmpMgr_FontOpen(gTextBmpMgr, &handle, gRubyFace[0] ? gRubyFace : fi.name, rsz,
-		   gRubyWidthPct > 0 ? gRubyWidthPct : fi.widthPct, gRubyBold != -1 ? gRubyBold : fi.bold) != 0)
+	rsz = o->text.rubySizeFixed > 0 ? o->text.rubySizeFixed : Text_RubySize(o, fi.size);
+	if(BmpMgr_FontOpen(o, o->text.textBmpMgr, &handle, o->text.rubyFace[0] ? o->text.rubyFace : fi.name, rsz,
+		   o->text.rubyWidthPct > 0 ? o->text.rubyWidthPct : fi.widthPct, o->text.rubyBold != -1 ? o->text.rubyBold : fi.bold) != 0)
 		return 0;
-	BmpMgr_FontInfo(gTextBmpMgr, &rfi, handle);
+	BmpMgr_FontInfo(o->text.textBmpMgr, &rfi, handle);
 	memcpy(rstyle, style, sizeof rstyle);
-	if(gRubyShadow != -1)
-		rstyle[3] = gRubyShadow; // the ruby's own shadow colour
+	if(o->text.rubyShadow != -1)
+		rstyle[3] = o->text.rubyShadow; // the ruby's own shadow colour
 	for(c = rich->head; c; c = c->next)
 	{
 		RubyNode_t entry;
 		if(!c->rubyWord)
 			continue;
 		RubyDict_Find(&entry, c->rubyWord, dict);
-		RubyEmitV(c, &entry, &rfi, colour, rstyle, c->x + rsz + gRubyDx, c->y + gRubyDy, c->rubyExtent, c->delay);
+		RubyEmitV(o, c, &entry, &rfi, colour, rstyle, c->x + rsz + o->text.rubyDx, c->y + o->text.rubyDy, c->rubyExtent, c->delay);
 	}
 	return 1;
 }
@@ -304,7 +305,7 @@ int Text_RubyPlaceV(RichState_t* rich, int font, uint32_t colour, const int32_t 
  * indent), 2 aligns it to the bottom leaving room for the cursor picture;
  * 0 leaves the columns alone.  The cursor moves with the last column when
  * it is not at the top. */
-void Text_AlignV(RichState_t* rich, int32_t cur[2], const Rect_t* area, int font, int hang,
+void Text_AlignV(OpenBGI_t* o, RichState_t* rich, int32_t cur[2], const Rect_t* area, int font, int hang,
 	const int32_t style[5], int swing)
 {
 	LineRec_t head = {0, 0, 0x80000000, NULL};
@@ -315,7 +316,7 @@ void Text_AlignV(RichState_t* rich, int32_t cur[2], const Rect_t* area, int font
 
 	if(swing == 0)
 		return;
-	if(BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+	if(BmpMgr_FontInfo(o->text.textBmpMgr, &fi, font))
 		size = fi.size;
 	// pass 1: one record per column with its bottom
 	for(c = rich->head; c; c = c->next)
@@ -332,7 +333,7 @@ void Text_AlignV(RichState_t* rich, int32_t cur[2], const Rect_t* area, int font
 		if(c->kind == 0 || c->kind == 1)
 			rec->extent += size;
 	}
-	cursorItemH = gTextItems ? gTextItems[0].h : 0;
+	cursorItemH = o->text.textItems ? o->text.textItems[0].h : 0;
 
 	// pass 2: shift every node by its column's amount
 	rec = &head;
@@ -344,7 +345,7 @@ void Text_AlignV(RichState_t* rich, int32_t cur[2], const Rect_t* area, int font
 			if(swing == 1)
 			{
 				int reserve = hang && rec->extent < area->b ? size : 0;
-				shift = (area->b - rec->extent - reserve - Text_GetIndent()) >> 1;
+				shift = (area->b - rec->extent - reserve - Text_GetIndent(o)) >> 1;
 			}
 			else if(swing == 2)
 				shift = area->b - rec->extent - cursorItemH;

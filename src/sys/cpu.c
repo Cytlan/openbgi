@@ -4,72 +4,71 @@
  *
  * cpu.c - processor identification; interface in bgi/sys.h
  *
- * At start-up the engine fills the system information block (gSysInfo,
- * read out by "80 0A") from CPUID: the vendor, family / model / stepping,
- * the brand index, the sizes of the three cache levels and the clock
- * measured over one second of the time stamp counter.  The cache sizes
- * size the compositor's bands (engine.c), the feature bits select the
- * SSE blitters and the blit tuning (src/gfx/mgr/gfxmgr.c), and CMOV +
- * MMX are required to run at all (Engine_Main).
+ * At start-up the engine fills the system information block
+ * (o->util.sysInfo, read out by "80 0A") from CPUID: the vendor, family /
+ * model / stepping, the brand index, the sizes of the three cache levels
+ * and the clock measured over one second of the time stamp counter.  The
+ * cache sizes size the compositor's bands (engine.c), the feature bits
+ * select the SSE blitters and the blit tuning (src/gfx/mgr/gfxmgr.c), and
+ * CMOV + MMX are required to run at all (OpenBGI_Start).
  *
  * Intel caches are decoded from the CPUID leaf 2 descriptor bytes with the
  * table below (only the descriptors known in 2008); everything else reads
- * the extended leaves 0x80000005 / 0x80000006.  The OS layer supplies the
- * CPUID instruction itself (OS_Cpuid), so a host without it reports no
- * processor at all.
+ * the extended leaves 0x80000005 / 0x80000006.  The host supplies the
+ * CPUID instruction and the time stamp counter (OpenBGI_Machine_t,
+ * Host_Cpuid), so a host without them reports no processor at all.
  */
 #include "bgi/sys.h"
-#include "bgi/os.h"
-
-SysInfo_t gSysInfo;
+#include "bgi/host.h"
+#include "bgi/core.h"
 
 // CPUID `leaf` into out[4] (EAX, EBX, ECX, EDX); 0 without CPUID or when the leaf is unsupported
-static int Cpu_Cpuid(uint32_t out[4], uint32_t leaf)
+static int Cpu_Cpuid(OpenBGI_t* o, uint32_t out[4], uint32_t leaf)
 {
-	return OS_Cpuid(leaf, out);
+	return Host_Cpuid(o, leaf, out);
 }
 
 // bit `bit` of CPUID.1:EDX, the standard feature flags; 0 without CPUID
-int Cpu_HasFeature(int bit)
+int Cpu_HasFeature(OpenBGI_t* o, int bit)
 {
 	uint32_t r[4];
-	if(!Cpu_Cpuid(r, 1))
+	if(!Cpu_Cpuid(o, r, 1))
 		return 0;
 	return (r[3] >> bit) & 1;
 }
 
-int Cpu_HasCmov(void)
+int Cpu_HasCmov(OpenBGI_t* o)
 {
-	return Cpu_HasFeature(15);
+	return Cpu_HasFeature(o, 15);
 }
 
-int Cpu_HasMmx(void)
+int Cpu_HasMmx(OpenBGI_t* o)
 {
-	return Cpu_HasFeature(23);
+	return Cpu_HasFeature(o, 23);
 }
 
-int Cpu_HasSse(void)
+int Cpu_HasSse(OpenBGI_t* o)
 {
-	return Cpu_HasFeature(25);
+	return Cpu_HasFeature(o, 25);
 }
 
-int Cpu_HasSse2(void)
+int Cpu_HasSse2(OpenBGI_t* o)
 {
-	return Cpu_HasFeature(26);
+	return Cpu_HasFeature(o, 26);
 }
 
 /* The vendor index (0 Intel, 1 AMD, 2 Centaur, 3 Transmeta, 4 other),
  * family / model / stepping with the extended fields folded in, and the
  * brand (Intel: the brand index byte of leaf 1; others: the low word of
  * leaf 0x80000001 EBX).  0 without CPUID or when a leaf is missing. */
-static int Cpu_Identify(uint32_t* vendor, uint32_t* family, uint32_t* model, uint32_t* stepping, uint32_t* brand)
+static int Cpu_Identify(OpenBGI_t* o, uint32_t* vendor, uint32_t* family, uint32_t* model, uint32_t* stepping, uint32_t* brand)
 {
 	static const char* const kVendors[4] = {"GenuineIntel", "AuthenticAMD", "CentaurHauls", "GenuineTMx86"};
 	uint32_t r[4];
 	char id[13];
 	uint32_t v, sig;
 
-	if(!Cpu_Cpuid(r, 0))
+	if(!Cpu_Cpuid(o, r, 0))
 		return 0;
 	memcpy(id, &r[1], 4); // the vendor string is EBX, EDX, ECX
 	memcpy(id + 4, &r[3], 4);
@@ -79,7 +78,7 @@ static int Cpu_Identify(uint32_t* vendor, uint32_t* family, uint32_t* model, uin
 		;
 	*vendor = v;
 
-	if(!Cpu_Cpuid(r, 1))
+	if(!Cpu_Cpuid(o, r, 1))
 		return 0;
 	sig = r[0];
 	*family = (sig >> 8) & 0xf;
@@ -94,27 +93,36 @@ static int Cpu_Identify(uint32_t* vendor, uint32_t* family, uint32_t* model, uin
 		*brand = r[1] & 0xff;
 		return 1;
 	}
-	if(!Cpu_Cpuid(r, 0x80000001))
+	if(!Cpu_Cpuid(o, r, 0x80000001))
 		return 0;
 	*brand = r[1] & 0xffff;
 	return 1;
 }
 
-/* The clock in MHz: the time stamp counter over one second (sleeping in
- * 1 ms steps, so start-up takes a second); 0 without CPUID. */
-static uint32_t Cpu_MeasureMhz(void)
+/* The clock in MHz: the time stamp counter over one second, so start-up
+ * takes a second (0 without CPUID).  The original sleeps in 1 ms steps
+ * until GetTicks passes the end; here the start (Cpu_Detect) and the end
+ * (Cpu_MeasureStep) are taken over the frames of the start-up. */
+static void Cpu_MeasureBegin(OpenBGI_t* o)
 {
-	uint32_t until;
-	uint64_t t0, t1;
 	uint32_t r[4];
-	if(!Cpu_Cpuid(r, 0))
+	o->util.sysInfo.mhz = 0;
+	o->util.cpuMeasuring = Cpu_Cpuid(o, r, 0);
+	if(!o->util.cpuMeasuring)
+		return;
+	o->util.cpuUntil = GetTicks(o) + 1000;
+	o->util.cpuTsc0 = Host_ReadTsc(o);
+}
+
+int Cpu_MeasureStep(OpenBGI_t* o)
+{
+	if(!o->util.cpuMeasuring)
+		return 1;
+	if(o->util.cpuUntil > GetTicks(o))
 		return 0;
-	until = GetTicks() + 1000;
-	t0 = OS_ReadTsc();
-	while(until > GetTicks())
-		OS_SleepMs(1);
-	t1 = OS_ReadTsc();
-	return (uint32_t)((t1 - t0) / 1000000u);
+	o->util.sysInfo.mhz = (uint32_t)((Host_ReadTsc(o) - o->util.cpuTsc0) / 1000000u);
+	o->util.cpuMeasuring = 0;
+	return 1;
 }
 
 // a cache descriptor of CPUID leaf 2: which level it describes and the encoded geometry
@@ -150,18 +158,18 @@ static const CacheDesc_t kCacheDescs[] = { // the descriptors the original knows
 /* The Intel caches from the leaf 2 descriptor bytes: every known byte
  * sets its level (a later one overwrites an earlier one), unknown bytes
  * are ignored.  Levels without a descriptor keep their value. */
-static void Cpu_IntelCaches(uint32_t family, uint32_t* l1, uint32_t* l2, uint32_t* l3)
+static void Cpu_IntelCaches(OpenBGI_t* o, uint32_t family, uint32_t* l1, uint32_t* l2, uint32_t* l3)
 {
 	uint32_t r[4];
 	uint32_t rounds, n, i, k;
 	uint8_t* bytes;
-	if(!Cpu_Cpuid(r, 2))
+	if(!Cpu_Cpuid(o, r, 2))
 		return;
 	rounds = r[0] & 0xff; // AL: how often leaf 2 must be read
 	bytes = (uint8_t*)BGI_Alloc(rounds * 16 + 1);
 	for(n = 0; n < rounds; n++)
 	{
-		Cpu_Cpuid(r, 2);
+		Cpu_Cpuid(o, r, 2);
 		r[0] &= ~0xffu; // the count byte is not a descriptor
 		for(k = 0; k < 4; k++)
 			if(r[k] & 0x80000000u) // a set bit 31 marks a reserved register
@@ -192,14 +200,14 @@ static void Cpu_IntelCaches(uint32_t family, uint32_t* l1, uint32_t* l2, uint32_
 /* The L1 data and L2 caches of the other vendors from the extended leaves,
  * re-packed into the line size << 24 | ways << 16 | KB form; a missing
  * leaf leaves the value alone. */
-static void Cpu_ExtendedCaches(uint32_t* l1, uint32_t* l2)
+static void Cpu_ExtendedCaches(OpenBGI_t* o, uint32_t* l1, uint32_t* l2)
 {
 	uint32_t r[4], ecx, ways;
-	if(!Cpu_Cpuid(r, 0x80000005))
+	if(!Cpu_Cpuid(o, r, 0x80000005))
 		return;
 	ecx = r[2]; // L1 data: size KB << 24 | ways << 16 | lines per tag << 8 | line size
 	*l1 = (ecx & 0xff0000) | (ecx >> 24) | (ecx << 24);
-	if(!Cpu_Cpuid(r, 0x80000006))
+	if(!Cpu_Cpuid(o, r, 0x80000006))
 		return;
 	ecx = r[2]; // L2: size KB << 16 | associativity code << 12 | lines per tag << 8 | line size
 	ways = (ecx >> 12) & 0xf;
@@ -207,19 +215,20 @@ static void Cpu_ExtendedCaches(uint32_t* l1, uint32_t* l2)
 	*l2 = (((ecx << 8) | ways) << 16) | (ecx >> 16);
 }
 
-/* Fill gSysInfo: identification, caches and the clock (which takes one
- * second to measure).  0 without CPUID. */
-int Cpu_Detect(void)
+/* Fill o->util.sysInfo: identification and caches, and start measuring
+ * the clock, which Cpu_MeasureStep finishes a second later.  0 without
+ * CPUID. */
+int Cpu_Detect(OpenBGI_t* o)
 {
-	SysInfo_t* s = &gSysInfo;
-	if(!Cpu_Identify(&s->vendor, &s->family, &s->model, &s->stepping, &s->brand))
+	SysInfo_t* s = &o->util.sysInfo;
+	if(!Cpu_Identify(o, &s->vendor, &s->family, &s->model, &s->stepping, &s->brand))
 		return 0;
 	s->l1 = s->l2 = s->l3 = 0;
 	if(s->vendor == 0)
-		Cpu_IntelCaches(s->family, &s->l1, &s->l2, &s->l3);
+		Cpu_IntelCaches(o, s->family, &s->l1, &s->l2, &s->l3);
 	else
-		Cpu_ExtendedCaches(&s->l1, &s->l2);
-	s->mhz = Cpu_MeasureMhz();
+		Cpu_ExtendedCaches(o, &s->l1, &s->l2);
+	Cpu_MeasureBegin(o);
 	return 1;
 }
 
@@ -227,14 +236,14 @@ int Cpu_Detect(void)
  * 0x80000002 .. 4 into `out` (0x40 bytes), its runs of spaces collapsed
  * to one and the ends trimmed; 1 when the leaves exist, 0 (and an empty
  * string) when not. */
-int Cpu_BrandString(char* out)
+int Cpu_BrandString(OpenBGI_t* o, char* out)
 {
 	uint32_t r[4];
 	char raw[0x40];
 	char* d = out;
 	const char* p;
 	int i;
-	if(!OS_Cpuid(0x80000000u, r) || r[0] < 0x80000004u)
+	if(!Cpu_Cpuid(o, r, 0x80000000u) || r[0] < 0x80000004u)
 	{
 		out[0] = 0;
 		return 0;
@@ -242,7 +251,7 @@ int Cpu_BrandString(char* out)
 	memset(raw, 0, sizeof raw);
 	for(i = 0; i < 3; i++)
 	{
-		OS_Cpuid(0x80000002u + (uint32_t)i, r);
+		Cpu_Cpuid(o, r, 0x80000002u + (uint32_t)i);
 		memcpy(raw + i * 16, r, 16);
 	}
 	raw[0x30] = 0;

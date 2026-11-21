@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * flipbook.c - background type 5: a flip book of up to 32 screen-sized
- *              bitmaps (inc/bgi/gfx/background.h; selected by "90 44")
+ *              bitmaps (src/include/bgi/gfx/background.h; selected by "90 44")
  *
  * The object's level is the frame index.  When the frames are set, every
  * ordered pair of them is compared on a grid of 32 x 24 cells and the
@@ -15,6 +15,7 @@
  * full repaint next time.
  */
 #include "background_internal.h"
+#include "bgi/core.h"
 
 #define BG5_RECT_BYTES 0x1800 // room for 384 rectangles per frame pair (32 x 24 cells, worst case)
 
@@ -25,20 +26,20 @@ static void Bg5_Dtor(Bg5_t* b)
 	Background_Dtor(&b->bg);
 }
 
-static void Bg5_Destroy(DispObj_t* o, int flags)
+static void Bg5_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	Bg5_Dtor((Bg5_t*)o);
+	Bg5_Dtor((Bg5_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
 /* every frame empty.  `shown` and `count` are left as they are (the
  * original does not initialise them; zeroed memory gives count 0, which
  * draws nothing until Bg5_Set()). */
-void Bg5_Ctor(Bg5_t* b)
+void Bg5_Ctor(OpenBGI_t* o, Bg5_t* b)
 {
 	int i;
-	Background_Ctor(&b->bg, 5);
+	Background_Ctor(o, &b->bg, 5);
 	b->bg.obj.vt = &Bg5_Vtbl.base;
 	for(i = 0; i < 32; i++)
 	{
@@ -71,10 +72,10 @@ void Bg5_Clear(Bg5_t* b)
 }
 
 // the screen is compared in 32 x 24 cells; their size in pixels
-void Bg5_CellSize(int* cw, int* ch)
+void Bg5_CellSize(OpenBGI_t* o, int* cw, int* ch)
 {
 	Bmp_t back;
-	Gfx_GetBackBmp(&back);
+	Gfx_GetBackBmp(o, &back);
 	*cw = (int)((uint32_t)back.w >> 5);
 	*ch = (int)((uint32_t)back.h / 24u);
 }
@@ -84,21 +85,21 @@ void Bg5_CellSize(int* cw, int* ch)
  * Only 16-bit (mode 0) and 32-bit (mode 1, colour bits only) screens are
  * compared; in other modes no cell ever differs.  0 ok, 0x80000003 /
  * 0x80000005 a bitmap missing, 0x80000004 / 0x80000006 not screen sized. */
-int Bg5_DiffFrames(Bg5_t* b, Bg5Diff_t* out, int bmpA, int bmpB)
+int Bg5_DiffFrames(OpenBGI_t* o, Bg5_t* b, Bg5Diff_t* out, int bmpA, int bmpB)
 {
 	Bmp_t back, a, s;
 	int cw, ch, row, col;
 	(void)b;
-	Gfx_GetBackBmp(&back);
-	if(!BgGetInfo(&a, bmpA))
+	Gfx_GetBackBmp(o, &back);
+	if(!BgGetInfo(o, &a, bmpA))
 		return (int)0x80000003;
-	if(!Bmp_MatchesScreen(&a))
+	if(!Bmp_MatchesScreen(o, &a))
 		return (int)0x80000004;
-	if(!BgGetInfo(&s, bmpB))
+	if(!BgGetInfo(o, &s, bmpB))
 		return (int)0x80000005;
-	if(!Bmp_MatchesScreen(&s))
+	if(!Bmp_MatchesScreen(o, &s))
 		return (int)0x80000006;
-	Bg5_CellSize(&cw, &ch);
+	Bg5_CellSize(o, &cw, &ch);
 	out->count = 0;
 	for(row = 0; row < 24; row++)
 	{
@@ -148,7 +149,7 @@ int Bg5_DiffFrames(Bg5_t* b, Bg5Diff_t* out, int bmpA, int bmpB)
 /* the frames: n (2..32) screen-sized bitmaps; every ordered pair gets its
  * difference list.  0 ok, 0x80000001 n out of range, 0x80000002 a bitmap
  * unusable; the previous frames are dropped in every case. */
-int Bg5_Set(Bg5_t* b, int n, const int* bmpList)
+int Bg5_Set(OpenBGI_t* o, Bg5_t* b, int n, const int* bmpList)
 {
 	int i, j;
 	Bg5_Clear(b);
@@ -156,10 +157,10 @@ int Bg5_Set(Bg5_t* b, int n, const int* bmpList)
 		return (int)0x80000001;
 	for(i = 0; i < n; i++)
 	{
-		if(!Bg_BitmapUsable(bmpList[i]))
+		if(!Bg_BitmapUsable(o, bmpList[i]))
 			break;
 		b->frame[i].bmp = bmpList[i];
-		b->frame[i].gen = BgGen(bmpList[i]);
+		b->frame[i].gen = BgGen(o, bmpList[i]);
 	}
 	if(i != n)
 	{
@@ -173,7 +174,7 @@ int Bg5_Set(Bg5_t* b, int n, const int* bmpList)
 		{
 			Bg5Diff_t* d = &b->frame[i].diff[j];
 			d->rects = (Rect_t*)BGI_Alloc(BG5_RECT_BYTES);
-			Bg5_DiffFrames(b, d, b->frame[j].bmp, b->frame[i].bmp);
+			Bg5_DiffFrames(o, b, d, b->frame[j].bmp, b->frame[i].bmp);
 		}
 	}
 	return 0;
@@ -183,62 +184,62 @@ int Bg5_Set(Bg5_t* b, int n, const int* bmpList)
  * screen and the frame selected by the level are dirtied; without a frame
  * on screen the whole background is.  A level of 32 or more dirties
  * nothing (render() will not draw it either). */
-static void Bg5_Invalidate(DispObj_t* o)
+static void Bg5_Invalidate(OpenBGI_t* o, DispObj_t* obj)
 {
-	Bg5_t* b = (Bg5_t*)o;
-	int level = GET_LEVEL(&b->bg), i;
+	Bg5_t* b = (Bg5_t*)obj;
+	int level = GET_LEVEL(o, &b->bg), i;
 	const Bg5Diff_t* d;
 	if((uint32_t)level >= 32)
 		return;
 	if((uint32_t)b->shown >= (uint32_t)b->count)
 	{
-		Background_Invalidate(o);
+		Background_Invalidate(o, obj);
 		return;
 	}
 	d = &b->frame[level].diff[b->shown];
 	for(i = 0; i < d->count; i++)
-		Gfx_AddDirty(gDispGfx, o->vt->sortKey(o), &d->rects[i]);
+		Gfx_AddDirty(o->gfx.dispGfx, obj->vt->sortKey(o, obj), &d->rects[i]);
 }
 
 // showing or hiding forgets the frame on screen
-static void Bg5_SetVisible(DispObj_t* o, int on)
+static void Bg5_SetVisible(OpenBGI_t* o, DispObj_t* obj, int on)
 {
-	((Bg5_t*)o)->shown = -1;
-	DispObj_SetVisible(o, on);
+	((Bg5_t*)obj)->shown = -1;
+	DispObj_SetVisible(o, obj, on);
 }
 
 // so does a mode change
-static void Bg5_SetMode(Background_t* bg, int mode)
+static void Bg5_SetMode(OpenBGI_t* o, Background_t* bg, int mode)
 {
 	((Bg5_t*)bg)->shown = -1;
-	Background_SetMode(bg, mode);
+	Background_SetMode(o, bg, mode);
 }
 
 // a screen size change drops the frames (their cell grid no longer fits)
-static int Bg5_MatchScreenSize(Background_t* bg)
+static int Bg5_MatchScreenSize(OpenBGI_t* o, Background_t* bg)
 {
 	Bg5_Clear((Bg5_t*)bg);
-	return Background_MatchScreenSize(bg);
+	return Background_MatchScreenSize(o, bg);
 }
 
 // the compositor's end-of-frame notification (0xF0000000): the frame selected by the level is on screen now
-static void Bg5_Notify(DispObj_t* o, uint32_t what, int a1, int a2)
+static void Bg5_Notify(OpenBGI_t* o, DispObj_t* obj, uint32_t what, int a1, int a2)
 {
 	(void)a1;
 	(void)a2;
 	if(what == 0xf0000000u)
-		((Bg5_t*)o)->shown = GET_LEVEL(&((Bg5_t*)o)->bg);
+		((Bg5_t*)obj)->shown = GET_LEVEL(o, &((Bg5_t*)obj)->bg);
 }
 
 // copy the frame selected by the level; 0 for a level beyond the frames or a replaced bitmap
-static int Bg5_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
+static int Bg5_Render(OpenBGI_t* o, Background_t* bg, Bmp_t* dst, const Rect_t* local)
 {
 	Bg5_t* b = (Bg5_t*)bg;
-	int level = GET_LEVEL(bg);
+	int level = GET_LEVEL(o, bg);
 	Bmp_t src;
 	if((uint32_t)level >= (uint32_t)b->count)
 		return 0;
-	if(!BgCurrent(&src, b->frame[level].bmp, b->frame[level].gen))
+	if(!BgCurrent(o, &src, b->frame[level].bmp, b->frame[level].gen))
 		return 0;
 	Bmp_Crop(&src, local);
 	Bmp_BlitEffect(dst, &src, 0x80, 0); // raw copy

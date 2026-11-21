@@ -7,8 +7,8 @@
  * The script threads of the scheduler as a list on the left: id, module
  * and offset of the instruction pointer, frame pointer, stack pointer and
  * state ("runs", or the wait class the thread blocks on).  The selected
- * thread - which becomes gDbgThreadId, the thread the Programs and Memory
- * views look at - has, on the right, its listing following the
+ * thread - which becomes o->dbg.dbgThreadId, the thread the Programs and
+ * Memory views look at - has, on the right, its listing following the
  * instruction pointer, its evaluation stack top first with each value
  * interpreted as a tagged pointer, and the dwords below its frame pointer
  * (the locals, as push_local_addr addresses them).
@@ -18,11 +18,7 @@
 #include "bgi/wait.h"
 #include "bgi/sys.h"
 #include "bgi/version.h"
-
-static DbgList_t gThreadList;           // the thread list
-static DbgListingPane_t gThreadListing; // the selected thread's listing
-static Thread_t* gThreadRows[256];      // the threads behind the rows, rebuilt every draw
-static int gThreadsFocus;               // 0 the thread list, 1 the listing
+#include "bgi/core.h"
 
 static const char* WaitName(const Wait_t* w)
 {
@@ -30,7 +26,7 @@ static const char* WaitName(const Wait_t* w)
 }
 
 // the list, then for the selected thread the listing (two thirds of the height), the stack beside it and the frame below
-static void ThreadsDraw(int x, int y, int w, int h)
+static void ThreadsDraw(OpenBGI_t* o, int x, int y, int w, int h)
 {
 	Thread_t* t;
 	int i, n = 0, ly, rowsH;
@@ -38,33 +34,33 @@ static void ThreadsDraw(int x, int y, int w, int h)
 	Thread_t* sel;
 
 	// the list
-	for(t = gRootThread ? Thread_Next(gRootThread) : NULL; t && n < 256; t = Thread_Next(t))
-		gThreadRows[n++] = t;
-	gThreadList.count = n;
-	DbgPane_Frame(x + DBG_PAD, y + DBG_PAD, DBG_LEFT_W - DBG_PAD, h - 2 * DBG_PAD, " id module+ip           fp  sp state");
-	if(gThreadsFocus == 0)
-		DbgPane_Focus(x + DBG_PAD, y + DBG_PAD, DBG_LEFT_W - DBG_PAD, h - 2 * DBG_PAD);
-	DbgPane_ListArea(&gThreadList, x + DBG_PAD, y + DBG_PAD, DBG_LEFT_W - DBG_PAD, h - 2 * DBG_PAD);
-	if(gThreadList.sel < 0 && n)
-		gThreadList.sel = 0;
+	for(t = o->vm.rootThread ? Thread_Next(o->vm.rootThread) : NULL; t && n < 256; t = Thread_Next(t))
+		o->dbg.threadRows[n++] = t;
+	o->dbg.threadList.count = n;
+	DbgPane_Frame(o, x + DBG_PAD, y + DBG_PAD, DBG_LEFT_W - DBG_PAD, h - 2 * DBG_PAD, " id module+ip           fp  sp state");
+	if(o->dbg.threadsFocus == 0)
+		DbgPane_Focus(o, x + DBG_PAD, y + DBG_PAD, DBG_LEFT_W - DBG_PAD, h - 2 * DBG_PAD);
+	DbgPane_ListArea(&o->dbg.threadList, x + DBG_PAD, y + DBG_PAD, DBG_LEFT_W - DBG_PAD, h - 2 * DBG_PAD);
+	if(o->dbg.threadList.sel < 0 && n)
+		o->dbg.threadList.sel = 0;
 	for(i = 0; i < n; i++)
-		if(gThreadRows[i]->id == gDbgThreadId)
-			gThreadList.sel = i;
-	for(i = gThreadList.top; i < gThreadList.top + gThreadList.rows && i < n; i++)
+		if(o->dbg.threadRows[i]->id == o->dbg.dbgThreadId)
+			o->dbg.threadList.sel = i;
+	for(i = o->dbg.threadList.top; i < o->dbg.threadList.top + o->dbg.threadList.rows && i < n; i++)
 	{
 		const char* module = "?";
 		uint32_t base = 0, size = 0;
-		t = gThreadRows[i];
+		t = o->dbg.threadRows[i];
 		Dbg_ModuleAt(t, t->opIP, &module, &base, &size);
-		if(i == gThreadList.sel)
-			DbgPane_RowBg(&gThreadList, i, DBG_SELECT);
-		DbgDraw_TextF(gThreadList.x + 4, DbgPane_RowY(&gThreadList, i), DBG_TEXT, "%3u %-12.12s+%04x %04x %3u %s", (unsigned)t->id,
+		if(i == o->dbg.threadList.sel)
+			DbgPane_RowBg(o, &o->dbg.threadList, i, DBG_SELECT);
+		DbgDraw_TextF(o, o->dbg.threadList.x + 4, DbgPane_RowY(&o->dbg.threadList, i), DBG_TEXT, "%3u %-12.12s+%04x %04x %3u %s", (unsigned)t->id,
 			module, (unsigned)(t->opIP - base), (unsigned)t->fp, (unsigned)t->sp,
 			(t->flags & THR_FLAG_WAITING) ? WaitName(t->wait) : "runs");
 	}
-	sel = gThreadList.sel >= 0 && gThreadList.sel < n ? gThreadRows[gThreadList.sel] : NULL;
+	sel = o->dbg.threadList.sel >= 0 && o->dbg.threadList.sel < n ? o->dbg.threadRows[o->dbg.threadList.sel] : NULL;
 	if(sel)
-		gDbgThreadId = sel->id;
+		o->dbg.dbgThreadId = sel->id;
 
 	// the right side: the listing around the IP, the stack and the frame
 	rowsH = h - 2 * DBG_PAD;
@@ -72,26 +68,26 @@ static void ThreadsDraw(int x, int y, int w, int h)
 	{
 		const char* module;
 		uint32_t base, size;
-		int stackW = 30 * DBG_CELL_W, lh = rowsH * 2 / 3;
+		int stackW = 30 * DBG_CELL_W(o), lh = rowsH * 2 / 3;
 		if(Dbg_ModuleAt(sel, sel->opIP, &module, &base, &size))
 		{
-			DbgListingPane_Show(&gThreadListing, sel, module, base, size);
-			gThreadListing.follow = 1;
+			DbgListingPane_Show(o, &o->dbg.threadListing, sel, module, base, size);
+			o->dbg.threadListing.follow = 1;
 		}
-		DbgListingPane_Draw(&gThreadListing, sel, rx, y + DBG_PAD, rw - stackW - DBG_PAD, lh, "listing (at the instruction pointer)");
-		if(gThreadsFocus == 1)
-			DbgPane_Focus(rx, y + DBG_PAD, rw - stackW - DBG_PAD, lh);
+		DbgListingPane_Draw(o, &o->dbg.threadListing, sel, rx, y + DBG_PAD, rw - stackW - DBG_PAD, lh, "listing (at the instruction pointer)");
+		if(o->dbg.threadsFocus == 1)
+			DbgPane_Focus(o, rx, y + DBG_PAD, rw - stackW - DBG_PAD, lh);
 		// the evaluation stack
-		DbgPane_Frame(rx + rw - stackW, y + DBG_PAD, stackW, lh, "evaluation stack (top first)");
+		DbgPane_Frame(o, rx + rw - stackW, y + DBG_PAD, stackW, lh, "evaluation stack (top first)");
 		ly = y + DBG_PAD + DBG_CELL_H + 4;
 		for(i = 0; i < 24 && (uint32_t)i < sel->sp; i++)
 		{
 			char d[48];
-			Dbg_DescribeValue(sel->stack[sel->sp - 1 - i], d, sizeof d);
-			DbgDraw_TextF(rx + rw - stackW + DBG_PAD, ly + i * DBG_CELL_H, i == 0 ? DBG_ACCENT : DBG_TEXT, "%2d  %s", i, d);
+			Dbg_DescribeValue(o, sel->stack[sel->sp - 1 - i], d, sizeof d);
+			DbgDraw_TextF(o, rx + rw - stackW + DBG_PAD, ly + i * DBG_CELL_H, i == 0 ? DBG_ACCENT : DBG_TEXT, "%2d  %s", i, d);
 		}
 		// the frame: dwords below the frame pointer, 32 bytes per row, the row's label the offset of its first dword
-		DbgPane_Frame(rx, y + DBG_PAD + lh + DBG_PAD, rw, rowsH - lh - DBG_PAD, "frame (the locals below fp, as dwords; fp-0x.. of push_local_addr)");
+		DbgPane_Frame(o, rx, y + DBG_PAD + lh + DBG_PAD, rw, rowsH - lh - DBG_PAD, "frame (the locals below fp, as dwords; fp-0x.. of push_local_addr)");
 		ly = y + DBG_PAD + lh + DBG_PAD + DBG_CELL_H + 4;
 		{
 			int rows = (rowsH - lh - DBG_PAD - DBG_CELL_H - 8) / DBG_CELL_H, r, c;
@@ -99,78 +95,78 @@ static void ThreadsDraw(int x, int y, int w, int h)
 			for(r = 0; r < rows; r++)
 			{
 				char line[0x200];
-				size_t o = 0;
-				o += (size_t)snprintf(line + o, sizeof line - o, "fp-%04x:", (unsigned)(r * 32 + 32));
+				size_t ofs = 0;
+				ofs += (size_t)snprintf(line + ofs, sizeof line - ofs, "fp-%04x:", (unsigned)(r * 32 + 32));
 				for(c = 0; c < 8; c++)
 				{
 					uint32_t off = (uint32_t)(r * 32 + 32 - c * 4);
 					uint32_t v;
 					if(off > fp || fp - off + 4 > sel->dataSize) // outside the data area: dashes
 					{
-						o += (size_t)snprintf(line + o, sizeof line - o, "  --------");
+						ofs += (size_t)snprintf(line + ofs, sizeof line - ofs, "  --------");
 						continue;
 					}
 					memcpy(&v, sel->data + fp - off, 4);
-					o += (size_t)snprintf(line + o, sizeof line - o, "  %08x", (unsigned)v);
+					ofs += (size_t)snprintf(line + ofs, sizeof line - ofs, "  %08x", (unsigned)v);
 				}
-				DbgDraw_Text(rx + DBG_PAD, ly + r * DBG_CELL_H, DBG_TEXT, line);
+				DbgDraw_Text(o, rx + DBG_PAD, ly + r * DBG_CELL_H, DBG_TEXT, line);
 			}
 		}
 	}
 	else
-		DbgPane_Frame(rx, y + DBG_PAD, rw, rowsH, "no thread");
+		DbgPane_Frame(o, rx, y + DBG_PAD, rw, rowsH, "no thread");
 }
 
 // Left / Right choose the pane; F follows the instruction pointer again; the navigation keys move in the focused pane
-static int ThreadsKey(int vk, int ch)
+static int ThreadsKey(OpenBGI_t* o, int vk, int ch)
 {
-	if(DbgPane_IsFocusKey(vk, &gThreadsFocus))
+	if(DbgPane_IsFocusKey(vk, &o->dbg.threadsFocus))
 		return 1;
 	if(ch == 'f' || ch == 'F')
 	{
-		gThreadListing.follow = 1;
+		o->dbg.threadListing.follow = 1;
 		return 1;
 	}
-	if(gThreadsFocus == 0 && DbgPane_IsNavKey(vk))
+	if(o->dbg.threadsFocus == 0 && DbgPane_IsNavKey(vk))
 	{
-		DbgList_Key(&gThreadList, vk);
-		if(gThreadList.sel >= 0 && gThreadList.sel < gThreadList.count)
-			gDbgThreadId = gThreadRows[gThreadList.sel]->id;
-		gThreadListing.follow = 1;
+		DbgList_Key(&o->dbg.threadList, vk);
+		if(o->dbg.threadList.sel >= 0 && o->dbg.threadList.sel < o->dbg.threadList.count)
+			o->dbg.dbgThreadId = o->dbg.threadRows[o->dbg.threadList.sel]->id;
+		o->dbg.threadListing.follow = 1;
 		return 1;
 	}
-	return DbgListingPane_Key(&gThreadListing, vk);
+	return DbgListingPane_Key(o, &o->dbg.threadListing, vk);
 }
 
 // a click selects a thread (and focuses the list) or goes to the listing pane (and focuses it)
-static int ThreadsClick(int x, int y, int button)
+static int ThreadsClick(OpenBGI_t* o, int x, int y, int button)
 {
-	int row = DbgList_Hit(&gThreadList, x, y);
+	int row = DbgList_Hit(&o->dbg.threadList, x, y);
 	if(row >= 0)
 	{
-		gThreadList.sel = row;
-		gDbgThreadId = gThreadRows[row]->id;
-		gThreadListing.follow = 1;
-		gThreadsFocus = 0;
+		o->dbg.threadList.sel = row;
+		o->dbg.dbgThreadId = o->dbg.threadRows[row]->id;
+		o->dbg.threadListing.follow = 1;
+		o->dbg.threadsFocus = 0;
 		return 1;
 	}
-	if(DbgListingPane_Click(&gThreadListing, x, y, button))
+	if(DbgListingPane_Click(o, &o->dbg.threadListing, x, y, button))
 	{
-		gThreadsFocus = 1;
+		o->dbg.threadsFocus = 1;
 		return 1;
 	}
 	return 0;
 }
 
 // the wheel scrolls the pane under the mouse (three rows at a time)
-static int ThreadsWheel(int x, int y, int delta)
+static int ThreadsWheel(OpenBGI_t* o, int x, int y, int delta)
 {
-	if(DbgPane_Contains(x, y, gThreadList.x, gThreadList.y, gThreadList.w, gThreadList.h))
+	if(DbgPane_Contains(x, y, o->dbg.threadList.x, o->dbg.threadList.y, o->dbg.threadList.w, o->dbg.threadList.h))
 	{
-		DbgList_Scroll(&gThreadList, delta > 0 ? -3 : 3);
+		DbgList_Scroll(&o->dbg.threadList, delta > 0 ? -3 : 3);
 		return 1;
 	}
-	return DbgListingPane_Wheel(&gThreadListing, x, y, delta);
+	return DbgListingPane_Wheel(&o->dbg.threadListing, x, y, delta);
 }
 
 const DbgViewOps_t kDbgViewThreads = {"Threads", ThreadsDraw, ThreadsKey, ThreadsClick, ThreadsWheel};

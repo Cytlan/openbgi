@@ -4,7 +4,7 @@
  *
  * client.js - the browser side of the asset protocol (tools/wasm/server.js)
  *
- * Linked into the WebAssembly build as a --pre-js file; src/os/wasm/host.c
+ * Linked into the WebAssembly build as a --pre-js file; src/host/wasm/host.c
  * calls BgiNet from its EM_ASYNC_JS functions.  The same file runs under
  * node for the protocol test (tools/wasm/selftest.js), which is why nothing
  * here depends on the Emscripten runtime.

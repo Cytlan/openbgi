@@ -30,16 +30,15 @@
 #include "bgi/gfx/text.h"
 #include "bgi/file.h"
 #include "bgi/codec.h"
-
-VmHandler_t vm_optable_92[256]; // the "92 xx" dispatch table, filled by Vm_Optable92Init
+#include "bgi/core.h"
 
 // raise a script error with a formatted message; never returns
-#define GFX_ERROR(t, ...)           \
+#define GFX_ERROR(o, t, ...)        \
 	do                              \
 	{                               \
 		char msg_[0x104];           \
 		sprintf(msg_, __VA_ARGS__); \
-		ScriptError(msg_, (t));     \
+		ScriptError(o, msg_, (t));  \
 	} while(0)
 
 // -------------------------------------------------------------------------
@@ -50,25 +49,25 @@ VmHandler_t vm_optable_92[256]; // the "92 xx" dispatch table, filled by Vm_Opta
  * effector ("91 67"): one sine cycle of `period` steps and `amplitude`
  * followed by `count` - 1 silent cycles, repeated for `rings` rings.  A
  * zero period, count or rings counts as 1. */
-static int Opcode_Gfx2_DefineRipple(Thread_t* t) // 92 00: no, period, amplitude, count, rings →
+static int Opcode_Gfx2_DefineRipple(OpenBGI_t* o, Thread_t* t) // 92 00: no, period, amplitude, count, rings →
 {
 	int rings = (int)Thread_Pop(t), count = (int)Thread_Pop(t);
 	int amplitude = (int)Thread_Pop(t), period = (int)Thread_Pop(t), no = (int)Thread_Pop(t);
-	if(GfxCall_DefineRipple(no, period, amplitude, count, rings) == 0x10)
-		GFX_ERROR(t, MSG_BAD_RIPPLE_NO, no);
+	if(GfxCall_DefineRipple(o, no, period, amplitude, count, rings) == 0x10)
+		GFX_ERROR(o, t, MSG_BAD_RIPPLE_NO, no);
 	return 0;
 }
 
 /* 92 01: no, period, amplitude, fadeIn, fadeOut, count, rings →
  * As "92 00" with the cycle grown over `fadeIn` cycles (amplitude / 2^k)
  * and decayed over `fadeOut` cycles; the silent cycles lead each ring. */
-static int Opcode_Gfx2_DefineRippleEx(Thread_t* t)
+static int Opcode_Gfx2_DefineRippleEx(OpenBGI_t* o, Thread_t* t)
 {
 	int rings = (int)Thread_Pop(t), count = (int)Thread_Pop(t);
 	int fadeOut = (int)Thread_Pop(t), fadeIn = (int)Thread_Pop(t);
 	int amplitude = (int)Thread_Pop(t), period = (int)Thread_Pop(t), no = (int)Thread_Pop(t);
-	if(GfxCall_DefineRippleEx(no, period, amplitude, fadeIn, fadeOut, count, rings) == 0x10)
-		GFX_ERROR(t, MSG_BAD_RIPPLE_NO, no);
+	if(GfxCall_DefineRippleEx(o, no, period, amplitude, fadeIn, fadeOut, count, rings) == 0x10)
+		GFX_ERROR(o, t, MSG_BAD_RIPPLE_NO, no);
 	return 0;
 }
 
@@ -80,15 +79,15 @@ static int Opcode_Gfx2_DefineRippleEx(Thread_t* t)
  * field radiating from (cx, cy); `type` 0 or 1 (1 swaps the direction
  * components), `range` the distance the field wraps at (0: none).  Script
  * errors: no bitmap in the slot, not a vector-distance map, a bad type. */
-static int Opcode_Gfx2_VecDistRadial(Thread_t* t) // 92 10: slot, type, cx, cy, range →
+static int Opcode_Gfx2_VecDistRadial(OpenBGI_t* o, Thread_t* t) // 92 10: slot, type, cx, cy, range →
 {
 	int range = (int)Thread_Pop(t), cy = (int)Thread_Pop(t), cx = (int)Thread_Pop(t);
 	int type = (int)Thread_Pop(t), slot = (int)Thread_Pop(t);
-	switch(BmpOp_VecDistRadial(slot, type, cx, cy, range))
+	switch(BmpOp_VecDistRadial(o, slot, type, cx, cy, range))
 	{
-		case(int)0x80000001: GFX_ERROR(t, MSG_BMP_DST_NOT_EXIST, slot); break;
-		case(int)0x80000003: GFX_ERROR(t, MSG_VDMAP_DST_NOT_VDMAP, slot); break;
-		case(int)0x80000009: GFX_ERROR(t, MSG_BAD_RIPPLE_TYPE, type); break;
+		case(int)0x80000001: GFX_ERROR(o, t, MSG_BMP_DST_NOT_EXIST, slot); break;
+		case(int)0x80000003: GFX_ERROR(o, t, MSG_VDMAP_DST_NOT_VDMAP, slot); break;
+		case(int)0x80000009: GFX_ERROR(o, t, MSG_BAD_RIPPLE_TYPE, type); break;
 		default: break;
 	}
 	return 0;
@@ -97,14 +96,14 @@ static int Opcode_Gfx2_VecDistRadial(Thread_t* t) // 92 10: slot, type, cx, cy, 
 /* The vector-distance field of the straight wipes: `type` 0 / 2 point
  * right, 1 / 3 down (above 3 is a script error, as are a missing bitmap
  * and a slot that is not a vector-distance map). */
-static int Opcode_Gfx2_VecDistLinear(Thread_t* t) // 92 11: slot, type →
+static int Opcode_Gfx2_VecDistLinear(OpenBGI_t* o, Thread_t* t) // 92 11: slot, type →
 {
 	int type = (int)Thread_Pop(t), slot = (int)Thread_Pop(t);
-	switch(BmpOp_VecDistLinear(slot, type))
+	switch(BmpOp_VecDistLinear(o, slot, type))
 	{
-		case(int)0x80000001: GFX_ERROR(t, MSG_BMP_DST_NOT_EXIST, slot); break;
-		case(int)0x80000003: GFX_ERROR(t, MSG_VDMAP_DST_NOT_VDMAP, slot); break;
-		case(int)0x8000000a: GFX_ERROR(t, MSG_BAD_SHAKE_TYPE, type); break;
+		case(int)0x80000001: GFX_ERROR(o, t, MSG_BMP_DST_NOT_EXIST, slot); break;
+		case(int)0x80000003: GFX_ERROR(o, t, MSG_VDMAP_DST_NOT_VDMAP, slot); break;
+		case(int)0x8000000a: GFX_ERROR(o, t, MSG_BAD_SHAKE_TYPE, type); break;
 		default: break;
 	}
 	return 0;
@@ -115,36 +114,36 @@ static int Opcode_Gfx2_VecDistLinear(Thread_t* t) // 92 11: slot, type →
 // -------------------------------------------------------------------------
 
 // make dst a new 8-bit gray bitmap of src's size holding src's luminance (times alpha for ARGB32)
-static int Opcode_Gfx2_ToGray(Thread_t* t) // 92 18: dst, src →
+static int Opcode_Gfx2_ToGray(OpenBGI_t* o, Thread_t* t) // 92 18: dst, src →
 {
 	int src = (int)Thread_Pop(t), dst = (int)Thread_Pop(t);
-	switch(BmpOp_ToGray(dst, src))
+	switch(BmpOp_ToGray(o, dst, src))
 	{
-		case 9: GFX_ERROR(t, MSG_GRAY_SRC_INVALID, src); break;
-		case 10: GFX_ERROR(t, MSG_GRAY_DST_INVALID, dst); break;
+		case 9: GFX_ERROR(o, t, MSG_GRAY_SRC_INVALID, src); break;
+		case 10: GFX_ERROR(o, t, MSG_GRAY_DST_INVALID, dst); break;
 		default: break;
 	}
 	return 0;
 }
 
 // invert an 8-bit gray bitmap in place; ok is 1, or 0 for a missing bitmap or one that is not gray
-static int Opcode_Gfx2_InvertGray(Thread_t* t) // 92 19: slot → ok
+static int Opcode_Gfx2_InvertGray(OpenBGI_t* o, Thread_t* t) // 92 19: slot → ok
 {
-	Thread_Push(t, BmpOp_InvertGray((int)Thread_Pop(t)) == 0);
+	Thread_Push(t, BmpOp_InvertGray(o, (int)Thread_Pop(t)) == 0);
 	return 0;
 }
 
 /* The result map of the bitmap text calls: 0x80000001 bad font size,
  * 0x80000002 bad font width, 0x80000003 bad font number, 0x80000004 no
  * bitmap in the slot. */
-static void Gfx2_TextResult(Thread_t* t, int r, int bmp, int fontNo, int size, int widthPct)
+static void Gfx2_TextResult(OpenBGI_t* o, Thread_t* t, int r, int bmp, int fontNo, int size, int widthPct)
 {
 	switch(r)
 	{
-		case(int)0x80000001: GFX_ERROR(t, MSG_FONT_SIZE_INVALID, size); break;
-		case(int)0x80000002: GFX_ERROR(t, MSG_FONT_WIDTH_INVALID, widthPct); break;
-		case(int)0x80000003: GFX_ERROR(t, MSG_FONT_NO_INVALID, fontNo); break;
-		case(int)0x80000004: GFX_ERROR(t, MSG_BMP_NOT_EXIST, bmp); break;
+		case(int)0x80000001: GFX_ERROR(o, t, MSG_FONT_SIZE_INVALID, size); break;
+		case(int)0x80000002: GFX_ERROR(o, t, MSG_FONT_WIDTH_INVALID, widthPct); break;
+		case(int)0x80000003: GFX_ERROR(o, t, MSG_FONT_NO_INVALID, fontNo); break;
+		case(int)0x80000004: GFX_ERROR(o, t, MSG_BMP_NOT_EXIST, bmp); break;
 		default: break;
 	}
 }
@@ -153,17 +152,17 @@ static void Gfx2_TextResult(Thread_t* t, int r, int bmp, int fontNo, int size, i
  * Plain (unwrapped, no markup) text into the bitmap at (x, y) with the
  * font given by number, size in pixels and width in percent; `prop` packs
  * the glyphs by their ink extent.  The widest line in pixels is pushed. */
-static int Opcode_Gfx2_Text(Thread_t* t)
+static int Opcode_Gfx2_Text(OpenBGI_t* o, Thread_t* t)
 {
 	int32_t measure;
 	uint32_t colour = Thread_Pop(t);
 	int prop = (int)Thread_Pop(t), bold = (int)Thread_Pop(t), widthPct = (int)Thread_Pop(t);
 	int size = (int)Thread_Pop(t), fontNo = (int)Thread_Pop(t);
-	const char* str = (const char*)PopPtr(t);
+	const char* str = (const char*)PopPtr(o, t);
 	int y = (int)Thread_Pop(t), x = (int)Thread_Pop(t), bmp = (int)Thread_Pop(t);
-	CheckBitmapNo(bmp, t);
-	CheckFontNo(fontNo, t);
-	Gfx2_TextResult(t, BmpOp_Text(bmp, x, y, str, fontNo, size, widthPct, bold, prop, colour, &measure), bmp, fontNo,
+	CheckBitmapNo(o, bmp, t);
+	CheckFontNo(o, fontNo, t);
+	Gfx2_TextResult(o, t, BmpOp_Text(o, bmp, x, y, str, fontNo, size, widthPct, bold, prop, colour, &measure), bmp, fontNo,
 		size, widthPct);
 	Thread_Push(t, (uint32_t)measure);
 	return 0;
@@ -173,18 +172,18 @@ static int Opcode_Gfx2_Text(Thread_t* t)
  * As "92 1C", but the text wraps at the bitmap's right edge with a line
  * spacing of `spacingPct` percent of the size, and the number of lines is
  * pushed instead of the width. */
-static int Opcode_Gfx2_TextEx(Thread_t* t)
+static int Opcode_Gfx2_TextEx(OpenBGI_t* o, Thread_t* t)
 {
 	int32_t measure;
 	int spacingPct = (int)Thread_Pop(t);
 	uint32_t colour = Thread_Pop(t);
 	int prop = (int)Thread_Pop(t), bold = (int)Thread_Pop(t), widthPct = (int)Thread_Pop(t);
 	int size = (int)Thread_Pop(t), fontNo = (int)Thread_Pop(t);
-	const char* str = (const char*)PopPtr(t);
+	const char* str = (const char*)PopPtr(o, t);
 	int y = (int)Thread_Pop(t), x = (int)Thread_Pop(t), bmp = (int)Thread_Pop(t);
-	CheckBitmapNo(bmp, t);
-	CheckFontNo(fontNo, t);
-	Gfx2_TextResult(t, BmpOp_TextEx(bmp, x, y, str, fontNo, size, widthPct, bold, prop, colour, spacingPct, &measure),
+	CheckBitmapNo(o, bmp, t);
+	CheckFontNo(o, fontNo, t);
+	Gfx2_TextResult(o, t, BmpOp_TextEx(o, bmp, x, y, str, fontNo, size, widthPct, bold, prop, colour, spacingPct, &measure),
 		bmp, fontNo, size, widthPct);
 	Thread_Push(t, (uint32_t)measure);
 	return 0;
@@ -193,21 +192,21 @@ static int Opcode_Gfx2_TextEx(Thread_t* t)
 /* 92 1E: bmp, x, y, str, fontNo, size, bold, spacing, colour → width
  * Text through a temporary 1-bit (unantialiased) font with `spacing`
  * extra pixels per character; the width drawn is pushed. */
-static int Opcode_Gfx2_TextMono(Thread_t* t)
+static int Opcode_Gfx2_TextMono(OpenBGI_t* o, Thread_t* t)
 {
 	int32_t width;
 	uint32_t colour = Thread_Pop(t);
 	int spacing = (int)Thread_Pop(t), bold = (int)Thread_Pop(t), size = (int)Thread_Pop(t);
 	int fontNo = (int)Thread_Pop(t);
-	const char* str = (const char*)PopPtr(t);
+	const char* str = (const char*)PopPtr(o, t);
 	int y = (int)Thread_Pop(t), x = (int)Thread_Pop(t), bmp = (int)Thread_Pop(t);
-	CheckBitmapNo(bmp, t);
-	CheckFontNo(fontNo, t);
-	switch(BmpOp_TextMono(bmp, x, y, str, fontNo, size, bold, spacing, colour, &width))
+	CheckBitmapNo(o, bmp, t);
+	CheckFontNo(o, fontNo, t);
+	switch(BmpOp_TextMono(o, bmp, x, y, str, fontNo, size, bold, spacing, colour, &width))
 	{
-		case(int)0x80000001: GFX_ERROR(t, MSG_FONT_SIZE_INVALID, size); break;
-		case(int)0x80000003: GFX_ERROR(t, MSG_FONT_NO_INVALID, fontNo); break;
-		case(int)0x80000004: GFX_ERROR(t, MSG_BMP_NOT_EXIST, bmp); break;
+		case(int)0x80000001: GFX_ERROR(o, t, MSG_FONT_SIZE_INVALID, size); break;
+		case(int)0x80000003: GFX_ERROR(o, t, MSG_FONT_NO_INVALID, fontNo); break;
+		case(int)0x80000004: GFX_ERROR(o, t, MSG_BMP_NOT_EXIST, bmp); break;
 		default: break;
 	}
 	Thread_Push(t, (uint32_t)width);
@@ -218,11 +217,11 @@ static int Opcode_Gfx2_TextMono(Thread_t* t)
  * slot.  r is the decoder's result: 0 ok, 0x80000001 not a BMP, ..2 bad
  * header, ..3 planes, ..4 depth, ..5 compressed, ..6 empty, ..7 the slot
  * refused; -1 when the file cannot be read. */
-static int Opcode_Gfx2_LoadLocal(Thread_t* t) // 92 1F: slot, path → r
+static int Opcode_Gfx2_LoadLocal(OpenBGI_t* o, Thread_t* t) // 92 1F: slot, path → r
 {
-	const char* path = (const char*)PopPtr(t);
+	const char* path = (const char*)PopPtr(o, t);
 	int slot = (int)Thread_Pop(t);
-	Thread_Push(t, (uint32_t)BmpOp_LoadLocal(slot, path));
+	Thread_Push(t, (uint32_t)BmpOp_LoadLocal(o, slot, path));
 	return 0;
 }
 
@@ -231,12 +230,12 @@ static int Opcode_Gfx2_LoadLocal(Thread_t* t) // 92 1F: slot, path → r
 // -------------------------------------------------------------------------
 
 // show or hide the window's frame layer ("90 8C" of 1.58 .. 1.64)
-int Opcode_Gfx2_WindowShowFrame(Thread_t* t) // 92 88: h, on →
+int Opcode_Gfx2_WindowShowFrame(OpenBGI_t* o, Thread_t* t) // 92 88: h, on →
 {
 	int on = (int)Thread_Pop(t);
 	uint32_t h = Thread_Pop(t);
-	if(!GfxCall_WindowShowFrame(h, on))
-		ScriptError(MSG_BAD_WINDOW_HANDLE, t);
+	if(!GfxCall_WindowShowFrame(o, h, on))
+		ScriptError(o, MSG_BAD_WINDOW_HANDLE, t);
 	return 0;
 }
 
@@ -246,58 +245,58 @@ int Opcode_Gfx2_WindowShowFrame(Thread_t* t) // 92 88: h, on →
  * Script errors: no bitmap in the slot, a bitmap whose pixel mode does not
  * match the screen's, an unknown window; a window without that layer is
  * silently ignored. */
-static int Gfx2_WindowDraw(Thread_t* t, int toText)
+static int Gfx2_WindowDraw(OpenBGI_t* o, Thread_t* t, int toText)
 {
 	int level = (int)Thread_Pop(t), effect = (int)Thread_Pop(t), bmp = (int)Thread_Pop(t);
 	int y = (int)Thread_Pop(t), x = (int)Thread_Pop(t);
 	uint32_t h = Thread_Pop(t);
-	CheckBitmapNo(bmp, t);
-	CheckEffectMode(effect, t);
-	CheckAlpha(level, t);
-	switch(toText ? GfxCall_WindowDrawToText(h, x, y, bmp, effect, level)
-				  : GfxCall_WindowDrawToFrame(h, x, y, bmp, effect, level))
+	CheckBitmapNo(o, bmp, t);
+	CheckEffectMode(o, effect, t);
+	CheckAlpha(o, level, t);
+	switch(toText ? GfxCall_WindowDrawToText(o, h, x, y, bmp, effect, level)
+				  : GfxCall_WindowDrawToFrame(o, h, x, y, bmp, effect, level))
 	{
-		case 1: GFX_ERROR(t, MSG_BMP_NOT_EXIST, bmp); break;
-		case 2: GFX_ERROR(t, MSG_BMP_SCREEN_MODE_MISMATCH, bmp); break;
-		case -1: ScriptError(MSG_BAD_WINDOW_HANDLE, t); break;
+		case 1: GFX_ERROR(o, t, MSG_BMP_NOT_EXIST, bmp); break;
+		case 2: GFX_ERROR(o, t, MSG_BMP_SCREEN_MODE_MISMATCH, bmp); break;
+		case -1: ScriptError(o, MSG_BAD_WINDOW_HANDLE, t); break;
 		default: break;
 	}
 	return 0;
 }
 
-int Opcode_Gfx2_WindowDrawToFrame(Thread_t* t) // 92 89: h, x, y, bmp, effect, level → ("90 8D" of 1.58 .. 1.64)
+int Opcode_Gfx2_WindowDrawToFrame(OpenBGI_t* o, Thread_t* t) // 92 89: h, x, y, bmp, effect, level → ("90 8D" of 1.58 .. 1.64)
 {
-	return Gfx2_WindowDraw(t, 0);
+	return Gfx2_WindowDraw(o, t, 0);
 }
 
-int Opcode_Gfx2_WindowDrawToText(Thread_t* t) // 92 8D: h, x, y, bmp, effect, level → ("91 8D" of 1.58 .. 1.64)
+int Opcode_Gfx2_WindowDrawToText(OpenBGI_t* o, Thread_t* t) // 92 8D: h, x, y, bmp, effect, level → ("91 8D" of 1.58 .. 1.64)
 {
-	return Gfx2_WindowDraw(t, 1);
+	return Gfx2_WindowDraw(o, t, 1);
 }
 
-static int Opcode_Gfx2_WindowFillFrame(Thread_t* t) // 92 8A: h, colour →
+static int Opcode_Gfx2_WindowFillFrame(OpenBGI_t* o, Thread_t* t) // 92 8A: h, colour →
 {
 	uint32_t colour = Thread_Pop(t), h = Thread_Pop(t);
-	if(GfxCall_WindowFillFrame(h, colour) == -1)
-		ScriptError(MSG_BAD_WINDOW_HANDLE, t);
+	if(GfxCall_WindowFillFrame(o, h, colour) == -1)
+		ScriptError(o, MSG_BAD_WINDOW_HANDLE, t);
 	return 0;
 }
 
 // show or hide the window's text layer ("91 8C" of 1.58 .. 1.64)
-int Opcode_Gfx2_WindowShowText(Thread_t* t) // 92 8C: h, on →
+int Opcode_Gfx2_WindowShowText(OpenBGI_t* o, Thread_t* t) // 92 8C: h, on →
 {
 	int on = (int)Thread_Pop(t);
 	uint32_t h = Thread_Pop(t);
-	if(!GfxCall_WindowShowText(h, on))
-		ScriptError(MSG_BAD_WINDOW_HANDLE, t);
+	if(!GfxCall_WindowShowText(o, h, on))
+		ScriptError(o, MSG_BAD_WINDOW_HANDLE, t);
 	return 0;
 }
 
 // clear the window's text: cursor home, text layer cleared, items off, sub-sprites gone ("91 8E" of 1.58 .. 1.64)
-int Opcode_Gfx2_WindowClear(Thread_t* t) // 92 8E: h →
+int Opcode_Gfx2_WindowClear(OpenBGI_t* o, Thread_t* t) // 92 8E: h →
 {
-	if(!GfxCall_WindowClear(Thread_Pop(t)))
-		ScriptError(MSG_BAD_WINDOW_HANDLE, t);
+	if(!GfxCall_WindowClear(o, Thread_Pop(t)))
+		ScriptError(o, MSG_BAD_WINDOW_HANDLE, t);
 	return 0;
 }
 
@@ -312,7 +311,7 @@ int Opcode_Gfx2_WindowClear(Thread_t* t) // 92 8E: h →
  * or its vertical variant by the window's draw style) with its own ruby
  * colour and shadow (on / off, offset in pixels, colour, level) instead of
  * the current style; the thread blocks until the output completes. */
-static int Opcode_Gfx2_TextOutStyled(Thread_t* t)
+static int Opcode_Gfx2_TextOutStyled(OpenBGI_t* o, Thread_t* t)
 {
 	int32_t style[5];
 	int allowKeys = (int)Thread_Pop(t), allowSkip = (int)Thread_Pop(t), waitAtEnd = (int)Thread_Pop(t);
@@ -323,15 +322,15 @@ static int Opcode_Gfx2_TextOutStyled(Thread_t* t)
 	uint32_t rubyColour = Thread_Pop(t);
 	int rubyOn = (int)Thread_Pop(t);
 	uint32_t colour = Thread_Pop(t);
-	const char* str = (const char*)PopPtr(t);
+	const char* str = (const char*)PopPtr(o, t);
 	uint32_t h = Thread_Pop(t);
 	int r;
-	Text_MakeStyle(style, shadowOn, shadowDx, shadowDy, shadowColour, shadowLevel);
-	r = StartTextOut(t, h, str, colour, rubyOn, rubyColour, hang, 0, style, instant, waitAtEnd, allowSkip, allowKeys, 1);
+	Text_MakeStyle(o, style, shadowOn, shadowDx, shadowDy, shadowColour, shadowLevel);
+	r = StartTextOut(o, t, h, str, colour, rubyOn, rubyColour, hang, 0, style, instant, waitAtEnd, allowSkip, allowKeys, 1);
 	if(r == (int)0x80000001)
-		ScriptError(MSG_WINDOW_NO_FONT, t);
+		ScriptError(o, MSG_WINDOW_NO_FONT, t);
 	else if(r == -1)
-		ScriptError(MSG_BAD_WINDOW_HANDLE, t);
+		ScriptError(o, MSG_BAD_WINDOW_HANDLE, t);
 	return 2;
 }
 
@@ -339,7 +338,7 @@ static int Opcode_Gfx2_TextOutStyled(Thread_t* t)
  * shadowDx, shadowDy, shadowColour, shadowLevel →
  * The immediate text draw of "91 91" with its own ruby colour and
  * shadow.  Script errors: the window has no font, an unknown window. */
-static int Opcode_Gfx2_DrawTextStyled(Thread_t* t)
+static int Opcode_Gfx2_DrawTextStyled(OpenBGI_t* o, Thread_t* t)
 {
 	int32_t style[5];
 	int shadowLevel = (int)Thread_Pop(t);
@@ -349,15 +348,15 @@ static int Opcode_Gfx2_DrawTextStyled(Thread_t* t)
 	uint32_t rubyColour = Thread_Pop(t);
 	int parseTags = (int)Thread_Pop(t);
 	uint32_t colour = Thread_Pop(t);
-	const char* str = (const char*)PopPtr(t);
+	const char* str = (const char*)PopPtr(o, t);
 	uint32_t h = Thread_Pop(t);
 	int r;
-	Text_MakeStyle(style, shadowOn, shadowDx, shadowDy, shadowColour, shadowLevel);
-	r = GfxCall_WindowDrawText(h, str, parseTags, hang, colour, rubyColour, style);
+	Text_MakeStyle(o, style, shadowOn, shadowDx, shadowDy, shadowColour, shadowLevel);
+	r = GfxCall_WindowDrawText(o, h, str, parseTags, hang, colour, rubyColour, style);
 	if(r == 1)
-		ScriptError(MSG_WINDOW_NO_FONT, t);
+		ScriptError(o, MSG_WINDOW_NO_FONT, t);
 	else if(r == -1)
-		ScriptError(MSG_BAD_WINDOW_HANDLE, t);
+		ScriptError(o, MSG_BAD_WINDOW_HANDLE, t);
 	return 0;
 }
 
@@ -367,7 +366,7 @@ static int Opcode_Gfx2_DrawTextStyled(Thread_t* t)
  * The rich text layout into a bitmap of "91 9C" with its own ruby colour
  * and shadow; the last operand is popped and ignored.  The number of
  * lines is pushed. */
-static int Opcode_Gfx2_BmpDrawTextStyled(Thread_t* t)
+static int Opcode_Gfx2_BmpDrawTextStyled(OpenBGI_t* o, Thread_t* t)
 {
 	int32_t style[5], lines;
 	int shadowLevel, shadowDy, shadowDx, shadowOn, spacing, hang, prop, bold, widthPct, size, fontNo, parseTags;
@@ -388,19 +387,19 @@ static int Opcode_Gfx2_BmpDrawTextStyled(Thread_t* t)
 	size = (int)Thread_Pop(t);
 	fontNo = (int)Thread_Pop(t);
 	rubyColour = Thread_Pop(t);
-	tags = (const char*)PopPtr(t);
+	tags = (const char*)PopPtr(o, t);
 	parseTags = (int)Thread_Pop(t);
 	colour = Thread_Pop(t);
-	str = (const char*)PopPtr(t);
+	str = (const char*)PopPtr(o, t);
 	y = (int)Thread_Pop(t);
 	x = (int)Thread_Pop(t);
 	bmp = (int)Thread_Pop(t);
-	CheckBitmapNo(bmp, t);
-	CheckFontNo(fontNo, t);
-	Text_MakeStyle(style, shadowOn, shadowDx, shadowDy, shadowColour, shadowLevel);
-	r = BmpOp_DrawText(bmp, &lines, x, y, str, parseTags, tags, fontNo, size, widthPct, bold, prop, hang, spacing, colour,
+	CheckBitmapNo(o, bmp, t);
+	CheckFontNo(o, fontNo, t);
+	Text_MakeStyle(o, style, shadowOn, shadowDx, shadowDy, shadowColour, shadowLevel);
+	r = BmpOp_DrawText(o, bmp, &lines, x, y, str, parseTags, tags, fontNo, size, widthPct, bold, prop, hang, spacing, colour,
 		rubyColour, style);
-	Gfx2_TextResult(t, r, bmp, fontNo, size, widthPct);
+	Gfx2_TextResult(o, t, r, bmp, fontNo, size, widthPct);
 	Thread_Push(t, (uint32_t)lines);
 	return 0;
 }
@@ -408,52 +407,52 @@ static int Opcode_Gfx2_BmpDrawTextStyled(Thread_t* t)
 // -------------------------------------------------------------------------
 
 // 92 37 (1.69/472 on): h, x, y, z →; the second 16.16 offset added to the fixed position ("91 36" elsewhere)
-static int Opcode_Gfx2_ObjSetFixedOffset2(Thread_t* t)
+static int Opcode_Gfx2_ObjSetFixedOffset2(OpenBGI_t* o, Thread_t* t)
 {
 	int32_t z = (int32_t)Thread_Pop(t), y = (int32_t)Thread_Pop(t), x = (int32_t)Thread_Pop(t);
 	uint32_t h = Thread_Pop(t);
-	if(!GfxCall_ObjSetFixedOffset(h, 2, x, y, z))
-		ScriptError(MSG_BAD_OBJ_HANDLE, t);
+	if(!GfxCall_ObjSetFixedOffset(o, h, 2, x, y, z))
+		ScriptError(o, MSG_BAD_OBJ_HANDLE, t);
 	return 0;
 }
 
-/* 92 14 (1.494 on): name, arc →
+/* 92 14 (1.492 on): name, arc →
  * Preload an image file into that build's decoded-image cache, which
  * "90 10" consults first; "92 15" empties the cache.  The cache only saves
  * time: here the file is read and checked (a script error names a file
  * that is not an image) and nothing is kept. */
-static int Opcode_Gfx2_PreloadImage(Thread_t* t)
+static int Opcode_Gfx2_PreloadImage(OpenBGI_t* o, Thread_t* t)
 {
-	const char* name = (const char*)PopPtr(t);
-	const char* arc = (const char*)PopPtr(t);
-	uint8_t* buf = (uint8_t*)BGI_Alloc(0x2000000);
-	uint32_t n = LoadFile(buf, arc, name);
+	const char* name = (const char*)PopPtr(o, t);
+	const char* arc = (const char*)PopPtr(o, t);
+	uint8_t* buf = (uint8_t*)Vm_TempAlloc(o, 0x2000000);
+	uint32_t n = LoadFile(o, buf, arc, name);
 	int ok = n >= 0x10 && (BGI_IsCbg(buf) || ((const RawImageHeader_t*)buf)->bpp % 8 == 0);
-	BGI_Free(buf);
+	Vm_TempFree(o, buf);
 	if(!ok)
-		GFX_ERROR(t, MSG_NOT_BG_FILE, arc, name);
+		GFX_ERROR(o, t, MSG_NOT_BG_FILE, arc, name);
 	return 0;
 }
 
 /* 92 12 (1.535 on): bmp, w, h → valid
  * Set the base size of a bitmap slot (the design size an image file
  * declares, what "92 16" reads); 1 for a valid slot number, 0 otherwise. */
-static int Opcode_Gfx2_BmpSetBaseSize(Thread_t* t)
+static int Opcode_Gfx2_BmpSetBaseSize(OpenBGI_t* o, Thread_t* t)
 {
 	int h = (int)Thread_Pop(t), w = (int)Thread_Pop(t), bmp = (int)Thread_Pop(t);
-	Thread_Push(t, (uint32_t)BmpMgr_SetBaseSize(gBmpMgr, bmp, w, h));
+	Thread_Push(t, (uint32_t)BmpMgr_SetBaseSize(o->gfx.bmpMgr, bmp, w, h));
 	return 0;
 }
 
 /* 92 16 (1.529 on): out, bmp → valid
- * The base size of the bitmap slot into out[0], out[1] (0, 0 until an
- * image sets it, -1, -1 after the slot is freed); 1 for a valid slot
- * number, 0 otherwise.  The slot need not hold a bitmap. */
-static int Opcode_Gfx2_BmpBaseSize(Thread_t* t)
+ * The base size of the bitmap slot into out[0], out[1] (-1, -1 until an
+ * image or "92 12" sets it, and again after the slot is freed); 1 for a
+ * valid slot number, 0 otherwise.  The slot need not hold a bitmap. */
+static int Opcode_Gfx2_BmpBaseSize(OpenBGI_t* o, Thread_t* t)
 {
 	int bmp = (int)Thread_Pop(t);
-	int32_t* out = (int32_t*)PopPtr(t);
-	Thread_Push(t, (uint32_t)BmpMgr_GetBaseSize(gBmpMgr, out, bmp));
+	int32_t* out = (int32_t*)PopPtr(o, t);
+	Thread_Push(t, (uint32_t)BmpMgr_GetBaseSize(o->gfx.bmpMgr, out, bmp));
 	return 0;
 }
 
@@ -461,15 +460,15 @@ static int Opcode_Gfx2_BmpBaseSize(Thread_t* t)
  * The pixel at (x, y) of the bitmap into the 4 bytes at out (zeroed
  * first; as many bytes as the pixel has).  code: 0 ok, 1 no bitmap, 2 more
  * than 4 bytes per pixel, 3 (x, y) outside the bitmap. */
-static int Opcode_Gfx2_BmpGetPixel(Thread_t* t)
+static int Opcode_Gfx2_BmpGetPixel(OpenBGI_t* o, Thread_t* t)
 {
 	int y = (int)Thread_Pop(t), x = (int)Thread_Pop(t), bmp = (int)Thread_Pop(t);
-	void* out = PopPtr(t);
-	Thread_Push(t, (uint32_t)BmpOp_GetPixel(out, bmp, x, y));
+	void* out = PopPtr(o, t);
+	Thread_Push(t, (uint32_t)BmpOp_GetPixel(o, out, bmp, x, y));
 	return 0;
 }
 
-static int Opcode_Gfx2_PreloadClear(Thread_t* t) // 92 15 (1.494 on): → ; empty the image cache (nothing to do here)
+static int Opcode_Gfx2_PreloadClear(OpenBGI_t* o, Thread_t* t) // 92 15 (1.492 on): → ; empty the image cache (nothing to do here)
 {
 	BGI_UNUSED(t);
 	return 0;
@@ -479,17 +478,17 @@ static int Opcode_Gfx2_PreloadClear(Thread_t* t) // 92 15 (1.494 on): → ; empt
  * The ruby font of "91 97" with two more overrides: the bold flag and
  * the shadow colour of the ruby glyphs (-1 each: the base font's / the
  * style's). */
-static int Opcode_Gfx2_SetRubyFontEx(Thread_t* t)
+static int Opcode_Gfx2_SetRubyFontEx(OpenBGI_t* o, Thread_t* t)
 {
 	int32_t shadow = (int32_t)Thread_Pop(t), bold = (int32_t)Thread_Pop(t);
 	int dy = (int)Thread_Pop(t), dx = (int)Thread_Pop(t), width = (int)Thread_Pop(t), size = (int)Thread_Pop(t);
 	int fontNo = (int)Thread_Pop(t);
-	const char* name = FontNameByNo(fontNo);
+	const char* name = FontNameByNo(o, fontNo);
 	if(name && strlen(name) >= 0x100)
-		GFX_ERROR(t, MSG_BAD_FONT_NO, fontNo);
-	Text_SetRubyFont(name, size, width, dx, dy);
-	gRubyBold = bold;
-	gRubyShadow = shadow;
+		GFX_ERROR(o, t, MSG_BAD_FONT_NO, fontNo);
+	Text_SetRubyFont(o, name, size, width, dx, dy);
+	o->text.rubyBold = bold;
+	o->text.rubyShadow = shadow;
 	return 0;
 }
 
@@ -499,12 +498,12 @@ static int Opcode_Gfx2_SetRubyFontEx(Thread_t* t)
  * Sen no Hatou's ipl._bp, keeps the text's own face.  code: 0 ok, 1 bad
  * size (not 4 .. 200), 2 bad width (not 25 .. 200), 3 the face cannot be
  * opened, -1 anything else. */
-static int Opcode_Gfx2_SetLinkFont(Thread_t* t)
+static int Opcode_Gfx2_SetLinkFont(OpenBGI_t* o, Thread_t* t)
 {
 	int italic = (int)Thread_Pop(t), bold = (int)Thread_Pop(t), width = (int)Thread_Pop(t), size = (int)Thread_Pop(t);
-	const char* face = FontNameByNo((int)Thread_Pop(t));
+	const char* face = FontNameByNo(o, (int)Thread_Pop(t));
 	uint32_t code;
-	switch(Text_SetLinkFont(face, size, width, bold, italic))
+	switch(Text_SetLinkFont(o, face, size, width, bold, italic))
 	{
 		case 0: code = 0; break;
 		case(int)0x80000004: code = 1; break;
@@ -520,17 +519,17 @@ static int Opcode_Gfx2_SetLinkFont(Thread_t* t)
  * The links the last horizontal layout registered (TextLink_t each: the
  * text and the position of its first glyph) into `out`, and forgotten;
  * their count is pushed. */
-static int Opcode_Gfx2_TakeLinks(Thread_t* t)
+static int Opcode_Gfx2_TakeLinks(OpenBGI_t* o, Thread_t* t)
 {
-	TextLink_t* out = (TextLink_t*)PopPtr(t);
-	Thread_Push(t, (uint32_t)TextLinks_Take(out));
+	TextLink_t* out = (TextLink_t*)PopPtr(o, t);
+	Thread_Push(t, (uint32_t)TextLinks_Take(o, out));
 	return 0;
 }
 
 // 92 9F (1.529 on): colour →; the colour of link text (-1: the text's own)
-static int Opcode_Gfx2_SetLinkColour(Thread_t* t)
+static int Opcode_Gfx2_SetLinkColour(OpenBGI_t* o, Thread_t* t)
 {
-	Text_SetLinkColour((int32_t)Thread_Pop(t));
+	Text_SetLinkColour(o, (int32_t)Thread_Pop(t));
 	return 0;
 }
 
@@ -541,16 +540,16 @@ static int Opcode_Gfx2_SetLinkColour(Thread_t* t)
  * cnfgsmpltxt2._bp lays its font sample out by them.  r is 0, or the
  * font's error (0x80000001 bad size, ..2 bad width, ..3 bad number) -
  * pushed, not raised. */
-static int Opcode_Gfx2_TextAbcWidths(Thread_t* t)
+static int Opcode_Gfx2_TextAbcWidths(OpenBGI_t* o, Thread_t* t)
 {
 	int bold = (int)Thread_Pop(t), widthPct = (int)Thread_Pop(t), size = (int)Thread_Pop(t);
 	int fontNo = (int)Thread_Pop(t);
-	const char* str = (const char*)PopPtr(t);
-	int32_t* count = (int32_t*)PopPtr(t);
-	int32_t* out = (int32_t*)PopPtr(t);
-	int handle, r = BmpOp_FontOpen(&handle, fontNo, size, widthPct, bold);
+	const char* str = (const char*)PopPtr(o, t);
+	int32_t* count = (int32_t*)PopPtr(o, t);
+	int32_t* out = (int32_t*)PopPtr(o, t);
+	int handle, r = BmpOp_FontOpen(o, &handle, fontNo, size, widthPct, bold);
 	if(r == 0)
-		Text_AbcWidths(out, count, str, handle);
+		Text_AbcWidths(o, out, count, str, handle);
 	Thread_Push(t, (uint32_t)r);
 	return 0;
 }
@@ -561,18 +560,18 @@ static int Opcode_Gfx2_TextAbcWidths(Thread_t* t)
  * character (two words), 0x101 the text colour in effect there (the colour
  * tags applied).  snsctrl._bp continues a message where the last one
  * ended.  Any other number is a script error. */
-static int Opcode_Gfx2_TextLayoutParam(Thread_t* t)
+static int Opcode_Gfx2_TextLayoutParam(OpenBGI_t* o, Thread_t* t)
 {
-	int32_t* out = (int32_t*)PopPtr(t);
+	int32_t* out = (int32_t*)PopPtr(o, t);
 	uint32_t no = Thread_Pop(t);
 	switch(no)
 	{
 		case 0x100:
-			out[0] = gTextLastPos[0];
-			out[1] = gTextLastPos[1];
+			out[0] = o->text.textLastPos[0];
+			out[1] = o->text.textLastPos[1];
 			break;
-		case 0x101: out[0] = (int32_t)gTextLastColour; break;
-		default: GFX_ERROR(t, MSG_BAD_TEXT_PARAM_NO, no);
+		case 0x101: out[0] = (int32_t)o->text.textLastColour; break;
+		default: GFX_ERROR(o, t, MSG_BAD_TEXT_PARAM_NO, no);
 	}
 	return 0;
 }
@@ -583,52 +582,52 @@ static int Opcode_Gfx2_TextLayoutParam(Thread_t* t)
  * picture takes precedence over the glyph sheet's cell when the text is
  * drawn.  Script errors: a bad bitmap, a code outside the range, a bad
  * size. */
-static int Opcode_Gfx2_TextSetCharImage(Thread_t* t)
+static int Opcode_Gfx2_TextSetCharImage(OpenBGI_t* o, Thread_t* t)
 {
 	int h = (int)Thread_Pop(t), w = (int)Thread_Pop(t), y = (int)Thread_Pop(t), x = (int)Thread_Pop(t);
 	int bmp = (int)Thread_Pop(t);
 	uint32_t code = Thread_Pop(t);
-	switch(Text_SetCharImage(code, bmp, x, y, w, h))
+	switch(Text_SetCharImage(o, code, bmp, x, y, w, h))
 	{
-		case(int)0x80000002: GFX_ERROR(t, MSG_BAD_BITMAP, bmp);
-		case(int)0x80000006: GFX_ERROR(t, MSG_BAD_CHAR_CODE, code);
-		case(int)0x80000007: GFX_ERROR(t, MSG_BAD_IMAGE_SIZE, w, h);
+		case(int)0x80000002: GFX_ERROR(o, t, MSG_BAD_BITMAP, bmp);
+		case(int)0x80000006: GFX_ERROR(o, t, MSG_BAD_CHAR_CODE, code);
+		case(int)0x80000007: GFX_ERROR(o, t, MSG_BAD_IMAGE_SIZE, w, h);
 		default: return 0;
 	}
 }
 
-/* 92 1A (1.494 on): dst, src, src2, x, y, ratio →
+/* 92 1A (1.492 on): dst, src, src2, x, y, ratio →
  * dst becomes a gray bitmap of the back buffer's size holding, at (x, y),
  * the alpha of src (a 32-bit bitmap), blended with the alpha of src2 by
  * ratio / 256 when src2 is given (-1: none), and 0 everywhere else
  * (BmpOp_AlphaToScreenGray).  Script errors: dst cannot be made, a
  * missing source, sources of different pixel modes. */
-static int Opcode_Gfx2_AlphaToScreenGray(Thread_t* t)
+static int Opcode_Gfx2_AlphaToScreenGray(OpenBGI_t* o, Thread_t* t)
 {
 	int ratio = (int)Thread_Pop(t), y = (int)Thread_Pop(t), x = (int)Thread_Pop(t);
 	int src2 = (int)Thread_Pop(t), src = (int)Thread_Pop(t), dst = (int)Thread_Pop(t);
-	switch(BmpOp_AlphaToScreenGray(dst, src, src2, x, y, ratio))
+	switch(BmpOp_AlphaToScreenGray(o, dst, src, src2, x, y, ratio))
 	{
-		case 0x80000009u: GFX_ERROR(t, MSG_GEN_DST_INVALID, dst); break;
-		case 0x8000000au: GFX_ERROR(t, MSG_GEN_SRC_INVALID, src); break;
-		case 0x8000000bu: GFX_ERROR(t, MSG_GEN_SRC_INVALID, src2); break;
-		case 0x8000000cu: GFX_ERROR(t, MSG_GEN_SRC_MODE_MISMATCH, src, src2); break;
+		case 0x80000009u: GFX_ERROR(o, t, MSG_GEN_DST_INVALID, dst); break;
+		case 0x8000000au: GFX_ERROR(o, t, MSG_GEN_SRC_INVALID, src); break;
+		case 0x8000000bu: GFX_ERROR(o, t, MSG_GEN_SRC_INVALID, src2); break;
+		case 0x8000000cu: GFX_ERROR(o, t, MSG_GEN_SRC_MODE_MISMATCH, src, src2); break;
 		default: break;
 	}
 	return 0;
 }
 
 // -------------------------------------------------------------------------
-// 92 F2, 92 F4, 92 F5 : video textures (1.494 on)
+// 92 F2, 92 F4, 92 F5 : video textures (1.492 on)
 // -------------------------------------------------------------------------
 
-/* 92 F2 (1.494 on): name, arc, a, b, bmp → code
+/* 92 F2 (1.492 on): name, arc, a, b, bmp → code
  * Attach a movie (DirectShow in the original) to a bitmap slot as a video
  * texture (see "91 F0 .. F7"): 0 ok, 1 the player could not be created,
  * 2 / 3 / 4 its other failures.  No video playback here: every attach
  * fails with 1, and the scripts (scrgrp3._bp of Tayutama2AS checks the
  * code) go without. */
-static int Opcode_Gfx2_VideoTextureAttach(Thread_t* t)
+static int Opcode_Gfx2_VideoTextureAttach(OpenBGI_t* o, Thread_t* t)
 {
 	int i;
 	for(i = 0; i < 5; i++)
@@ -637,49 +636,49 @@ static int Opcode_Gfx2_VideoTextureAttach(Thread_t* t)
 	return 0;
 }
 
-/* 92 F0 (1.494 on): arc, name, x, y, w, h → length
+/* 92 F0 (1.492 on): arc, name, x, y, w, h → length
  * A movie played out of an archive (the original feeds DirectShow from
  * the entry through its own source filter) at (x, y) in a w x h area.
  * Without video playback the player answers 0 - as "90 F0" does here -
  * and the scripts move on; a non-positive size is still a script error. */
-static int Opcode_Gfx2_MoviePlayArc(Thread_t* t)
+static int Opcode_Gfx2_MoviePlayArc(OpenBGI_t* o, Thread_t* t)
 {
 	int h = (int)Thread_Pop(t), w = (int)Thread_Pop(t);
 	int y = (int)Thread_Pop(t), x = (int)Thread_Pop(t);
-	const char* name = (const char*)PopPtr(t);
-	const char* arc = (const char*)PopPtr(t);
+	const char* name = (const char*)PopPtr(o, t);
+	const char* arc = (const char*)PopPtr(o, t);
 	int32_t length = 0;
 	(void)x;
 	(void)y;
 	(void)name;
 	(void)arc;
 	if(w <= 0 || h <= 0)
-		GFX_ERROR(t, MSG_BAD_MOVIE_SIZE, w, h);
+		GFX_ERROR(o, t, MSG_BAD_MOVIE_SIZE, w, h);
 	Thread_Push(t, (uint32_t)length);
 	return 0;
 }
 
-/* 92 F1 (1.494 on): &no, &info, arc, name, streamed →
+/* 92 F1 (1.492 on): &no, &info, arc, name, streamed →
  * The BF_Movie sequence load of "90 F4" (the wait pushes 0 ok / 1 / 2 not
  * a movie when it ends; the thread blocks on it).  `streamed` asks for
  * the form that keeps only the header and index in memory and reads the
  * frames from the archive, whose files are of the BF_Movie types 0x10000
- * / 0x10001 that this build does not decode - the whole file is loaded
- * instead, which serves a type-0 file. */
-static int Opcode_Gfx2_SeqLoad(Thread_t* t)
+ * / 0x10001 - the whole file is loaded here either way, and a frame of
+ * either kind is decoded from it. */
+static int Opcode_Gfx2_SeqLoad(OpenBGI_t* o, Thread_t* t)
 {
 	int streamed = (int)Thread_Pop(t);
-	const char* name = (const char*)PopPtr(t);
-	const char* arc = (const char*)PopPtr(t);
-	int32_t* info = (int32_t*)PopPtr(t);
-	int32_t* outNo = (int32_t*)PopPtr(t);
+	const char* name = (const char*)PopPtr(o, t);
+	const char* arc = (const char*)PopPtr(o, t);
+	int32_t* info = (int32_t*)PopPtr(o, t);
+	int32_t* outNo = (int32_t*)PopPtr(o, t);
 	(void)streamed;
-	Thread_SetWait(t, WaitSeqLoad_New(t, arc, name, outNo, info));
+	Thread_SetWait(o, t, WaitSeqLoad_New(o, t, arc, name, outNo, info));
 	return 2;
 }
 
-// 92 F4 (1.494 on): bmp, v → code; control the slot's video texture (always 1: the slot has none)
-static int Opcode_Gfx2_VideoTextureControl(Thread_t* t)
+// 92 F4 (1.492 on): bmp, v → code; control the slot's video texture (always 1: the slot has none)
+static int Opcode_Gfx2_VideoTextureControl(OpenBGI_t* o, Thread_t* t)
 {
 	Thread_Pop(t);
 	Thread_Pop(t);
@@ -692,24 +691,24 @@ static int Opcode_Gfx2_VideoTextureControl(Thread_t* t)
  * slot has no video texture, 4 no such slot (or the texture has no
  * player).  No slot has one here, so 1 for a valid slot and *out is left
  * alone (moviemngr._bp polls it only after a successful "92 F2"). */
-static int Opcode_Gfx2_VideoTexturePosition(Thread_t* t)
+static int Opcode_Gfx2_VideoTexturePosition(OpenBGI_t* o, Thread_t* t)
 {
 	Bmp_t b;
 	int bmp;
-	PopPtr(t);
+	PopPtr(o, t);
 	bmp = (int)Thread_Pop(t);
-	Thread_Push(t, BmpMgr_GetInfo(gBmpMgr, &b, bmp) ? 1u : 4u);
+	Thread_Push(t, BmpMgr_GetInfo(o->gfx.bmpMgr, &b, bmp) ? 1u : 4u);
 	return 0;
 }
 
-/* Fill vm_optable_92 for the selected engine profile.  Each entry names the
- * opcode, its handler and the generations that have it (GEN_FIRST ..
- * GEN_LAST for one that never changed), see Vm_FillTable. */
-void Vm_Optable92Init(void)
+/* Fill o->vm.optable92 for the selected engine profile.  Each entry
+ * names the opcode, its handler and the generations that have it
+ * (GEN_FIRST .. GEN_LAST for one that never changed), see Vm_FillTable. */
+void Vm_Optable92Init(OpenBGI_t* o)
 {
 	static const OpEntry_t ops[] = {
-		{0x14, Opcode_Gfx2_PreloadImage, GEN_1_494, GEN_LAST},
-		{0x15, Opcode_Gfx2_PreloadClear, GEN_1_494, GEN_LAST},
+		{0x14, Opcode_Gfx2_PreloadImage, GEN_1_492, GEN_LAST},
+		{0x15, Opcode_Gfx2_PreloadClear, GEN_1_492, GEN_LAST},
 		{0x12, Opcode_Gfx2_BmpSetBaseSize, GEN_1_535, GEN_LAST},
 		{0x16, Opcode_Gfx2_BmpBaseSize, GEN_1_529, GEN_LAST},
 		{0x17, Opcode_Gfx2_BmpGetPixel, GEN_1_529, GEN_LAST},
@@ -725,8 +724,8 @@ void Vm_Optable92Init(void)
 		{0xF2, Opcode_Gfx2_VideoTextureAttach, GEN_1_494, GEN_LAST},
 		{0xF4, Opcode_Gfx2_VideoTextureControl, GEN_1_547, GEN_LAST},
 		{0xF5, Opcode_Gfx2_VideoTexturePosition, GEN_1_573, GEN_LAST},
-		{0x1A, Opcode_Gfx2_AlphaToScreenGray, GEN_1_494, GEN_LAST},
-		{0x37, Opcode_Gfx2_ObjSetFixedOffset2, GEN_1_69_472, GEN_1_69_472}, // the other builds have it at "91 36" from 1.494
+		{0x1A, Opcode_Gfx2_AlphaToScreenGray, GEN_1_492, GEN_LAST},
+		{0x37, Opcode_Gfx2_ObjSetFixedOffset2, GEN_1_69_472, GEN_1_69_472}, // the other builds have it at "91 36" from 1.492
 		{0x00, Opcode_Gfx2_DefineRipple, GEN_FIRST, GEN_LAST},
 		{0x01, Opcode_Gfx2_DefineRippleEx, GEN_FIRST, GEN_LAST},
 		{0x10, Opcode_Gfx2_VecDistRadial, GEN_FIRST, GEN_LAST},
@@ -747,5 +746,5 @@ void Vm_Optable92Init(void)
 		{0x91, Opcode_Gfx2_DrawTextStyled, GEN_FIRST, GEN_LAST},
 		{0x9C, Opcode_Gfx2_BmpDrawTextStyled, GEN_FIRST, GEN_LAST},
 	};
-	Vm_FillTable(vm_optable_92, OPFAM_92, ops, BGI_COUNTOF(ops));
+	Vm_FillTable(o, o->vm.optable92, OPFAM_92, ops, BGI_COUNTOF(ops));
 }

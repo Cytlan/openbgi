@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * crossfade.c - background type 2: a cross fade between two bitmaps
- *               (inc/bgi/gfx/background.h; selected by "90 41")
+ *               (src/include/bgi/gfx/background.h; selected by "90 41")
  *
  * The object's level (0..0x100) is the position of the fade: at 0 the
  * first bitmap is shown as it is, at 0x100 the second one (or solid black
@@ -12,17 +12,17 @@
  */
 #include "background_internal.h"
 
-static void Bg2_Destroy(DispObj_t* o, int flags)
+static void Bg2_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	Background_Dtor((Background_t*)o);
+	Background_Dtor((Background_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
 // effect 1 (alpha blend), no bitmaps
-void Bg2_Ctor(Bg2_t* b)
+void Bg2_Ctor(OpenBGI_t* o, Bg2_t* b)
 {
-	Background_Ctor(&b->bg, 2);
+	Background_Ctor(o, &b->bg, 2);
 	b->bg.obj.vt = &Bg2_Vtbl.base;
 	b->bmp = -1;
 	b->second = -1;
@@ -31,34 +31,34 @@ void Bg2_Ctor(Bg2_t* b)
 
 /* `bmp` must be a screen-sized bitmap; `second` is one as well or
  * BG_BLACK / BG_WHITE.  1 ok, 0 when a bitmap is unusable. */
-int Bg2_Set(Bg2_t* b, int bmp, int second)
+int Bg2_Set(OpenBGI_t* o, Bg2_t* b, int bmp, int second)
 {
-	if(!Bg_BitmapUsable(bmp))
+	if(!Bg_BitmapUsable(o, bmp))
 		return 0;
 	if(second == BG_BLACK || second == BG_WHITE)
 	{
 		b->bmp = bmp;
 		b->second = second;
-		b->gen = BgGen(bmp);
+		b->gen = BgGen(o, bmp);
 		return 1;
 	}
-	if(!Bg_BitmapUsable(second))
+	if(!Bg_BitmapUsable(o, second))
 		return 0;
 	b->bmp = bmp;
 	b->second = second;
-	b->gen = BgGen(bmp);
-	b->secondGen = BgGen(second);
+	b->gen = BgGen(o, bmp);
+	b->secondGen = BgGen(o, second);
 	return 1;
 }
 
 /* the second bitmap (or black / white) with `bmp` blended over it by the
  * effective level; 0 once a bitmap has been replaced */
-static int Bg2_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
+static int Bg2_Render(OpenBGI_t* o, Background_t* bg, Bmp_t* dst, const Rect_t* local)
 {
 	Bg2_t* b = (Bg2_t*)bg;
 	Bmp_t a, s;
 	int level;
-	if(!BgCurrent(&a, b->bmp, b->gen))
+	if(!BgCurrent(o, &a, b->bmp, b->gen))
 		return 0;
 	level = DispObj_EffectiveLevel(&b->bg.obj);
 	if(b->second == BG_BLACK || b->second == BG_WHITE)
@@ -68,7 +68,7 @@ static int Bg2_Render(Background_t* bg, Bmp_t* dst, const Rect_t* local)
 		Bmp_BlitEffect(dst, &a, effect, level);
 		return 1;
 	}
-	if(!BgCurrent(&s, b->second, b->secondGen))
+	if(!BgCurrent(o, &s, b->second, b->secondGen))
 		return 0;
 	Bmp_Crop(&s, local);
 	Bmp_BlitEffect(dst, &s, 0x80, 0); // raw copy of the second bitmap

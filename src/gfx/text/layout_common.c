@@ -8,6 +8,7 @@
  *                   (layout_internal.h)
  */
 #include "layout_internal.h"
+#include "bgi/core.h"
 
 // the opening brackets a leading control byte 4 .. 8 stands for
 const char* const gLeadingBracket[5] = {
@@ -28,16 +29,16 @@ int Layout_Min1(int v) // shadow offsets are never less than one pixel
 	return v > 0 ? v : 1;
 }
 
-// a fresh node: reveal delay `delay`, the fade-in of gRubyFadeSteps steps
-RichChar_t* Layout_NewNode(int delay)
+// a fresh node: reveal delay `delay`, the fade-in of o->text.rubyFadeSteps steps
+RichChar_t* Layout_NewNode(OpenBGI_t* o, int delay)
 {
 	RichChar_t* n = (RichChar_t*)BGI_Calloc(sizeof(RichChar_t));
 	n->delay = delay;
-	n->fadeSteps = gRubyFadeSteps;
+	n->fadeSteps = o->text.rubyFadeSteps;
 	return n;
 }
 
-/* the "outlined" text of style 2 (1.494 on): the glyph dilated by sdx /
+/* the "outlined" text of style 2 (1.492 on): the glyph dilated by sdx /
  * sdy in every direction - each pixel of `dst` is the sum of the coverage
  * of the glyph's pixels in the (2*sdx+1) x (2*sdy+1) box around it,
  * clamped, in `colour`.  `glyph` is the full painted cell; the glyph itself
@@ -75,21 +76,21 @@ static void Layout_PaintOutline(Bmp_t* dst, const Bmp_t* glyph, int sdx, int sdy
  * in first at (sdx, sdy) with the style's density - a dimmed silhouette when
  * the shadow colour is 0, otherwise the glyph repainted in that colour
  * (and rotated when `rotate` is set, as the vertical layout rotated the
- * glyph itself) - and the glyph goes on top at (0, 0).  Style 2 (1.494
+ * glyph itself) - and the glyph goes on top at (0, 0).  Style 2 (1.492
  * on, an outline): the dilated copy in the shadow colour goes at (0, 0)
  * and the glyph (sdx, sdy) into it.  Style 0 copies the glyph only. */
-void Layout_GlyphBitmap(Bmp_t* dst, int w, int h, const Bmp_t* view, const Glyph_t* g, int code,
+void Layout_GlyphBitmap(OpenBGI_t* o, Bmp_t* dst, int w, int h, const Bmp_t* view, const Glyph_t* g, int code,
 	FontRaster_t* font, const int32_t style[5], int sdx, int sdy, int rotate)
 {
-	Bmp_AllocScreen(dst, w, h, 1);
+	Bmp_AllocScreen(o, dst, w, h, 1);
 	Bmp_Fill(dst, NULL, 0);
-	if(style[0] == 2 && gEngine->gen >= GEN_1_494)
+	if(style[0] == 2 && o->engine.profile->gen >= GEN_1_492)
 	{
 		Bmp_t cell, tmp, tmp2;
-		Bmp_AllocScreen(&cell, view->w + 2 * sdx, view->h, 1);
+		Bmp_AllocScreen(o, &cell, view->w + 2 * sdx, view->h, 1);
 		Bmp_Fill(&cell, NULL, 0);
 		Bmp_Blit(&cell, 0, 0, view, 0, 0);
-		Bmp_AllocScreen(&tmp, view->w + 2 * sdx, view->h + 2 * sdy, 1);
+		Bmp_AllocScreen(o, &tmp, view->w + 2 * sdx, view->h + 2 * sdy, 1);
 		Layout_PaintOutline(&tmp, &cell, sdx, sdy, (uint32_t)style[3]);
 		tmp2 = tmp;
 		if(rotate)
@@ -103,13 +104,13 @@ void Layout_GlyphBitmap(Bmp_t* dst, int w, int h, const Bmp_t* view, const Glyph
 	if(style[0])
 	{
 		Bmp_t tmp;
-		Bmp_AllocScreen(&tmp, view->w, view->h, 1);
+		Bmp_AllocScreen(o, &tmp, view->w, view->h, 1);
 		Bmp_Fill(&tmp, NULL, 0);
 		if(style[3] == 0)
 			Bmp_BlitEffect(&tmp, view, 5, 0x100); // dimmed silhouette
 		else
 		{
-			Text_PaintGlyph(&tmp, (Glyph_t*)g, code, font, (uint32_t)style[3]);
+			Text_PaintGlyph(o, &tmp, (Glyph_t*)g, code, font, (uint32_t)style[3]);
 			if(rotate)
 				Bmp_RotateSquare(&tmp);
 		}
@@ -120,23 +121,23 @@ void Layout_GlyphBitmap(Bmp_t* dst, int w, int h, const Bmp_t* view, const Glyph
 }
 
 /* The shadow offsets a style reserves on the glyph bitmaps: style 1 the
- * offset itself, style 2 (1.494 on) twice, the outline going both ways */
-int Layout_ShadowReserve(const int32_t style[5], int sd)
+ * offset itself, style 2 (1.492 on) twice, the outline going both ways */
+int Layout_ShadowReserve(OpenBGI_t* o, const int32_t style[5], int sd)
 {
-	if(style[0] == 2 && gEngine->gen >= GEN_1_494)
+	if(style[0] == 2 && o->engine.profile->gen >= GEN_1_492)
 		return 2 * sd;
 	return style[0] ? sd : 0;
 }
 
-/* the pixels added after a fixed-pitch glyph: gCharPitch, plus the font's
- * own extra width ("91 0F") for its posture from 1.529 on; nothing for
- * proportional text */
-int Layout_Pitch(int proportional, const FontInfo_t* fi)
+/* the pixels added after a fixed-pitch glyph: o->text.charPitch, plus
+ * the font's own extra width ("91 0F") for its posture from 1.529 on;
+ * nothing for proportional text */
+int Layout_Pitch(OpenBGI_t* o, int proportional, const FontInfo_t* fi)
 {
 	int extra = 0;
 	if(proportional)
 		return 0;
-	if(gEngine->gen >= GEN_1_529 && fi && fi->font)
+	if(o->engine.profile->gen >= GEN_1_529 && fi && fi->font)
 		extra = fi->font->extraW[fi->italic ? 1 : 0];
-	return gCharPitch + extra;
+	return o->text.charPitch + extra;
 }

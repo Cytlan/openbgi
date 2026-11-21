@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * tests/wasmfs.c - unit test of the WebAssembly back end's file layer
- *                  (src/os/wasm/fs.c and host.c, declared in inc/bgi/os.h
- *                  and inc/bgi/os_wasm.h) run on a host; built on its own
- *                  by the Makefile as bin/test_wasmfs, since it cannot link
+ *                  (src/host/wasm/fs.c and host.c, declared in src/host/os.h
+ *                  and src/host/os_wasm.h) run on a host; built on its own
+ *                  by the Makefile as test_wasmfs, since it cannot link
  *                  with the POSIX back end, which defines the same OS_File*
  *                  functions
  *
@@ -40,25 +40,15 @@
  * set of files than it wrote.  The scratch directories are removed at the
  * end and the request counts printed.
  */
-#include "bgi/os.h"
-#include "bgi/os_wasm.h"
+#include "host/os.h"
+#include "host/os_wasm.h"
 #include "tools/wasm/hostmock.h"
 
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int gFails; // the number of failed checks so far
-// evaluate a condition; print it with its location and count a failure when it is false
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 // ---- the mock server (tools/wasm/hostmock.c) --------------------------------------------------
 
@@ -123,7 +113,7 @@ static void MakeGame(void)
 		gBig[i] = (uint8_t)(i * 7 + (i >> 8));
 	snprintf(p, sizeof p, "%s/Data01000.arc", gRoot);
 	WriteFile(p, gBig, BIG);
-	snprintf(p, sizeof p, "%s/games.json", gRoot);
+	snprintf(p, sizeof p, "%s/openbgi.json", gRoot);
 	WriteFile(p, "[]", 2);
 	snprintf(p, sizeof p, "%s/Save", gRoot);
 	mkdir(p, 0755);
@@ -203,8 +193,8 @@ static void TestPaths(void)
 	CHECK(strcmp(rel, "Data01000.arc") == 0);
 	OsWasm_RelPath("C:\\", rel, sizeof rel);
 	CHECK(strcmp(rel, "") == 0);
-	OsWasm_RelPath("C:\\save\\..\\..\\games.json", rel, sizeof rel);
-	CHECK(strcmp(rel, "games.json") == 0);
+	OsWasm_RelPath("C:\\save\\..\\..\\openbgi.json", rel, sizeof rel);
+	CHECK(strcmp(rel, "openbgi.json") == 0);
 	OsWasm_RelPath("save\\.\\x\\", rel, sizeof rel);
 	CHECK(strcmp(rel, "save/x") == 0);
 	OsWasm_RelPath("D:/a//b", rel, sizeof rel);
@@ -399,16 +389,16 @@ static void TestOverlay(void)
 	// overlay's "save" (made for new.dat, kept in lower case) stands for the server's
 	// "Save"
 	ListNames("C:\\*", names, sizeof names);
-	CHECK(strcmp(names, "Data01000.arc,games.json,save/") == 0);
+	CHECK(strcmp(names, "Data01000.arc,openbgi.json,save/") == 0);
 	// copies and moves
-	CHECK(OS_FileCopy("C:\\games.json", "C:\\save\\copy.json", 1));
-	CHECK(!OS_FileCopy("C:\\games.json", "C:\\save\\copy.json", 1)); // the target exists: refused
+	CHECK(OS_FileCopy("C:\\openbgi.json", "C:\\save\\copy.json", 1));
+	CHECK(!OS_FileCopy("C:\\openbgi.json", "C:\\save\\copy.json", 1)); // the target exists: refused
 	CHECK(ReadAll("C:\\save\\copy.json", buf, sizeof buf) == 2 && strcmp(buf, "[]") == 0);
 	CHECK(OS_FileMove("C:\\save\\copy.json", "C:\\save\\moved.json"));
 	CHECK(OS_FileAttrs("C:\\save\\copy.json") == OS_INVALID_ATTRS);
 	CHECK(ReadAll("C:\\save\\moved.json", buf, sizeof buf) == 2);
-	CHECK(OS_FileMove("C:\\games.json", "C:\\save\\games2.json")); // a server file: copied, then hidden
-	CHECK(OS_FileAttrs("C:\\games.json") == OS_INVALID_ATTRS);
+	CHECK(OS_FileMove("C:\\openbgi.json", "C:\\save\\games2.json")); // a server file: copied, then hidden
+	CHECK(OS_FileAttrs("C:\\openbgi.json") == OS_INVALID_ATTRS);
 	CHECK(ReadAll("C:\\save\\games2.json", buf, sizeof buf) == 2);
 	ListNames("C:\\*", names, sizeof names);
 	CHECK(strcmp(names, "Data01000.arc,save/") == 0);
@@ -464,7 +454,7 @@ static void TestPersistence(void)
 	printf("persistence\n");
 	OsWasm_FsShutdown();
 	OsWasm_FsInit(); // a new visit: the overlay directory and the tombstones come back
-	CHECK(OS_FileAttrs("C:\\games.json") == OS_INVALID_ATTRS);
+	CHECK(OS_FileAttrs("C:\\openbgi.json") == OS_INVALID_ATTRS);
 	CHECK(OS_FileAttrs("C:\\save") == OS_INVALID_ATTRS);
 	CHECK(ReadAll("C:\\deep\\er\\file.txt", buf, sizeof buf) == 4 && strcmp(buf, "deep") == 0);
 	ListNames("C:\\*", names, sizeof names);

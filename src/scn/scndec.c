@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * scndec.c - the scenario decompiler: a token stream back to source text
- *            (interface in scn.h, the language in docs/scenario.md)
+ *            (interface in scn.h, the language in docs/modding/scenario.md)
  *
  * The decompiler recognizes the shapes the two original compilers give
  * the constructs of their language - a function's prologue, the `line`
@@ -18,7 +18,8 @@
  */
 #include "scn_internal.h"
 #include "bgi/asm.h"
-#include "bgi/os.h"
+#include "bgi/sjis.h"
+#include "bgi/core.h"
 
 #include <ctype.h>
 
@@ -197,7 +198,7 @@ static char* Format(const char* fmt, ...)
 }
 
 // the string literal of a string-table offset as source text (quoted), or NULL
-static char* StringLiteral(Dec_t* d, uint32_t off)
+static char* StringLiteral(OpenBGI_t* o, Dec_t* d, uint32_t off)
 {
 	const char* s = Scn_String(d->f, off);
 	FILE* mem;
@@ -208,7 +209,7 @@ static char* StringLiteral(Dec_t* d, uint32_t off)
 	mem = tmpfile();
 	if(!mem)
 		return NULL;
-	Asm_WriteStringLiteral(mem, (const uint8_t*)s, (uint32_t)strlen(s));
+	Asm_WriteStringLiteral(o, mem, (const uint8_t*)s, (uint32_t)strlen(s));
 	n = ftell(mem);
 	fseek(mem, 0, SEEK_SET);
 	out = (char*)malloc((size_t)n + 1);
@@ -698,7 +699,7 @@ static void BinaryOp(Dec_t* d, const ScnOperator_t* op, uint32_t off)
  * scenario style's builtins). */
 static int IsJump(const Dec_t* d, uint32_t i, uint32_t* target);
 
-static uint32_t ParseExpr(Dec_t* d, uint32_t i, uint32_t end)
+static uint32_t ParseExpr(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end)
 {
 	uint32_t dummyTarget;
 	for(; i < end && !d->failed; i++)
@@ -716,7 +717,7 @@ static uint32_t ParseExpr(Dec_t* d, uint32_t i, uint32_t end)
 			case SCN_PUSH: PushNum(d, in->ops[0]); break;
 			case SCN_STR:
 			{
-				char* lit = StringLiteral(d, in->ops[0]);
+				char* lit = StringLiteral(o, d, in->ops[0]);
 				if(!lit)
 				{
 					Fail(d, in->off, "string offset out of range");
@@ -887,8 +888,8 @@ static uint32_t ParseExpr(Dec_t* d, uint32_t i, uint32_t end)
 
 // ---- statements ------------------------------------------------------------------------------------
 
-static uint32_t ParseStmts(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTemp, int* stoppedAtCase);
-static uint32_t ParseStmt(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTemp, int* stoppedAtCase);
+static uint32_t ParseStmts(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTemp, int* stoppedAtCase);
+static uint32_t ParseStmt(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTemp, int* stoppedAtCase);
 
 // the line marker at i: library `line F, L`; scenario `str F; push L; args 2; lineinfo`.  Returns the token count, 0 when none.
 static uint32_t LineMarker(const Dec_t* d, uint32_t i, int* line)
@@ -1031,7 +1032,7 @@ static char* Lvalue(Dec_t* d, Expr_t addr, int size)
 /* The if / while at the jcc of instruction `i` (the condition is on the
  * stack, the target in `target`).  Returns the index after the whole
  * construct. */
-static uint32_t ParseIf(Dec_t* d, uint32_t i, uint32_t end, int line, uint32_t condStart, uint32_t target, uint32_t switchTemp,
+static uint32_t ParseIf(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end, int line, uint32_t condStart, uint32_t target, uint32_t switchTemp,
 	char* condText)
 {
 	uint32_t xi = IndexAt(d, target), k, jt, bodyEnd, elseEnd;
@@ -1085,7 +1086,7 @@ static uint32_t ParseIf(Dec_t* d, uint32_t i, uint32_t end, int line, uint32_t c
 		free(cond.text);
 		PushCtx(d, target, condOff);
 		d->depth++;
-		ParseStmts(d, i + 1, bodyEnd, 0, NULL);
+		ParseStmts(o, d, i + 1, bodyEnd, 0, NULL);
 		d->depth--;
 		PopCtx(d);
 		AddEntry(d, closeLine, ENT_CLOSE, d->insn[bodyEnd].off, Strdup("}"));
@@ -1113,7 +1114,7 @@ static uint32_t ParseIf(Dec_t* d, uint32_t i, uint32_t end, int line, uint32_t c
 	AddEntry(d, line, ENT_OPEN, condOff, Format("if (%s) {", cond.text));
 	free(cond.text);
 	d->depth++;
-	ParseStmts(d, i + 1, bodyEnd, switchTemp, NULL);
+	ParseStmts(o, d, i + 1, bodyEnd, switchTemp, NULL);
 	d->depth--;
 	if(jt == target)
 	{
@@ -1140,7 +1141,7 @@ static uint32_t ParseIf(Dec_t* d, uint32_t i, uint32_t end, int line, uint32_t c
 		before = d->entCount;
 		AddEntry(d, closeLine, ENT_CLOSE, d->insn[bodyEnd].off, Strdup("} else {"));
 		d->depth++;
-		k = ParseStmts(d, xi, elseBodyEnd, switchTemp, NULL);
+		k = ParseStmts(o, d, xi, elseBodyEnd, switchTemp, NULL);
 		d->depth--;
 		(void)k;
 		if(!hasClose && d->style == SCN_STYLE_LIBRARY)
@@ -1195,7 +1196,7 @@ static int JumpsTo(const Dec_t* d, uint32_t a, uint32_t b, uint32_t target)
 
 /* the switch whose temporary is `temp`, its first case test at `i`
  * (its `line` marker already consumed) */
-static uint32_t ParseSwitch(Dec_t* d, uint32_t i, uint32_t end, int firstCaseLine, uint32_t temp, int leadingDefault)
+static uint32_t ParseSwitch(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end, int firstCaseLine, uint32_t temp, int leadingDefault)
 {
 	uint32_t value, next, k, switchStart = i;
 	int ctx;
@@ -1229,7 +1230,7 @@ static uint32_t ParseSwitch(Dec_t* d, uint32_t i, uint32_t end, int firstCaseLin
 	{
 		int line = 0, isDefault = 0;
 		d->depth++;
-		i = ParseStmts(d, i, end, temp, &stopped);
+		i = ParseStmts(o, d, i, end, temp, &stopped);
 		d->depth--;
 		if(d->failed)
 			break;
@@ -1341,7 +1342,7 @@ static uint32_t ParseJumpBuiltin(Dec_t* d, uint32_t i, int line, uint32_t stmtOf
 			free(label.text);
 			return i;
 		}
-		OS_SjisToUtf8(s, utf, sizeof utf);
+		Sjis_ToUtf8(s, utf, sizeof utf, 0);
 		AddEntry(d, line, ENT_TEXT, stmtOff, Format("call %s;", utf));
 		free(label.text);
 		return i + 3;
@@ -1359,12 +1360,12 @@ static uint32_t ParseJumpBuiltin(Dec_t* d, uint32_t i, int line, uint32_t stmtOf
  * (push_fp; push 0x100; sub; set_fp).  An item is a literal (str S),
  * another variable (push M; lstr) or a number (push V), which the
  * original compiler pushes without a copy. */
-static int LstrItem(Dec_t* d, uint32_t* pi, char** text)
+static int LstrItem(OpenBGI_t* o, Dec_t* d, uint32_t* pi, char** text)
 {
 	uint32_t i = *pi;
 	if(IsTok(d, i, SCN_STR))
 	{
-		*text = StringLiteral(d, d->insn[i].ops[0]);
+		*text = StringLiteral(o, d, d->insn[i].ops[0]);
 		if(!*text)
 			return 0;
 		if(!IsTok(d, i + 1, 0x48))
@@ -1390,7 +1391,7 @@ static int LstrItem(Dec_t* d, uint32_t* pi, char** text)
 	return 0;
 }
 
-static uint32_t ParseLstrSet(Dec_t* d, uint32_t i, int line, uint32_t stmtOff)
+static uint32_t ParseLstrSet(OpenBGI_t* o, Dec_t* d, uint32_t i, int line, uint32_t stmtOff)
 {
 	char* expr = NULL;
 	char* item;
@@ -1401,7 +1402,7 @@ static uint32_t ParseLstrSet(Dec_t* d, uint32_t i, int line, uint32_t stmtOff)
 		return i;
 	}
 	i += 5;
-	if(!LstrItem(d, &i, &expr))
+	if(!LstrItem(o, d, &i, &expr))
 	{
 		Fail(d, d->insn[start].off, "unrecognized string assignment");
 		return start;
@@ -1411,7 +1412,7 @@ static uint32_t ParseLstrSet(Dec_t* d, uint32_t i, int line, uint32_t stmtOff)
 	{
 		char* joined;
 		i += 4;
-		if(!LstrItem(d, &i, &item))
+		if(!LstrItem(o, d, &i, &item))
 		{
 			free(expr);
 			Fail(d, d->insn[start].off, "unrecognized string assignment");
@@ -1433,7 +1434,7 @@ static uint32_t ParseLstrSet(Dec_t* d, uint32_t i, int line, uint32_t stmtOff)
 	return i + 8;
 }
 
-static uint32_t ParseStmt(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTemp, int* stoppedAtCase)
+static uint32_t ParseStmt(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTemp, int* stoppedAtCase)
 {
 	int line = 0;
 	uint32_t k, stmtOff, condStart, target;
@@ -1502,7 +1503,7 @@ static uint32_t ParseStmt(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTem
 		return i + 1;
 	}
 	if(in->tok == SCN_PUSHFP && d->style == SCN_STYLE_SCENARIO)
-		return ParseLstrSet(d, i, line, stmtOff);
+		return ParseLstrSet(o, d, i, line, stmtOff);
 	if(in->tok == SCN_SRCINFO)
 	{
 		if(in->ops[0] != SCN_SRCINFO_MAGIC || in->ops[1] != (uint32_t)d->srcinfoIndex)
@@ -1514,7 +1515,7 @@ static uint32_t ParseStmt(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTem
 		i++;
 	}
 	condStart = i;
-	i = ParseExpr(d, i, end);
+	i = ParseExpr(o, d, i, end);
 	if(d->failed)
 		return end;
 	in = At(d, i);
@@ -1540,7 +1541,7 @@ static uint32_t ParseStmt(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTem
 				free(lv);
 				free(addr.text);
 				free(value.text);
-				return ParseIf(d, i + 2, end, line, condStart, d->insn[i + 1].ops[0], switchTemp, cond);
+				return ParseIf(o, d, i + 2, end, line, condStart, d->insn[i + 1].ops[0], switchTemp, cond);
 			}
 			AddEntry(d, line, ENT_TEXT, stmtOff, Format("%s = %s;", lv, value.text));
 			free(lv);
@@ -1612,7 +1613,7 @@ static uint32_t ParseStmt(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTem
 						AddEntry(d, line, ENT_OPEN, stmtOff, Format("switch @0x%x (%s) {", addr.aux, value.text));
 					free(addr.text);
 					free(value.text);
-					return ParseSwitch(d, leadingDefault == 2 ? i + 1 : i + 1 + kk, end, cl, addr.aux, leadingDefault);
+					return ParseSwitch(o, d, leadingDefault == 2 ? i + 1 : i + 1 + kk, end, cl, addr.aux, leadingDefault);
 				}
 			}
 			{
@@ -1635,7 +1636,7 @@ static uint32_t ParseStmt(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTem
 				target = a.aux;
 				free(a.text);
 			}
-			return ParseIf(d, i, end, line, condStart, target, switchTemp, NULL);
+			return ParseIf(o, d, i, end, line, condStart, target, switchTemp, NULL);
 		case SCN_SETRET:
 		{
 			Expr_t v;
@@ -1678,7 +1679,7 @@ static uint32_t ParseStmt(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTem
 /* statements of [i, end).  In a switch body (`switchTemp` set) parsing
  * also stops at a case label (*stoppedAtCase = 1) or at the switch's
  * closing bare line (2).  Returns where it stopped. */
-static uint32_t ParseStmts(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTemp, int* stoppedAtCase)
+static uint32_t ParseStmts(OpenBGI_t* o, Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTemp, int* stoppedAtCase)
 {
 	if(stoppedAtCase)
 		*stoppedAtCase = 0;
@@ -1706,7 +1707,7 @@ static uint32_t ParseStmts(Dec_t* d, uint32_t i, uint32_t end, uint32_t switchTe
 				// no markers: the switch ends where a jump out of it would land; the caller decides
 			}
 		}
-		i = ParseStmt(d, i, end, switchTemp, NULL);
+		i = ParseStmt(o, d, i, end, switchTemp, NULL);
 		if(i == before)
 		{
 			Fail(d, d->insn[i].off, "no progress");
@@ -1845,7 +1846,7 @@ static char* Declarations(Dec_t* d)
 }
 
 // parse one function [start, end) of the library style; returns 1 on success
-static int ParseFunction(Dec_t* d, const char* name, uint32_t start, uint32_t end)
+static int ParseFunction(OpenBGI_t* o, Dec_t* d, const char* name, uint32_t start, uint32_t end)
 {
 	uint32_t i = IndexAt(d, start), ie = IndexAt(d, end), bodyStart, bodyEnd, target, k;
 	int firstEntry = d->entCount, closeLine = 0, j, headerLine;
@@ -1938,7 +1939,7 @@ static int ParseFunction(Dec_t* d, const char* name, uint32_t start, uint32_t en
 	header.depth = 0;
 	AddEntry(d, 0, ENT_OPEN, start, NULL);
 	d->depth = 1;
-	ParseStmts(d, bodyStart, bodyEnd, 0, NULL);
+	ParseStmts(o, d, bodyStart, bodyEnd, 0, NULL);
 	d->depth = 0;
 	if(d->failed)
 		return 0;
@@ -2029,7 +2030,7 @@ static int ParseDispatcher(Dec_t* d, uint32_t i)
 			return 0;
 		d->labels[d->labelCount].off = d->insn[i + 2].ops[0];
 		strcpy(d->labels[d->labelCount].sjis, s);
-		OS_SjisToUtf8(s, d->labels[d->labelCount].name, SCN_NAME_MAX); // identifiers are UTF-8 in the source
+		Sjis_ToUtf8(s, d->labels[d->labelCount].name, SCN_NAME_MAX, 0); // identifiers are UTF-8 in the source
 		d->labelCount++;
 		i += 4;
 	}
@@ -2039,7 +2040,7 @@ static int ParseDispatcher(Dec_t* d, uint32_t i)
 	return s && strcmp(s, SCN_LABEL_NOT_FOUND) == 0;
 }
 
-static int ParseScenarioBody(Dec_t* d)
+static int ParseScenarioBody(OpenBGI_t* o, Dec_t* d)
 {
 	uint32_t i, dispatcher, bodyEndIdx, k;
 	int j, firstEntry = d->entCount;
@@ -2070,7 +2071,7 @@ static int ParseScenarioBody(Dec_t* d)
 	d->depth = 0;
 	ResetStack(d);
 	i = 2;
-	ParseStmts(d, i, bodyEndIdx, 0, NULL);
+	ParseStmts(o, d, i, bodyEndIdx, 0, NULL);
 	if(d->failed)
 		return 0;
 	ResolveJumps(d, firstEntry);
@@ -2119,7 +2120,7 @@ static int ParseScenarioBody(Dec_t* d)
 // ---- the token listing and __asm blocks -----------------------------------------------------------------
 
 // one token as an __asm line, with labels for the targets of this range
-static void WriteToken(Dec_t* d, const Insn_t* in, FILE* out)
+static void WriteToken(OpenBGI_t* o, Dec_t* d, const Insn_t* in, FILE* out)
 {
 	const char* nm = ScnTok_Name(in->tok);
 	char name[SCN_NAME_MAX];
@@ -2127,7 +2128,7 @@ static void WriteToken(Dec_t* d, const Insn_t* in, FILE* out)
 	{
 		case SCN_STR:
 		{
-			char* lit = StringLiteral(d, in->ops[0]);
+			char* lit = StringLiteral(o, d, in->ops[0]);
 			fprintf(out, "str %s", lit ? lit : "?");
 			free(lit);
 			return;
@@ -2143,14 +2144,14 @@ static void WriteToken(Dec_t* d, const Insn_t* in, FILE* out)
 		}
 		case SCN_LINE:
 		{
-			char* lit = StringLiteral(d, in->ops[0]);
+			char* lit = StringLiteral(o, d, in->ops[0]);
 			fprintf(out, "line %s, %u", lit ? lit : "?", in->ops[1]);
 			free(lit);
 			return;
 		}
 		case SCN_SRCINFO:
 		{
-			char* lit = StringLiteral(d, in->ops[2]);
+			char* lit = StringLiteral(o, d, in->ops[2]);
 			fprintf(out, "srcinfo 0x%x, %u, %s", in->ops[0], in->ops[1], lit ? lit : "?");
 			free(lit);
 			return;
@@ -2179,7 +2180,7 @@ static void WriteToken(Dec_t* d, const Insn_t* in, FILE* out)
 }
 
 // the tokens of [start, end) as an __asm block (targets inside get labels)
-static void WriteAsmBlock(Dec_t* d, uint32_t start, uint32_t end, int indent, FILE* out)
+static void WriteAsmBlock(OpenBGI_t* o, Dec_t* d, uint32_t start, uint32_t end, int indent, FILE* out)
 {
 	uint32_t i = IndexAt(d, start), ie = IndexAt(d, end), j;
 	uint8_t* isTarget = (uint8_t*)calloc(d->n + 1, 1);
@@ -2196,14 +2197,14 @@ static void WriteAsmBlock(Dec_t* d, uint32_t start, uint32_t end, int indent, FI
 		if(isTarget[j])
 			fprintf(out, "%*sL_%x:\n", indent, "", d->insn[j].off);
 		fprintf(out, "%*s", indent + 4, "");
-		WriteToken(d, &d->insn[j], out);
+		WriteToken(o, d, &d->insn[j], out);
 		fputc('\n', out);
 	}
 	fprintf(out, "%*s}\n", indent, "");
 	free(isTarget);
 }
 
-static void WriteListing(Dec_t* d, FILE* out)
+static void WriteListing(OpenBGI_t* o, Dec_t* d, FILE* out)
 {
 	uint32_t j;
 	int i;
@@ -2214,7 +2215,7 @@ static void WriteListing(Dec_t* d, FILE* out)
 		if(fn)
 			fprintf(out, "%s:\n", fn);
 		fprintf(out, "  %06x  ", d->insn[j].off);
-		WriteToken(d, &d->insn[j], out);
+		WriteToken(o, d, &d->insn[j], out);
 		fputc('\n', out);
 	}
 	fprintf(out, "; strings:\n");
@@ -2224,7 +2225,7 @@ static void WriteListing(Dec_t* d, FILE* out)
 		{
 			const char* s = Scn_String(d->f, off);
 			fprintf(out, "  %06x  ", off);
-			Asm_WriteStringLiteral(out, (const uint8_t*)s, (uint32_t)strlen(s));
+			Asm_WriteStringLiteral(o, out, (const uint8_t*)s, (uint32_t)strlen(s));
 			fputc('\n', out);
 			off += (uint32_t)strlen(s) + 1;
 		}
@@ -2277,7 +2278,7 @@ static void FindSourceName(Dec_t* d)
  * line number goes there, one without follows the previous entry (on the
  * next line when it is free, else on the same line); a raw block is
  * followed by a `#line` that puts the next entry back on its line. */
-static void WriteEntries(Dec_t* d, FILE* out)
+static void WriteEntries(OpenBGI_t* o, Dec_t* d, FILE* out)
 {
 	int i, cur = 0, j;
 	uint32_t curFile = UINT32_MAX;
@@ -2329,7 +2330,7 @@ static void WriteEntries(Dec_t* d, FILE* out)
 				if(!atLineStart)
 					fputc('\n', out);
 				fputs("#file ", out);
-				Asm_WriteStringLiteral(out, (const uint8_t*)(name ? name : ""), name ? strlen(name) : 0);
+				Asm_WriteStringLiteral(o, out, (const uint8_t*)(name ? name : ""), name ? strlen(name) : 0);
 				fputc('\n', out);
 				atLineStart = 1;
 				curFile = e->fileOff;
@@ -2468,13 +2469,13 @@ static uint32_t FirstLiteralOffset(Dec_t* d)
 	}
 }
 
-static void WriteHeader(Dec_t* d, const ScnDecOptions_t* opt, const FuncRange_t* funcs, int funcCount, FILE* out)
+static void WriteHeader(OpenBGI_t* o, Dec_t* d, const ScnDecOptions_t* opt, const FuncRange_t* funcs, int funcCount, FILE* out)
 {
 	int i;
-	fprintf(out, "// %s - decompiled by bgiscn (docs/scenario.md)\n", opt->name ? opt->name : "scenario");
+	fprintf(out, "// %s - decompiled by bgiscn (docs/modding/scenario.md)\n", opt->name ? opt->name : "scenario");
 	fprintf(out, "#style %s\n", d->style == SCN_STYLE_LIBRARY ? (d->raw ? "library-raw" : "library") : d->lineMarkers ? "scenario-line"
 																													  : "scenario");
-	if(gAsmUtf8)
+	if(o->tools.asmUtf8)
 		fprintf(out, "#encoding utf-8\n");
 	if(d->f->importCount)
 	{
@@ -2482,14 +2483,14 @@ static void WriteHeader(Dec_t* d, const ScnDecOptions_t* opt, const FuncRange_t*
 		for(i = 0; i < d->f->importCount; i++)
 		{
 			fputs(i ? ", " : " ", out);
-			Asm_WriteStringLiteral(out, (const uint8_t*)d->f->imports[i], strlen(d->f->imports[i]));
+			Asm_WriteStringLiteral(o, out, (const uint8_t*)d->f->imports[i], strlen(d->f->imports[i]));
 		}
 		fputc('\n', out);
 	}
 	if(d->sourceName[0])
 	{ // as a literal: the older scenario compiler wrote full Windows paths with backslashes
 		fputs("#source ", out);
-		Asm_WriteStringLiteral(out, (const uint8_t*)d->sourceName, strlen(d->sourceName));
+		Asm_WriteStringLiteral(o, out, (const uint8_t*)d->sourceName, strlen(d->sourceName));
 		fputc('\n', out);
 	}
 	for(i = 0; i < (int)d->n; i++)
@@ -2516,7 +2517,7 @@ static void WriteHeader(Dec_t* d, const ScnDecOptions_t* opt, const FuncRange_t*
 			if(referenced)
 				break;
 			fputs("#include ", out);
-			Asm_WriteStringLiteral(out, (const uint8_t*)s, strlen(s));
+			Asm_WriteStringLiteral(o, out, (const uint8_t*)s, strlen(s));
 			fputc('\n', out);
 			off += (uint32_t)strlen(s) + 1;
 		}
@@ -2529,7 +2530,7 @@ static void WriteHeader(Dec_t* d, const ScnDecOptions_t* opt, const FuncRange_t*
 			for(j = 0; j < used; j++)
 			{
 				fputs("#string ", out);
-				Asm_WriteStringLiteral(out, (const uint8_t*)Scn_String(d->f, tabOff[j]), strlen(Scn_String(d->f, tabOff[j])));
+				Asm_WriteStringLiteral(o, out, (const uint8_t*)Scn_String(d->f, tabOff[j]), strlen(Scn_String(d->f, tabOff[j])));
 				fputc('\n', out);
 			}
 		}
@@ -2584,7 +2585,7 @@ static int FileRankOf(Dec_t* d, uint32_t start, uint32_t end)
 }
 
 // the __asm fallback of a range as a raw entry
-static void AddAsmEntry(Dec_t* d, const char* name, uint32_t start, uint32_t end)
+static void AddAsmEntry(OpenBGI_t* o, Dec_t* d, const char* name, uint32_t start, uint32_t end)
 {
 	FILE* mem = tmpfile();
 	long n;
@@ -2594,7 +2595,7 @@ static void AddAsmEntry(Dec_t* d, const char* name, uint32_t start, uint32_t end
 		return;
 	if(name)
 		fprintf(mem, "%s() {\n", name);
-	WriteAsmBlock(d, start, end, name ? 4 : 0, mem);
+	WriteAsmBlock(o, d, start, end, name ? 4 : 0, mem);
 	if(name)
 		fputs("}\n", mem);
 	n = ftell(mem);
@@ -2609,10 +2610,10 @@ static void AddAsmEntry(Dec_t* d, const char* name, uint32_t start, uint32_t end
 	e->ctx = -1;
 }
 
-static void WriteSource(Dec_t* d, const ScnDecOptions_t* opt, FuncRange_t* funcs, int funcCount, FILE* out)
+static void WriteSource(OpenBGI_t* o, Dec_t* d, const ScnDecOptions_t* opt, FuncRange_t* funcs, int funcCount, FILE* out)
 {
 	int i;
-	WriteHeader(d, opt, funcs, funcCount, out);
+	WriteHeader(o, d, opt, funcs, funcCount, out);
 	FreeEntries(d, 0);
 	if(d->style == SCN_STYLE_LIBRARY)
 	{
@@ -2622,7 +2623,7 @@ static void WriteSource(Dec_t* d, const ScnDecOptions_t* opt, FuncRange_t* funcs
 			FuncRange_t* fr = &funcs[i];
 			int mark = d->entCount;
 			d->failed = 0;
-			if(!fr->asmFallback && ParseFunction(d, fr->name, fr->start, fr->end))
+			if(!fr->asmFallback && ParseFunction(o, d, fr->name, fr->start, fr->end))
 			{
 				int first = d->ent[mark].line, last, j;
 				if(mark > 0 && d->ent[mark].fileOff != d->ent[mark - 1].fileOff)
@@ -2640,25 +2641,25 @@ static void WriteSource(Dec_t* d, const ScnDecOptions_t* opt, FuncRange_t* funcs
 			}
 			FreeEntries(d, mark);
 			fr->asmFallback = 1;
-			AddAsmEntry(d, fr->name, fr->start, fr->end);
+			AddAsmEntry(o, d, fr->name, fr->start, fr->end);
 		}
-		WriteEntries(d, out);
+		WriteEntries(o, d, out);
 		FreeEntries(d, 0);
 		return;
 	}
 	d->failed = 0;
 	d->srcinfoIndex = 0;
 	d->labelCount = 0;
-	if(!funcs[0].asmFallback && ParseScenarioBody(d))
+	if(!funcs[0].asmFallback && ParseScenarioBody(o, d))
 	{
-		WriteEntries(d, out);
+		WriteEntries(o, d, out);
 		FreeEntries(d, 0);
 		return;
 	}
 	funcs[0].asmFallback = 1;
 	FreeEntries(d, 0);
-	AddAsmEntry(d, NULL, 0, d->f->codeLen * 4);
-	WriteEntries(d, out);
+	AddAsmEntry(o, d, NULL, 0, d->f->codeLen * 4);
+	WriteEntries(o, d, out);
 	FreeEntries(d, 0);
 }
 
@@ -2728,14 +2729,14 @@ static int DetectStyle(Dec_t* d)
 }
 
 // write the decompilation into a memory buffer
-static char* WriteToBuffer(Dec_t* d, const ScnDecOptions_t* opt, FuncRange_t* funcs, int funcCount, size_t* len)
+static char* WriteToBuffer(OpenBGI_t* o, Dec_t* d, const ScnDecOptions_t* opt, FuncRange_t* funcs, int funcCount, size_t* len)
 {
 	FILE* mem = tmpfile();
 	char* text;
 	long n;
 	if(!mem)
 		return NULL;
-	WriteSource(d, opt, funcs, funcCount, mem);
+	WriteSource(o, d, opt, funcs, funcCount, mem);
 	n = ftell(mem);
 	fseek(mem, 0, SEEK_SET);
 	text = (char*)malloc((size_t)n + 1);
@@ -2772,7 +2773,7 @@ static void FindRawFunctions(Dec_t* d, ScnFile_t* copy)
 		}
 }
 
-int Scn_Decompile(const ScnFile_t* f, const ScnDecOptions_t* opt, FILE* out)
+int Scn_Decompile(OpenBGI_t* o, const ScnFile_t* f, const ScnDecOptions_t* opt, FILE* out)
 {
 	Dec_t* d = (Dec_t*)calloc(1, sizeof *d);
 	FuncRange_t* funcs = NULL;
@@ -2782,7 +2783,7 @@ int Scn_Decompile(const ScnFile_t* f, const ScnDecOptions_t* opt, FILE* out)
 	if(f->image)
 	{
 		free(d);
-		return Scn16_Decompile(f->image, f->imageSize, opt, out);
+		return Scn16_Decompile(o, f->image, f->imageSize, opt, out);
 	}
 	d->f = f;
 	d->cmds = opt->cmds;
@@ -2810,7 +2811,7 @@ int Scn_Decompile(const ScnFile_t* f, const ScnDecOptions_t* opt, FILE* out)
 	FindSourceName(d);
 	if(opt->rawTokens)
 	{
-		WriteListing(d, out);
+		WriteListing(o, d, out);
 		free(d->insn);
 		free(d->atOff);
 		free(d);
@@ -2844,9 +2845,9 @@ int Scn_Decompile(const ScnFile_t* f, const ScnDecOptions_t* opt, FILE* out)
 			/* the source's own functions stand somewhere among the includes (its #include lines may
 			 * follow some of them): the place that leaves the fewest strings out of first-use order */
 			int includes = 0, r, best = 0;
-			uint32_t bestPre = UINT32_MAX, litOff = FirstLiteralOffset(d), o;
-			for(o = d->sourceStrOff + (uint32_t)strlen(d->sourceName) + 1; o < litOff; includes++)
-				o += (uint32_t)strlen(Scn_String(d->f, o)) + 1;
+			uint32_t bestPre = UINT32_MAX, litOff = FirstLiteralOffset(d), off;
+			for(off = d->sourceStrOff + (uint32_t)strlen(d->sourceName) + 1; off < litOff; includes++)
+				off += (uint32_t)strlen(Scn_String(d->f, off)) + 1;
 			for(r = 0; r <= includes; r++)
 			{
 				uint32_t tabOff[4096], pre;
@@ -2883,8 +2884,8 @@ int Scn_Decompile(const ScnFile_t* f, const ScnDecOptions_t* opt, FILE* out)
 	}
 	if(d->style == SCN_STYLE_LIBRARY && funcCount == 0)
 	{
-		WriteHeader(d, opt, funcs, funcCount, out);
-		WriteAsmBlock(d, 0, f->codeLen * 4, 0, out);
+		WriteHeader(o, d, opt, funcs, funcCount, out);
+		WriteAsmBlock(o, d, 0, f->codeLen * 4, 0, out);
 		fallbacks = 1;
 	}
 	else
@@ -2894,7 +2895,7 @@ int Scn_Decompile(const ScnFile_t* f, const ScnDecOptions_t* opt, FILE* out)
 		for(pass = 0; pass < funcCount + 1; pass++)
 		{
 			size_t len;
-			char* text = WriteToBuffer(d, opt, funcs, funcCount, &len);
+			char* text = WriteToBuffer(o, d, opt, funcs, funcCount, &len);
 			ScnCompileResult_t res;
 			uint8_t* back;
 			uint32_t backSize, firstDiff = UINT32_MAX, j;
@@ -2907,7 +2908,7 @@ int Scn_Decompile(const ScnFile_t* f, const ScnDecOptions_t* opt, FILE* out)
 				free(text);
 				break;
 			}
-			Scn_Compile(text, len, opt->name ? opt->name : "scenario", opt->cmds, NULL, NULL, &res);
+			Scn_Compile(o, text, len, opt->name ? opt->name : "scenario", opt->cmds, NULL, NULL, &res);
 			if(res.errors == 0)
 			{
 				back = Scn_Save(&res.file, &backSize);

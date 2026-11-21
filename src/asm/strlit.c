@@ -11,31 +11,29 @@
  * duplicate codes do to the conversion; Asm_ReadStringLiteral is the
  * reader.
  *
- * For a game whose text is UTF-8 (gAsmUtf8: the `-u` option or an
+ * For a game whose text is UTF-8 (o->tools.asmUtf8: the `-u` option or an
  * `#encoding utf-8` line) nothing is converted: the bytes of the source
  * are the bytes of the string.
  */
-#include "bgi/asm.h"
-#include "bgi/os.h"
+#include "bgi/asmout.h"
+#include "bgi/sjis.h"
+#include "bgi/core.h"
 
 #include <ctype.h>
 
-int gAsmUtf8;               // string literals are kept in UTF-8
-static int gAsmUtf8Default; // what a file starts with (the -u option)
-
-void Asm_SetDefaultStringEncoding(int utf8)
+void Asm_SetDefaultStringEncoding(OpenBGI_t* o, int utf8)
 {
-	gAsmUtf8Default = utf8 != 0;
-	gAsmUtf8 = gAsmUtf8Default;
+	o->tools.asmUtf8Default = utf8 != 0;
+	o->tools.asmUtf8 = o->tools.asmUtf8Default;
 }
 
-void Asm_ResetStringEncoding(void)
+void Asm_ResetStringEncoding(OpenBGI_t* o)
 {
-	gAsmUtf8 = gAsmUtf8Default;
+	o->tools.asmUtf8 = o->tools.asmUtf8Default;
 }
 
 // See asm.h.
-const char* Asm_EncodingDirective(const char* p, const char* end, int* ok)
+const char* Asm_EncodingDirective(OpenBGI_t* o, const char* p, const char* end, int* ok)
 {
 	static const struct
 	{
@@ -60,7 +58,7 @@ const char* Asm_EncodingDirective(const char* p, const char* end, int* ok)
 			;
 		if(k == n)
 		{
-			gAsmUtf8 = kNames[i].utf8;
+			o->tools.asmUtf8 = kNames[i].utf8;
 			*ok = 1;
 		}
 	}
@@ -101,7 +99,7 @@ static int IsUtf8(const uint8_t* s, uint32_t n)
  * exact (CP932 has duplicate codes for a few characters, and an
  * unmappable one is substituted), else every non-ASCII byte as \xNN;
  * quotes, backslashes and control characters are escaped either way. */
-void Asm_WriteStringLiteral(FILE* out, const uint8_t* s, uint32_t n)
+void AsmOut_StringLiteral(OpenBGI_t* o, AsmOut_t* out, const uint8_t* s, uint32_t n)
 {
 	char* sjis = (char*)malloc(n + 1);
 	char* utf = (char*)malloc(n * 3 + 1);
@@ -110,7 +108,7 @@ void Asm_WriteStringLiteral(FILE* out, const uint8_t* s, uint32_t n)
 	int exact;
 	memcpy(sjis, s, n);
 	sjis[n] = 0;
-	if(gAsmUtf8)
+	if(o->tools.asmUtf8)
 	{ // the bytes are the text: written as they are when they are valid UTF-8 (and hold no NUL, which would end `utf`)
 		memcpy(utf, s, n);
 		utf[n] = 0;
@@ -118,29 +116,29 @@ void Asm_WriteStringLiteral(FILE* out, const uint8_t* s, uint32_t n)
 	}
 	else
 	{
-		OS_SjisToUtf8(sjis, utf, n * 3 + 1);
-		OS_Utf8ToSjis(utf, back, n * 2 + 2);
+		Sjis_ToUtf8(sjis, utf, n * 3 + 1, 0);
+		Sjis_FromUtf8(utf, back, n * 2 + 2);
 		// a '?' in the UTF-8 that the source does not have is a substituted character
 		exact = strlen(back) == n && memcmp(back, sjis, n) == 0 && !strchr(utf, '?') == !memchr(s, '?', n);
 	}
-	fputc('"', out);
+	AsmOut_Putc(out, '"');
 	if(exact)
 	{
 		const uint8_t* u = (const uint8_t*)utf;
 		for(; *u; u++)
 		{
 			if(*u == '"' || *u == '\\')
-				fprintf(out, "\\%c", *u);
+				AsmOut_Printf(out, "\\%c", *u);
 			else if(*u == '\n')
-				fputs("\\n", out);
+				AsmOut_Puts(out, "\\n");
 			else if(*u == '\r')
-				fputs("\\r", out);
+				AsmOut_Puts(out, "\\r");
 			else if(*u == '\t')
-				fputs("\\t", out);
+				AsmOut_Puts(out, "\\t");
 			else if(*u < 0x20)
-				fprintf(out, "\\x%02x", *u);
+				AsmOut_Printf(out, "\\x%02x", *u);
 			else
-				fputc(*u, out);
+				AsmOut_Putc(out, *u);
 		}
 	}
 	else
@@ -149,27 +147,35 @@ void Asm_WriteStringLiteral(FILE* out, const uint8_t* s, uint32_t n)
 		{
 			uint8_t c = s[i];
 			if(c == '"' || c == '\\')
-				fprintf(out, "\\%c", c);
+				AsmOut_Printf(out, "\\%c", c);
 			else if(c >= 0x20 && c < 0x7f)
-				fputc(c, out);
+				AsmOut_Putc(out, c);
 			else
-				fprintf(out, "\\x%02x", c);
+				AsmOut_Printf(out, "\\x%02x", c);
 		}
 	}
-	fputc('"', out);
+	AsmOut_Putc(out, '"');
 	free(sjis);
 	free(utf);
 	free(back);
 }
 
+void Asm_WriteStringLiteral(OpenBGI_t* o, FILE* out, const uint8_t* s, uint32_t n)
+{
+	AsmOut_t w;
+	memset(&w, 0, sizeof w);
+	w.fp = out;
+	AsmOut_StringLiteral(o, &w, s, n);
+}
+
 /* Read the literal that starts at `p` (the opening quote) and ends before
- * `end`: UTF-8 text becomes Shift-JIS (or stays UTF-8, with gAsmUtf8), \xNN inserts a byte, \0 a NUL,
- * \n \r \t \\ \" as usual, any other escaped character itself.  The bytes
- * go to a malloc'ed buffer in `*outBytes` (no NUL added), `*outLen` is
- * their count and `*next` points after the closing quote.  Returns NULL on
- * success, else a message ("unterminated string", ..) with nothing
- * allocated. */
-const char* Asm_ReadStringLiteral(const char* p, const char* end, uint8_t** outBytes, uint32_t* outLen, const char** next)
+ * `end`: UTF-8 text becomes Shift-JIS (or stays UTF-8, with
+ * o->tools.asmUtf8), \xNN inserts a byte, \0 a NUL, \n \r \t \\ \" as
+ * usual, any other escaped character itself.  The bytes go to a malloc'ed
+ * buffer in `*outBytes` (no NUL added), `*outLen` is their count and
+ * `*next` points after the closing quote.  Returns NULL on success, else a
+ * message ("unterminated string", ..) with nothing allocated. */
+const char* Asm_ReadStringLiteral(OpenBGI_t* o, const char* p, const char* end, uint8_t** outBytes, uint32_t* outLen, const char** next)
 {
 	size_t cap = (size_t)(end - p) * 2 + 16;
 	uint8_t* buf = (uint8_t*)malloc(cap);
@@ -195,7 +201,7 @@ const char* Asm_ReadStringLiteral(const char* p, const char* end, uint8_t** outB
 		if(c == '"' || c == '\\')
 		{
 			// a run of text ends here: convert it to Shift-JIS as a whole
-			if(r && gAsmUtf8)
+			if(r && o->tools.asmUtf8)
 			{ // a UTF-8 game: the text is taken as it is
 				memcpy(buf + n, run, r);
 				n += r;
@@ -206,7 +212,7 @@ const char* Asm_ReadStringLiteral(const char* p, const char* end, uint8_t** outB
 				char* sj = (char*)malloc(cap);
 				size_t m;
 				run[r] = 0;
-				m = OS_Utf8ToSjis(run, sj, cap);
+				m = Sjis_FromUtf8(run, sj, cap);
 				memcpy(buf + n, sj, m);
 				n += (uint32_t)m;
 				r = 0;

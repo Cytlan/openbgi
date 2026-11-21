@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * map.c - Map, the scrolling tile map display object (class order 1).
- * Interface in inc/bgi/gfx/map.h.
+ * Interface in src/include/bgi/gfx/map.h.
  *
  * A map draws once four things have been set, in any order after the first:
  * the view and tile size ("90 76", Map_SetSize), the chipset bitmap
@@ -20,11 +20,12 @@
 
 #include "bgi/common.h"
 #include "bgi/gfx/map.h"
+#include "bgi/core.h"
 
 // DispObj(1, slotId) with nothing set up yet
-void Map_Ctor(Map_t* m, int slotId)
+void Map_Ctor(OpenBGI_t* o, Map_t* m, int slotId)
 {
-	DispObj_Ctor(&m->obj, 1, slotId);
+	DispObj_Ctor(o, &m->obj, 1, slotId);
 	m->obj.vt = &Map_Vtbl;
 	m->sized = 0;
 	m->hasTerrain = 0;
@@ -41,41 +42,41 @@ void Map_Dtor(Map_t* m)
 	DispObj_Dtor(&m->obj);
 }
 
-static void Map_Destroy(DispObj_t* o, int flags)
+static void Map_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	Map_Dtor((Map_t*)o);
+	Map_Dtor((Map_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
 // refresh stale cells, then copy the dirty piece of the visible window of the cache; nothing before the view and chipset are set
-static void Map_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t minKey)
+static void Map_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t* local, uint32_t minKey)
 {
-	Map_t* m = (Map_t*)o;
+	Map_t* m = (Map_t*)obj;
 	Bmp_t view;
 	(void)minKey;
 	if(!m->viewValid || !m->hasChipset)
 		return;
 	if(m->dirty)
-		Map_Refresh(m);
+		Map_Refresh(o, m);
 	view = m->cache;
 	Bmp_Crop(&view, &m->src);
 	Bmp_Crop(&view, local);
-	Bmp_BlitEffect(dst, &view, DispObj_GetEffect(o), DispObj_EffectiveLevel(o));
+	Bmp_BlitEffect(dst, &view, DispObj_GetEffect(obj), DispObj_EffectiveLevel(obj));
 }
 
 /* "90 75": the chipset, then position, effect, level and priority (only
  * when the chipset was accepted).  Returns 0 in both cases: the manager
  * wrapper expects a non-zero result for success and so cannot tell a
  * refused chipset (Map_SetChipset returned 0) from an accepted one. */
-int Map_Set(Map_t* m, int x, int y, int bmp, int effect, int level, int prio)
+int Map_Set(OpenBGI_t* o, Map_t* m, int x, int y, int bmp, int effect, int level, int prio)
 {
-	int r = Map_SetChipset(m, bmp);
+	int r = Map_SetChipset(o, m, bmp);
 	if(r == 0)
 		return 0;
-	m->obj.vt->setPos(&m->obj, x, y);
+	m->obj.vt->setPos(o, &m->obj, x, y);
 	DispObj_SetEffect(&m->obj, effect);
-	m->obj.vt->setLevel(&m->obj, level);
+	m->obj.vt->setLevel(o, &m->obj, level);
 	DispObj_SetPriority(&m->obj, (uint32_t)prio);
 	return 0;
 }
@@ -85,14 +86,14 @@ int Map_Set(Map_t* m, int x, int y, int bmp, int effect, int level, int prio)
  * takes the view's pixel size.  The old cache, chip table and view are
  * dropped; the new cache starts cleared with every cell stale.  0 ok,
  * 0x80000002 bad view, 0x80000003 bad tile size. */
-int Map_SetSize(Map_t* m, int cols, int rows, int chipW, int chipH)
+int Map_SetSize(OpenBGI_t* o, Map_t* m, int cols, int rows, int chipW, int chipH)
 {
 	size_t cells, i;
 	if((uint32_t)chipW == 0 || (uint32_t)chipW > 0x100 || (uint32_t)chipH == 0 || (uint32_t)chipH > 0x100)
 		return (int)0x80000003;
 	if((uint32_t)cols == 0 || (uint32_t)cols > 0x400u / (uint32_t)chipW ||
 		(uint32_t)rows == 0 || (uint32_t)rows > 0x300u / (uint32_t)chipH ||
-		!m->obj.vt->setSize(&m->obj, cols * chipW, rows * chipH))
+		!m->obj.vt->setSize(o, &m->obj, cols * chipW, rows * chipH))
 		return (int)0x80000002;
 	Map_FreeCache(m);
 	Map_FreeChips(m);
@@ -103,7 +104,7 @@ int Map_SetSize(Map_t* m, int cols, int rows, int chipW, int chipH)
 	m->viewCols = cols;
 	m->chipW = chipW;
 	m->chipH = chipH;
-	Bmp_AllocScreen(&m->cache, m->cacheCols * chipW, m->cacheRows * chipH, 1);
+	Bmp_AllocScreen(o, &m->cache, m->cacheCols * chipW, m->cacheRows * chipH, 1);
 	Bmp_Clear(&m->cache, NULL);
 	cells = (size_t)m->cacheCols * (size_t)m->cacheRows;
 	m->drawn = (uint16_t*)BGI_Alloc(cells * 2);
@@ -230,14 +231,14 @@ int Map_InvalidateAllCells(Map_t* m)
  * out-of-range tile clears the cell (effect 0x41 with tile 0 giving the
  * size); a chipset that was freed or reloaded blanks the whole cache.
  * 1 when the cache was updated, 0 when there was nothing to draw from. */
-int Map_Refresh(Map_t* m)
+int Map_Refresh(OpenBGI_t* o, Map_t* m)
 {
 	Bmp_t sheet;
 	int cy, cx;
 	if(!m->viewValid || !m->hasChipset)
 		return 0;
-	if(!BmpMgr_GetInfo(gDispBmpMgr, &sheet, m->chipBmp) ||
-		BmpMgr_Generation(gDispBmpMgr, m->chipBmp) != m->chipGen)
+	if(!BmpMgr_GetInfo(o->gfx.dispBmpMgr, &sheet, m->chipBmp) ||
+		BmpMgr_Generation(o->gfx.dispBmpMgr, m->chipBmp) != m->chipGen)
 	{
 		Bmp_Clear(&m->cache, NULL);
 		m->dirty = 0;
@@ -267,14 +268,14 @@ int Map_Refresh(Map_t* m)
  * pixels, valid while the bitmap's generation stays the same.  The bitmap
  * must hold at least one tile each way and be pixel-compatible with the
  * cache.  1 ok, 0 before the size is set or when the bitmap is unusable. */
-int Map_SetChipset(Map_t* m, int bmp)
+int Map_SetChipset(OpenBGI_t* o, Map_t* m, int bmp)
 {
 	Bmp_t info;
 	uint32_t cols, rows, r, c;
 	Bmp_t* chip;
 	if(!m->sized)
 		return 0;
-	if(!BmpMgr_GetInfo(gDispBmpMgr, &info, bmp))
+	if(!BmpMgr_GetInfo(o->gfx.dispBmpMgr, &info, bmp))
 		return 0;
 	cols = (uint32_t)info.w / (uint32_t)m->chipW;
 	rows = (uint32_t)info.h / (uint32_t)m->chipH;
@@ -285,7 +286,7 @@ int Map_SetChipset(Map_t* m, int bmp)
 	Map_FreeChips(m);
 	m->hasChipset = 1;
 	m->chipBmp = bmp;
-	m->chipGen = BmpMgr_Generation(gDispBmpMgr, bmp);
+	m->chipGen = BmpMgr_Generation(o->gfx.dispBmpMgr, bmp);
 	m->chipCount = (int32_t)(rows * cols);
 	m->chips = (Bmp_t*)BGI_Alloc((size_t)m->chipCount * sizeof(Bmp_t));
 	chip = m->chips;

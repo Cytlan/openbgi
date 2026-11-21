@@ -1,7 +1,7 @@
 # This file is part of OpenBGI (https://openbgi.net).
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# nginx in front of tools/wasm/server.js, with TLS (docs/wasm.md)
+# nginx in front of tools/wasm/server.js, with TLS (docs/dev/wasm.md)
 #
 # server.js listens on plain HTTP on the loopback interface (its default,
 # --bind 127.0.0.1 --port 8000); nginx terminates TLS and proxies two things:

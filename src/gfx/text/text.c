@@ -5,157 +5,123 @@
  * text.c - the text engine's settings: the pacing (cursor blink, character
  *          and scroll intervals, fades, auto-advance), the shadow / outline
  *          style, the layer mode, the rich-layout parameters and the
- *          numbered "text functions" (inc/bgi/gfx/text.h)
+ *          numbered "text functions" (src/include/bgi/gfx/text.h)
  *
- * Everything here is a global the "90 9x" / "91 9x" instructions set and
+ * Everything here is a setting the "90 9x" / "91 9x" instructions set and
  * the layout (layout_*.c) and the text wait classes (src/wait/wait_text.c)
  * read; a setting takes effect with the next output.  The glyph sheet and
  * cursor pictures are in glyphs.c, the ruby dictionary in ruby.c, the
  * string helpers in strings.c.
  */
 #include "text_internal.h"
+#include "bgi/core.h"
 
 // ---- the engine's manager pointers -------------------------------------------------------------
 
-Gfx_t* gTextGfx;
-BmpMgr_t* gTextBmpMgr;
-
-void Text_SetGfxPtr(Gfx_t* g)
+void Text_SetGfxPtr(OpenBGI_t* o, Gfx_t* g)
 {
-	gTextGfx = g;
+	o->text.textGfx = g;
 }
 
-void Text_SetBmpMgrPtr(BmpMgr_t* m)
+void Text_SetBmpMgrPtr(OpenBGI_t* o, BmpMgr_t* m)
 {
-	gTextBmpMgr = m;
+	o->text.textBmpMgr = m;
 }
-
-// ---- globals -----------------------------------------------------------------------------------
-
-Bmp_t gGlyphSheet;
-int32_t gGlyphCount;
-int32_t gGlyphCellW;
-int32_t gTextItemCount;
-Bmp_t* gTextItems;
-int32_t gCursorInterval;
-int32_t gCharInterval;
-int32_t gScrollSteps;
-int32_t gScrollInterval;
-int32_t gFadeSteps;
-int32_t gFadeInterval;
-int32_t gTextStyle[5];
-int32_t gCursorPosMode;
-int32_t gCursorX;
-int32_t gCursorY;
-int32_t gStartDelayOn;
-int32_t gStartDelayMs;
-int32_t gAutoAdvanceOn;
-int32_t gAutoAdvanceMs;
-int32_t gTextInputFinishes;
-int32_t gTextLayerMode;
-int32_t gTextLayerNo;
-RubyDict_t gRubyDict;
-int32_t gRubyCharDelay = 25; // the rich output's defaults until "91 98" sets them
-int32_t gRubyFadeSteps = 30;
-int32_t gRubySizePct = 40;
-int32_t gCharPitch;
-int32_t gHangBrackets;
-int32_t gTextIndent;
 
 // ---- pacing and style setters ------------------------------------------------------------------
 
-void Text_SetCursorInterval(int ms) // "90 99"
+void Text_SetCursorInterval(OpenBGI_t* o, int ms) // "90 99"
 {
-	gCursorInterval = ms;
+	o->text.cursorInterval = ms;
 }
 
-void Text_SetCursorPos(int mode, int x, int y) // "90 9A": mode 1 = draw the cursor picture at (x, y)
+void Text_SetCursorPos(OpenBGI_t* o, int mode, int x, int y) // "90 9A": mode 1 = draw the cursor picture at (x, y)
 {
-	gCursorPosMode = mode;
-	gCursorX = x;
-	gCursorY = y;
+	o->text.cursorPosMode = mode;
+	o->text.cursorX = x;
+	o->text.cursorY = y;
 }
 
-void Text_SetStartDelay(int on, int ms) // "90 9B"
+void Text_SetStartDelay(OpenBGI_t* o, int on, int ms) // "90 9B"
 {
-	gStartDelayOn = on;
-	gStartDelayMs = ms;
+	o->text.startDelayOn = on;
+	o->text.startDelayMs = ms;
 }
 
-void Text_SetCharInterval(int ms) // "90 94"
+void Text_SetCharInterval(OpenBGI_t* o, int ms) // "90 94"
 {
-	gCharInterval = ms;
+	o->text.charInterval = ms;
 }
 
 // "90 95": a line scroll takes `steps` steps of `ms` each; 1 stored, 0 when steps <= 0
-int Text_SetScroll(int steps, int ms)
+int Text_SetScroll(OpenBGI_t* o, int steps, int ms)
 {
 	if(steps > 0)
 	{
-		gScrollSteps = steps;
-		gScrollInterval = ms;
+		o->text.scrollSteps = steps;
+		o->text.scrollInterval = ms;
 	}
 	return steps > 0;
 }
 
 // "90 96": a page-break fade takes `steps` steps of `ms` each; 1 stored, 0 when steps <= 0
-int Text_SetFade(int steps, int ms)
+int Text_SetFade(OpenBGI_t* o, int steps, int ms)
 {
 	if(steps > 0)
 	{
-		gFadeSteps = steps;
-		gFadeInterval = ms;
+		o->text.fadeSteps = steps;
+		o->text.fadeInterval = ms;
 	}
 	return steps > 0;
 }
 
-void Text_SetAutoAdvance(int on, int ms) // "90 97"
+void Text_SetAutoAdvance(OpenBGI_t* o, int on, int ms) // "90 97"
 {
-	gAutoAdvanceOn = on;
-	gAutoAdvanceMs = ms;
+	o->text.autoAdvanceOn = on;
+	o->text.autoAdvanceMs = ms;
 }
 
-void Text_SetStyleOn(int on) // "90 9C": the shadow of the plain output
+void Text_SetStyleOn(OpenBGI_t* o, int on) // "90 9C": the shadow of the plain output
 {
-	gTextStyle[0] = on;
+	o->text.textStyle[0] = on;
 }
 
 /* "90 9D": the shadow offsets in percent of the font size (0..100 each) and
  * its density 0..0x100 (0x100 opaque); the shadow colour is reset to 0,
  * the dimmed glyph.  1 ok, 0 out of range (nothing stored). */
-int Text_SetStyleParams(int dxPct, int dyPct, int level)
+int Text_SetStyleParams(OpenBGI_t* o, int dxPct, int dyPct, int level)
 {
 	if(dxPct < 0 || dxPct > 100 || dyPct < 0 || dyPct > 100 || (uint32_t)level > 0x100)
 		return 0;
-	gTextStyle[4] = level;
-	gTextStyle[1] = dxPct;
-	gTextStyle[2] = dyPct;
-	gTextStyle[3] = 0;
+	o->text.textStyle[4] = level;
+	o->text.textStyle[1] = dxPct;
+	o->text.textStyle[2] = dyPct;
+	o->text.textStyle[3] = 0;
 	return 1;
 }
 
-void Text_GetStyle(int32_t out[5])
+void Text_GetStyle(OpenBGI_t* o, int32_t out[5])
 {
-	memcpy(out, gTextStyle, sizeof gTextStyle);
+	memcpy(out, o->text.textStyle, sizeof o->text.textStyle);
 }
 
 /* build a style block {on, dx%, dy%, shadowColour, level} as "92 90" /
  * "92 91" / "92 9C" pass it explicitly; on == 0 clears it.  A shadowColour
- * of 0 means "dimmed copy of the glyph".  1.494 on accepts `on` == 2 as
+ * of 0 means "dimmed copy of the glyph".  1.492 on accepts `on` == 2 as
  * well, the outline style, and refuses other values; the earlier builds
  * store any non-zero `on` as 1.  1 ok, 0 bad range (nothing stored). */
-int Text_MakeStyle(int32_t out[5], int on, int dxPct, int dyPct, uint32_t shadowColour, int level)
+int Text_MakeStyle(OpenBGI_t* o, int32_t out[5], int on, int dxPct, int dyPct, uint32_t shadowColour, int level)
 {
 	if(!on)
 	{
 		memset(out, 0, 5 * sizeof(int32_t));
 		return 1;
 	}
-	if(gEngine->gen >= GEN_1_494 && (uint32_t)on > 2)
+	if(o->engine.profile->gen >= GEN_1_492 && (uint32_t)on > 2)
 		return 0;
 	if(dxPct < 0 || dxPct > 100 || dyPct < 0 || dyPct > 100 || (uint32_t)level > 0x100)
 		return 0;
-	out[0] = gEngine->gen >= GEN_1_494 ? on : 1;
+	out[0] = o->engine.profile->gen >= GEN_1_492 ? on : 1;
 	out[1] = dxPct;
 	out[2] = dyPct;
 	out[3] = (int32_t)shadowColour;
@@ -163,27 +129,27 @@ int Text_MakeStyle(int32_t out[5], int on, int dxPct, int dyPct, uint32_t shadow
 	return 1;
 }
 
-void Text_SetInputFinishes(int f) // "90 9F"
+void Text_SetInputFinishes(OpenBGI_t* o, int f) // "90 9F"
 {
-	gTextInputFinishes = f;
+	o->text.textInputFinishes = f;
 }
 
 /* "90 91": which input layer the text output listens on: `mode` 0 = the
  * standard layer 2, 1 = layer `layerNo` (< 0x1000), 2 = the window's
  * priority.  0 ok, 0x80000004 unknown mode, 0x80000005 bad layer number. */
-int Text_SetLayerMode(int mode, int layerNo)
+int Text_SetLayerMode(OpenBGI_t* o, int mode, int layerNo)
 {
 	switch(mode)
 	{
 		case 0:
 		case 2:
-			gTextLayerMode = mode;
+			o->text.textLayerMode = mode;
 			return 0;
 		case 1:
-			if((uint32_t)layerNo >= (gEngine->gen >= GEN_1_529 ? 0x10000u : 0x1000u)) // a priority: 0x10000 of them from 1.529 on
+			if((uint32_t)layerNo >= (o->engine.profile->gen >= GEN_1_529 ? 0x10000u : 0x1000u)) // a priority: 0x10000 of them from 1.529 on
 				return (int)0x80000005;
-			gTextLayerNo = layerNo;
-			gTextLayerMode = 1;
+			o->text.textLayerNo = layerNo;
+			o->text.textLayerMode = 1;
 			return 0;
 		default:
 			return (int)0x80000004;
@@ -196,45 +162,40 @@ int Text_SetLayerMode(int mode, int layerNo)
  * (25..100), the indent every line starts with when ruby is on, and
  * whether a leading bracket hangs into the margin.  0 ok, 0x80000001 bad
  * size percentage, 0x80000002 negative indent (nothing stored). */
-int Text_SetRichParams(int charDelay, int fadeSteps, int pitch, int sizePct, int indent, int hangBrackets)
+int Text_SetRichParams(OpenBGI_t* o, int charDelay, int fadeSteps, int pitch, int sizePct, int indent, int hangBrackets)
 {
 	if(sizePct < 0x19 || sizePct > 0x64)
 		return (int)0x80000001;
 	if(indent < 0)
 		return (int)0x80000002;
-	gRubyCharDelay = charDelay;
-	gRubyFadeSteps = (uint32_t)fadeSteps > 0 ? fadeSteps : 1;
-	gTextIndent = indent;
-	gCharPitch = pitch;
-	gRubySizePct = sizePct;
-	gHangBrackets = hangBrackets;
+	o->text.rubyCharDelay = charDelay;
+	o->text.rubyFadeSteps = (uint32_t)fadeSteps > 0 ? fadeSteps : 1;
+	o->text.textIndent = indent;
+	o->text.charPitch = pitch;
+	o->text.rubySizePct = sizePct;
+	o->text.hangBrackets = hangBrackets;
 	return 0;
 }
 
-int32_t Text_GetIndent(void)
+int32_t Text_GetIndent(OpenBGI_t* o)
 {
-	return gTextIndent;
+	return o->text.textIndent;
 }
 
 // ---- the text functions of 1.573 on ("91 9A") --------------------------------------------------
 
-int32_t gTextFunc[TEXT_FUNC_MAX] = {1, 0, 0x10000, 0, 0, 0, 0, 0, 1, 0, 0, 0}; // the defaults as a 1.659 build has them
-int32_t gTextLastPos[2];                                                       // "92 9B" 0x100: the pen after the last layout into a bitmap
-uint32_t gTextLastColour;                                                      // "92 9B" 0x101: the colour in effect at its end
-static int32_t gTextScaleRecip;                                                // "91 99": 16.16 reciprocal of the divisor
-
 /* "91 9A": store the parameter of text function `func` (0, or 0x80000000 +
- * n) in gTextFunc.  Each build accepts the numbers it had: none before
- * 1.573, function 0 only before 1.616, up to 0x80000001 in 1.616, up to
- * 0x80000002 in 1.636, up to 0x80000003 before 1.653, up to 0x80000008
- * before 1.659, up to 0x80000009 before 1.669, up to 0x8000000A from then
- * on.  0 ok, 0x80000007 unknown number, 0x80000008 bad parameter.
- * Function 0x80000001 refuses a negative parameter; 0x80000005 takes only
- * 0 and 1 and silently ignores the rest. */
-uint32_t Text_SetFunction(uint32_t func, int32_t param)
+ * n) in o->text.textFunc.  Each build accepts the numbers it had: none
+ * before 1.573, function 0 only before 1.616, up to 0x80000001 in 1.616,
+ * up to 0x80000002 in 1.636, up to 0x80000003 before 1.653, up to
+ * 0x80000008 before 1.659, up to 0x80000009 before 1.669, up to 0x8000000A
+ * from then on.  0 ok, 0x80000007 unknown number, 0x80000008 bad
+ * parameter.  Function 0x80000001 refuses a negative parameter; 0x80000005
+ * takes only 0 and 1 and silently ignores the rest. */
+uint32_t Text_SetFunction(OpenBGI_t* o, uint32_t func, int32_t param)
 {
 	int count, idx;
-	EngineGen_t gen = gEngine->gen;
+	EngineGen_t gen = o->engine.profile->gen;
 	if(gen < GEN_1_573)
 		count = 0;
 	else if(gen < GEN_1_616)
@@ -264,10 +225,10 @@ uint32_t Text_SetFunction(uint32_t func, int32_t param)
 	if(idx == 6)
 	{
 		if((uint32_t)param < 2)
-			gTextFunc[idx] = param;
+			o->text.textFunc[idx] = param;
 		return 0;
 	}
-	gTextFunc[idx] = param;
+	o->text.textFunc[idx] = param;
 	return 0;
 }
 
@@ -275,10 +236,10 @@ uint32_t Text_SetFunction(uint32_t func, int32_t param)
  * measures through its 16.16 reciprocal (x * recip >> 16); 0 turns it off.
  * 1 ok, 0 for a negative value.  The reciprocal is only stored here: no
  * measure of this engine applies it. */
-int Text_SetScaleDivisor(int32_t v)
+int Text_SetScaleDivisor(OpenBGI_t* o, int32_t v)
 {
 	if(v < 0)
 		return 0;
-	gTextScaleRecip = v ? (int32_t)((0x10000u + (uint32_t)v - 1) / (uint32_t)v) : 0;
+	o->text.textScaleRecip = v ? (int32_t)((0x10000u + (uint32_t)v - 1) / (uint32_t)v) : 0;
 	return 1;
 }

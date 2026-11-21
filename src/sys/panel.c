@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * panel.c - the button panel (the "90 BA" controller) and the "90 B6"
- *           painter; the interface is inc/bgi/panel.h, which describes the
- *           record layout, and docs/panel_system.md the system
+ *           painter; the interface is src/include/bgi/panel.h, which describes the
+ *           record layout, and docs/dev/panel_system.md the system
  *
  * ButtonPanel_Start copies the group / button tables once more into the
  * panel, paints every button into the window's text layer and gives each
@@ -38,20 +38,22 @@
 #include "bgi/gfx/objects.h"
 #include "bgi/gfx/bmpmgr.h"
 #include "bgi/input.h"
+#include "bgi/inputmap.h"
 #include "bgi/sys.h"
 #include "bgi/vm.h"
+#include "bgi/core.h"
 
 // the window's sort key: the layer key the panel uses on the input layer stacks
-#define WIN_KEY(p) ((p)->win->obj.vt->sortKey(&(p)->win->obj))
+#define WIN_KEY(o, p) ((p)->win->obj.vt->sortKey(o, &(p)->win->obj))
 
-static void ButtonPanel_Destroy(ObjProc_t* p);
-static void ButtonPanel_Animate(ButtonPanel_t* p);
-static int ButtonPanel_FinishOnDecide(ButtonPanel_t* p);
-static int ButtonPanel_SetFocus(ButtonPanel_t* p, int btn, int force);
-static int ButtonPanel_GetBitmap(ButtonPanel_t* p, int32_t* out, int g, int i, int focus, int sel);
-static int ButtonPanel_SetSelection(ButtonPanel_t* p, int g, int i);
-static int ButtonPanel_CanDecide(ButtonPanel_t* p, int g, int i);
-static void ButtonPanel_ClickOutside(ButtonPanel_t* p);
+static void ButtonPanel_Destroy(OpenBGI_t* o, ObjProc_t* p);
+static void ButtonPanel_Animate(OpenBGI_t* o, ButtonPanel_t* p);
+static int ButtonPanel_FinishOnDecide(OpenBGI_t* o, ButtonPanel_t* p);
+static int ButtonPanel_SetFocus(OpenBGI_t* o, ButtonPanel_t* p, int btn, int force);
+static int ButtonPanel_GetBitmap(OpenBGI_t* o, ButtonPanel_t* p, int32_t* out, int g, int i, int focus, int sel);
+static int ButtonPanel_SetSelection(OpenBGI_t* o, ButtonPanel_t* p, int g, int i);
+static int ButtonPanel_CanDecide(OpenBGI_t* o, ButtonPanel_t* p, int g, int i);
+static void ButtonPanel_ClickOutside(OpenBGI_t* o, ButtonPanel_t* p);
 
 static const PanelVtbl_t ButtonPanel_Vtbl = {
 	{ButtonPanel_Destroy, ButtonPanel_Poll, ButtonPanel_OnMessage}, ButtonPanel_Animate, ButtonPanel_FinishOnDecide,
@@ -66,20 +68,20 @@ static const PanelVtbl_t ButtonPanel_Vtbl = {
  * and attaches a size-less virtual child whose layer key stands for "the
  * window" on the mouse layer stack.  The panel is idle until
  * ButtonPanel_Start. */
-void ButtonPanel_Ctor(ButtonPanel_t* p, Window_t* win)
+void ButtonPanel_Ctor(OpenBGI_t* o, ButtonPanel_t* p, Window_t* win)
 {
 	VirtualObject_t* v;
-	ObjProc_Ctor(&p->p, 0x80, &win->obj);
+	ObjProc_Ctor(o, &p->p, 0x80, &win->obj);
 	p->p.vt = &ButtonPanel_Vtbl.base;
 	p->isSprite = 0;
-	Panel_InitKeyMaps();
+	Panel_InitKeyMaps(o);
 	p->started = 0;
 	p->win = win;
 	v = (VirtualObject_t*)BGI_Alloc(sizeof *v);
-	VirtualObject_Ctor(v, 0, &win->obj);
+	VirtualObject_Ctor(o, v, 0, &win->obj);
 	p->virt = &v->obj;
 	DispObj_SetVirtualSize(p->virt, 0, 0);
-	DispObj_AttachChild(&win->obj, p->virt, 0, 0);
+	DispObj_AttachChild(o, &win->obj, p->virt, 0, 0);
 	p->currentGroup = -1;
 	p->focus = -1;
 	p->groupCount = 0;
@@ -103,29 +105,29 @@ void ButtonPanel_Ctor(ButtonPanel_t* p, Window_t* win)
 	p->input = 0;
 }
 
-ButtonPanel_t* ButtonPanel_New(Window_t* win)
+ButtonPanel_t* ButtonPanel_New(OpenBGI_t* o, Window_t* win)
 {
 	ButtonPanel_t* p = (ButtonPanel_t*)BGI_Alloc(sizeof *p);
-	ButtonPanel_Ctor(p, win);
+	ButtonPanel_Ctor(o, p, win);
 	return p;
 }
 
 // stop the panel, drop its virtual child and the pending events, leave the proc slot
-void ButtonPanel_Dtor(ButtonPanel_t* p)
+void ButtonPanel_Dtor(OpenBGI_t* o, ButtonPanel_t* p)
 {
 	p->p.vt = &ButtonPanel_Vtbl.base; // the base class' hooks from here on, as a C++ destructor would
-	ButtonPanel_Stop(p);
+	ButtonPanel_Stop(o, p);
 	DispObj_DetachChild(&p->win->obj, p->virt);
 	if(p->virt)
-		p->virt->vt->destroy(p->virt, 1);
+		p->virt->vt->destroy(o, p->virt, 1);
 	while(ButtonPanel_DropEvent(p))
 		;
 	ObjProc_Dtor(&p->p);
 }
 
-static void ButtonPanel_Destroy(ObjProc_t* p)
+static void ButtonPanel_Destroy(OpenBGI_t* o, ObjProc_t* p)
 {
-	ButtonPanel_Dtor((ButtonPanel_t*)p);
+	ButtonPanel_Dtor(o, (ButtonPanel_t*)p);
 	BGI_Free(p);
 }
 
@@ -230,7 +232,7 @@ void Panel_FreeDesc(PanelDesc_t* d)
  * partial copy has been freed.  The original keeps the script layout and
  * overwrites the pointer fields in place; here the copy is the host-side
  * type of panel.h.  The caller frees the copy with Panel_FreeDesc. */
-int Panel_CopyDesc(PanelDesc_t** out, const PanelDescScript_t* d, Thread_t* t)
+int Panel_CopyDesc(OpenBGI_t* o, PanelDesc_t** out, const PanelDescScript_t* d, Thread_t* t)
 {
 	PanelDesc_t* c = (PanelDesc_t*)BGI_Alloc(sizeof *c);
 	const PanelGroupScript_t* src;
@@ -244,7 +246,7 @@ int Panel_CopyDesc(PanelDesc_t** out, const PanelDescScript_t* d, Thread_t* t)
 	c->inputMask = d->inputMask;
 	c->keyMap = d->keyMap;
 	c->selectOnDecide = d->selectOnDecide;
-	src = (const PanelGroupScript_t*)ResolvePtr(d->groups, t);
+	src = (const PanelGroupScript_t*)ResolvePtr(o, d->groups, t);
 	if(!src || d->groupCount <= 0 || d->groupCount > 0x100)
 	{
 		Panel_FreeDesc(c);
@@ -267,7 +269,7 @@ int Panel_CopyDesc(PanelDesc_t** out, const PanelDescScript_t* d, Thread_t* t)
 		groups[g].clickDecides = src[g].clickDecides;
 		groups[g].linkId = src[g].linkId;
 		memcpy(groups[g].ov, src[g].ov, sizeof groups[g].ov);
-		buttons = (const PanelButton_t*)ResolvePtr(src[g].buttons, t);
+		buttons = (const PanelButton_t*)ResolvePtr(o, src[g].buttons, t);
 		count = src[g].count;
 		if(!buttons || count <= 0 || count > 0x100)
 		{
@@ -305,14 +307,14 @@ static int StartBitmap(const PanelButton_t* b, int i, int selected)
 /* the window reset shared by the starters and painters: all items off, no
  * sub-sprites, the text layer cleared, at level 0 and shown when `showText`
  * is set, then recomposited */
-static void Panel_ResetWindow(Window_t* w, int showText)
+static void Panel_ResetWindow(OpenBGI_t* o, Window_t* w, int showText)
 {
-	Window_ItemsDisableAll(w);
-	Window_SubAlloc(w, 0);
-	Window_ClearText(w);
+	Window_ItemsDisableAll(o, w);
+	Window_SubAlloc(o, w, 0);
+	Window_ClearText(o, w);
 	Window_SetTextLevel(w, 0);
 	Window_ShowText(w, showText);
-	Window_RecompositeAll(w);
+	Window_RecompositeAll(o, w);
 }
 
 /* "90 B6": paint the enabled buttons of a copied table into the text layer
@@ -322,12 +324,12 @@ static void Panel_ResetWindow(Window_t* w, int showText)
  * count outside 1..0x100 (unreachable after Panel_CopyDesc, which rejects
  * both).  The window is reset first (Panel_ResetWindow) in every case and
  * its text rectangle is marked dirty. */
-uint32_t Panel_Paint(Window_t* w, const PanelDesc_t* d)
+uint32_t Panel_Paint(OpenBGI_t* o, Window_t* w, const PanelDesc_t* d)
 {
 	uint32_t status = 0x80000001;
 	Rect_t area, r;
 	int g;
-	Panel_ResetWindow(w, 1);
+	Panel_ResetWindow(o, w, 1);
 	if(d->groupCount > 0 && d->groupCount <= 0x100)
 	{
 		const PanelGroup_t* groups = GROUPS_OF(d);
@@ -348,15 +350,15 @@ uint32_t Panel_Paint(Window_t* w, const PanelDesc_t* d)
 					Bmp_t bmp;
 					if(!b[i].enabled)
 						continue;
-					if(BmpMgr_GetInfo(gPanelBmpMgr, &bmp, StartBitmap(&b[i], i, groups[g].selected)))
-						Window_DrawBmpToText(w, &r, b[i].x + area.l, b[i].y + area.t, &bmp, 0, 0);
+					if(BmpMgr_GetInfo(o->panel.panelBmpMgr, &bmp, StartBitmap(&b[i], i, groups[g].selected)))
+						Window_DrawBmpToText(o, w, &r, b[i].x + area.l, b[i].y + area.t, &bmp, 0, 0);
 				}
 			}
 			status = 0;
 		}
 	}
-	Window_TextScreenRect(w, &r);
-	Gfx_AddDirty(gPanelGfx, w->obj.vt->sortKey(&w->obj), &r);
+	Window_TextScreenRect(o, w, &r);
+	Gfx_AddDirty(o->panel.panelGfx, w->obj.vt->sortKey(o, &w->obj), &r);
 	return status;
 }
 
@@ -413,19 +415,19 @@ static int Panel_BuildGrid(ButtonPanel_t* p, PanelGroup_t* groups, int groupCoun
  * known bitmap number by that bitmap's shape, anything else by the
  * rectangle.  The object is owned by the panel and destroyed in
  * ButtonPanel_Stop. */
-DispObj_t* Panel_MakeHitObject(ButtonPanel_t* p, int x, int y, const Bmp_t* bmp, int maskBmp)
+DispObj_t* Panel_MakeHitObject(OpenBGI_t* o, ButtonPanel_t* p, int x, int y, const Bmp_t* bmp, int maskBmp)
 {
 	VirtualObject_t* v = (VirtualObject_t*)BGI_Alloc(sizeof *v);
 	Bmp_t mask;
-	VirtualObject_Ctor(v, 0, &p->win->obj);
+	VirtualObject_Ctor(o, v, 0, &p->win->obj);
 	DispObj_SetVirtualSize(&v->obj, bmp->w, bmp->h);
-	v->obj.vt->setVisible(&v->obj, p->win->obj.vt->isVisible(&p->win->obj));
-	DispObj_AttachChild(&p->win->obj, &v->obj, x, y);
+	v->obj.vt->setVisible(o, &v->obj, p->win->obj.vt->isVisible(o, &p->win->obj));
+	DispObj_AttachChild(o, &p->win->obj, &v->obj, x, y);
 	if(maskBmp == -2)
 		DispObj_DisableHit(&v->obj);
-	else if(BmpMgr_GetInfo(gPanelBmpMgr, &mask, maskBmp))
+	else if(BmpMgr_GetInfo(o->panel.panelBmpMgr, &mask, maskBmp))
 		DispObj_BuildHitMask(&v->obj, &mask);
-	MouseLayer_PushSprite(&v->obj);
+	MouseLayer_PushSprite(o, &v->obj);
 	return &v->obj;
 }
 
@@ -438,23 +440,23 @@ DispObj_t* Panel_MakeHitObject(ButtonPanel_t* p, int x, int y, const Bmp_t* bmp,
  * `selectedAtStart` (the current group has a selection) the pointer
  * position is recorded so that hover selection waits for a movement; else
  * it is set to an impossible value and the first pass selects at once. */
-void ButtonPanel_FinishStart(ButtonPanel_t* p, int selectedAtStart)
+void ButtonPanel_FinishStart(OpenBGI_t* o, ButtonPanel_t* p, int selectedAtStart)
 {
 	int32_t pos[2];
-	p->win->obj.vt->getPos(&p->win->obj, pos);
-	p->win->obj.vt->setPos(&p->win->obj, pos[0], pos[1]);
+	p->win->obj.vt->getPos(o, &p->win->obj, pos);
+	p->win->obj.vt->setPos(o, &p->win->obj, pos[0], pos[1]);
 	if(p->modal)
 	{
-		MouseLayer_Push(WIN_KEY(p));
-		KeyLayer_Push(WIN_KEY(p));
-		InputFocus_Add(p->p.id | 0x80000000u, WIN_KEY(p));
-		ButtonPanel_SetCurrentGroup(p, p->currentGroup);
+		MouseLayer_Push(o, WIN_KEY(o, p));
+		KeyLayer_Push(o, WIN_KEY(o, p));
+		InputFocus_Add(o, p->p.id | 0x80000000u, WIN_KEY(o, p));
+		ButtonPanel_SetCurrentGroup(o, p, p->currentGroup);
 	}
 	else if(p->mouse)
-		MouseLayer_PushSprite(&p->win->obj);
-	Input_Poll(WIN_KEY(p), WIN_KEY(p));
-	Input_Poll(0, p->virt->vt->sortKey(p->virt));
-	if(PANEL_VT(p)->setFocus(p, ButtonPanel_HitTestStore(p), 1))
+		MouseLayer_PushSprite(o, &p->win->obj);
+	Input_Poll(o, WIN_KEY(o, p), WIN_KEY(o, p));
+	Input_Poll(o, 0, p->virt->vt->sortKey(o, p->virt));
+	if(PANEL_VT(p)->setFocus(o, p, ButtonPanel_HitTestStore(o, p), 1))
 	{
 		if(p->focus != -1)
 		{
@@ -468,10 +470,10 @@ void ButtonPanel_FinishStart(ButtonPanel_t* p, int selectedAtStart)
 	// hover selection only reacts to pointer movement away from where it starts
 	// (0x7fffffff never matches a real position, so the first pass counts as a move)
 	if(selectedAtStart)
-		GetMouseClientPos(p->lastMouse);
+		GetMouseClientPos(o, p->lastMouse);
 	else
 		p->lastMouse[0] = p->lastMouse[1] = 0x7fffffff;
-	p->hover = ButtonPanel_HitTest(p, NULL, 0);
+	p->hover = ButtonPanel_HitTest(o, p, NULL, 0);
 	p->started = 1;
 }
 
@@ -485,15 +487,15 @@ void ButtonPanel_FinishStart(ButtonPanel_t* p, int selectedAtStart)
  * once.  Returns 0, or 0x80000001 for a group count outside 1..0x100,
  * 0x80000002 for a button count outside 1..0x100 (the window stays reset
  * then).  The copy `d` is not kept; the caller frees it. */
-uint32_t ButtonPanel_Start(ButtonPanel_t* p, const PanelDesc_t* d)
+uint32_t ButtonPanel_Start(OpenBGI_t* o, ButtonPanel_t* p, const PanelDesc_t* d)
 {
 	uint32_t status = 0x80000001;
 	Rect_t area, r;
 	PanelGroup_t* src;
 	PanelInfo_t* info;
 	int g, total, startSel = 0;
-	PANEL_VT(p)->stop(p);
-	Panel_ResetWindow(p->win, 1);
+	PANEL_VT(p)->stop(o, p);
+	Panel_ResetWindow(o, p->win, 1);
 	if(d->groupCount <= 0 || d->groupCount > 0x100)
 		goto done;
 	Window_GetTextArea(p->win, &area);
@@ -535,7 +537,7 @@ uint32_t ButtonPanel_Start(ButtonPanel_t* p, const PanelDesc_t* d)
 		for(i = 0; i < count; i++, info++)
 		{
 			Bmp_t bmp;
-			int ok = sb[i].enabled && BmpMgr_GetInfo(gPanelBmpMgr, &bmp, StartBitmap(&sb[i], i, dg->selected));
+			int ok = sb[i].enabled && BmpMgr_GetInfo(o->panel.panelBmpMgr, &bmp, StartBitmap(&sb[i], i, dg->selected));
 			info->hasBitmap = ok;
 			info->group = g;
 			info->index = i;
@@ -547,20 +549,20 @@ uint32_t ButtonPanel_Start(ButtonPanel_t* p, const PanelDesc_t* d)
 				continue;
 			}
 			db[i] = sb[i];
-			Window_DrawBmpToText(p->win, &r, db[i].x + area.l, db[i].y + area.t, &bmp, 0, 0);
-			info->virt = Panel_MakeHitObject(p, db[i].x + area.l, db[i].y + area.t, &bmp, sb[i].hitMaskBmp);
+			Window_DrawBmpToText(o, p->win, &r, db[i].x + area.l, db[i].y + area.t, &bmp, 0, 0);
+			info->virt = Panel_MakeHitObject(o, p, db[i].x + area.l, db[i].y + area.t, &bmp, sb[i].hitMaskBmp);
 			if(sb[i].hotkey)
-				GetKeyTrigger((int)(sb[i].hotkey & 0x7fffffff)); // consume the pending presses of the hot key
+				GetKeyTrigger(o, (int)(sb[i].hotkey & 0x7fffffff)); // consume the pending presses of the hot key
 		}
 	}
 	// the descriptor's own current group and selection decide, not the range-checked copies
 	if(d->currentGroup != -1 && src[d->currentGroup].selected != -1)
 		startSel = 1;
-	ButtonPanel_FinishStart(p, startSel);
+	ButtonPanel_FinishStart(o, p, startSel);
 	status = 0;
 done:
-	Window_TextScreenRect(p->win, &r);
-	Gfx_AddDirty(gPanelGfx, WIN_KEY(p), &r);
+	Window_TextScreenRect(o, p->win, &r);
+	Gfx_AddDirty(o->panel.panelGfx, WIN_KEY(o, p), &r);
 	ObjProc_MarkDirty(&p->p);
 	return status;
 }
@@ -570,12 +572,12 @@ done:
  * input focus of a modal panel) back and drop the pending events.  The
  * window's pixels are left as they are.  Safe on a panel that is not
  * running. */
-void ButtonPanel_Stop(ButtonPanel_t* p)
+void ButtonPanel_Stop(OpenBGI_t* o, ButtonPanel_t* p)
 {
 	int g, k = 0;
 	p->started = 0;
-	Input_Poll(WIN_KEY(p), WIN_KEY(p));
-	Input_Poll(0, p->virt->vt->sortKey(p->virt));
+	Input_Poll(o, WIN_KEY(o, p), WIN_KEY(o, p));
+	Input_Poll(o, 0, p->virt->vt->sortKey(o, p->virt));
 	for(g = 0; g < p->groupCount; g++)
 	{
 		int i;
@@ -584,10 +586,10 @@ void ButtonPanel_Stop(ButtonPanel_t* p)
 			PanelInfo_t* info = &p->buttons[k];
 			if(!info->hasBitmap)
 				continue;
-			MouseLayer_PopSprite(info->virt);
+			MouseLayer_PopSprite(o, info->virt);
 			DispObj_DetachChild(&p->win->obj, info->virt);
 			if(info->virt)
-				info->virt->vt->destroy(info->virt, 1);
+				info->virt->vt->destroy(o, info->virt, 1);
 		}
 		BGI_Free(BUTTONS_OF(&p->groups[g]));
 	}
@@ -596,12 +598,12 @@ void ButtonPanel_Stop(ButtonPanel_t* p)
 	BGI_Free(p->grid);
 	if(p->modal)
 	{
-		MouseLayer_Pop(WIN_KEY(p));
-		KeyLayer_Pop(WIN_KEY(p));
-		InputFocus_Remove(p->p.id | 0x80000000u);
+		MouseLayer_Pop(o, WIN_KEY(o, p));
+		KeyLayer_Pop(o, WIN_KEY(o, p));
+		InputFocus_Remove(o, p->p.id | 0x80000000u);
 	}
 	else if(p->mouse)
-		MouseLayer_PopSprite(&p->win->obj);
+		MouseLayer_PopSprite(o, &p->win->obj);
 	p->groupCount = 0;
 	p->groups = NULL;
 	p->currentGroup = -1;
@@ -622,12 +624,12 @@ void ButtonPanel_Stop(ButtonPanel_t* p)
 // ========================================================================
 
 // mark the screen rectangle of window item `item` dirty (nothing for an item without one)
-void ButtonPanel_DirtyItem(ButtonPanel_t* p, int item)
+void ButtonPanel_DirtyItem(OpenBGI_t* o, ButtonPanel_t* p, int item)
 {
 	Rect_t r;
-	if(Window_ItemRect(p->win, &r, item))
+	if(Window_ItemRect(o, p->win, &r, item))
 	{
-		Gfx_AddDirty(gPanelGfx, WIN_KEY(p), &r);
+		Gfx_AddDirty(o->panel.panelGfx, WIN_KEY(o, p), &r);
 		ObjProc_MarkDirty(&p->p);
 	}
 }
@@ -636,7 +638,7 @@ void ButtonPanel_DirtyItem(ButtonPanel_t* p, int item)
  * button in window items firstItem and firstItem + 1, positioned relative
  * to the text area `area`; an overlay whose bitmap is unknown switches its
  * item off instead. */
-void ButtonPanel_DrawOverlays(ButtonPanel_t* p, int firstItem, int32_t ov[2][3], const Rect_t* area)
+void ButtonPanel_DrawOverlays(OpenBGI_t* o, ButtonPanel_t* p, int firstItem, int32_t ov[2][3], const Rect_t* area)
 {
 	int k;
 	for(k = 0; k < 2; k++)
@@ -644,16 +646,16 @@ void ButtonPanel_DrawOverlays(ButtonPanel_t* p, int firstItem, int32_t ov[2][3],
 		Bmp_t bmp;
 		Rect_t r;
 		int item = firstItem + k;
-		if(BmpMgr_GetInfo(gPanelBmpMgr, &bmp, ov[k][2]))
+		if(BmpMgr_GetInfo(o->panel.panelBmpMgr, &bmp, ov[k][2]))
 		{
-			Window_ItemSetBitmap(p->win, item, &bmp);
-			Window_ItemSet(p->win, item, area->l + ov[k][0], area->t + ov[k][1], 0);
-			Window_ItemEnable(p->win, item, 1);
-			Window_ItemRect(p->win, &r, item); // the result is not checked: the rectangle is added even for an empty item
-			Gfx_AddDirty(gPanelGfx, WIN_KEY(p), &r);
+			Window_ItemSetBitmap(o, p->win, item, &bmp);
+			Window_ItemSet(o, p->win, item, area->l + ov[k][0], area->t + ov[k][1], 0);
+			Window_ItemEnable(o, p->win, item, 1);
+			Window_ItemRect(o, p->win, &r, item); // the result is not checked: the rectangle is added even for an empty item
+			Gfx_AddDirty(o->panel.panelGfx, WIN_KEY(o, p), &r);
 		}
 		else
-			Window_ItemEnable(p->win, item, 0);
+			Window_ItemEnable(o, p->win, item, 0);
 		ObjProc_MarkDirty(&p->p);
 	}
 }
@@ -663,22 +665,22 @@ void ButtonPanel_DrawOverlays(ButtonPanel_t* p, int firstItem, int32_t ov[2][3],
  * layer wherever the bitmap has alpha) and the new bitmap `newNo` drawn in
  * its place; both rectangles are marked dirty.  Returns 0 without drawing
  * when either bitmap number is unknown. */
-static int ButtonPanel_Redraw(ButtonPanel_t* p, const PanelButton_t* b, int newNo, int oldNo)
+static int ButtonPanel_Redraw(OpenBGI_t* o, ButtonPanel_t* p, const PanelButton_t* b, int newNo, int oldNo)
 {
 	Bmp_t bmpNew, bmpOld;
 	Rect_t area, r;
 	int x, y;
-	if(!BmpMgr_GetInfo(gPanelBmpMgr, &bmpNew, newNo))
+	if(!BmpMgr_GetInfo(o->panel.panelBmpMgr, &bmpNew, newNo))
 		return 0;
-	if(!BmpMgr_GetInfo(gPanelBmpMgr, &bmpOld, oldNo))
+	if(!BmpMgr_GetInfo(o->panel.panelBmpMgr, &bmpOld, oldNo))
 		return 0;
 	Window_GetTextArea(p->win, &area);
 	x = b->x + area.l;
 	y = b->y + area.t;
-	Window_DrawBmpToText(p->win, &r, x, y, &bmpOld, 0x40, 1);
-	Gfx_AddDirty(gPanelGfx, WIN_KEY(p), &r);
-	Window_DrawBmpToText(p->win, &r, x, y, &bmpNew, 0, 0);
-	Gfx_AddDirty(gPanelGfx, WIN_KEY(p), &r);
+	Window_DrawBmpToText(o, p->win, &r, x, y, &bmpOld, 0x40, 1);
+	Gfx_AddDirty(o->panel.panelGfx, WIN_KEY(o, p), &r);
+	Window_DrawBmpToText(o, p->win, &r, x, y, &bmpNew, 0, 0);
+	Gfx_AddDirty(o->panel.panelGfx, WIN_KEY(o, p), &r);
 	ObjProc_MarkDirty(&p->p);
 	return 1;
 }
@@ -688,7 +690,7 @@ static int ButtonPanel_Redraw(ButtonPanel_t* p, const PanelButton_t* b, int newN
  * the selected picture when `sel` is set, it is the group's selection and
  * it has one (the selected picture wins).  Returns 0 (and leaves *out)
  * when (g, i) is out of range. */
-static int ButtonPanel_GetBitmap(ButtonPanel_t* p, int32_t* out, int g, int i, int focus, int sel)
+static int ButtonPanel_GetBitmap(OpenBGI_t* o, ButtonPanel_t* p, int32_t* out, int g, int i, int focus, int sel)
 {
 	const PanelGroup_t* grp;
 	const PanelButton_t* b;
@@ -718,34 +720,34 @@ static int IsFocused(ButtonPanel_t* p, int g, int i)
  * and 3 (which are switched off when there is no new button).  Returns 0
  * when `btn` is already the focus and `force` is clear, 1 when the focus
  * was (re)drawn. */
-static int ButtonPanel_SetFocus(ButtonPanel_t* p, int btn, int force)
+static int ButtonPanel_SetFocus(OpenBGI_t* o, ButtonPanel_t* p, int btn, int force)
 {
 	Rect_t area;
 	int32_t a, b;
 	if(p->focus == btn && !force)
 		return 0;
 	Window_GetTextArea(p->win, &area);
-	ButtonPanel_DirtyItem(p, 2);
-	ButtonPanel_DirtyItem(p, 3);
+	ButtonPanel_DirtyItem(o, p, 2);
+	ButtonPanel_DirtyItem(o, p, 3);
 	if(p->focus != -1)
 	{
 		const PanelInfo_t* f = &p->buttons[p->focus];
-		PANEL_VT(p)->getBitmap(p, &a, f->group, f->index, 0, 1);
-		PANEL_VT(p)->getBitmap(p, &b, f->group, f->index, 1, 1);
-		ButtonPanel_Redraw(p, f->button, a, b);
+		PANEL_VT(p)->getBitmap(o, p, &a, f->group, f->index, 0, 1);
+		PANEL_VT(p)->getBitmap(o, p, &b, f->group, f->index, 1, 1);
+		ButtonPanel_Redraw(o, p, f->button, a, b);
 	}
 	if(btn != -1)
 	{
 		const PanelInfo_t* f = &p->buttons[btn];
-		PANEL_VT(p)->getBitmap(p, &a, f->group, f->index, 1, 1);
-		PANEL_VT(p)->getBitmap(p, &b, f->group, f->index, 0, 1);
-		ButtonPanel_Redraw(p, f->button, a, b);
-		ButtonPanel_DrawOverlays(p, 2, f->button->ov, &area);
+		PANEL_VT(p)->getBitmap(o, p, &a, f->group, f->index, 1, 1);
+		PANEL_VT(p)->getBitmap(o, p, &b, f->group, f->index, 0, 1);
+		ButtonPanel_Redraw(o, p, f->button, a, b);
+		ButtonPanel_DrawOverlays(o, p, 2, f->button->ov, &area);
 	}
 	else
 	{
-		Window_ItemEnable(p->win, 2, 0);
-		Window_ItemEnable(p->win, 3, 0);
+		Window_ItemEnable(o, p->win, 2, 0);
+		Window_ItemEnable(o, p->win, 3, 0);
 		ObjProc_MarkDirty(&p->p);
 	}
 	p->focus = btn;
@@ -757,7 +759,7 @@ static int ButtonPanel_SetFocus(ButtonPanel_t* p, int btn, int force)
  * selection (ButtonPanel_ApplyLink).  Returns 0 when `g` is out of range
  * or the group is not selectable, 1 when it became current.  Also reached
  * by message 0x10000001 of "80 AC". */
-int ButtonPanel_SetCurrentGroup(ButtonPanel_t* p, int g)
+int ButtonPanel_SetCurrentGroup(OpenBGI_t* o, ButtonPanel_t* p, int g)
 {
 	Rect_t area;
 	if(g < 0 || g >= p->groupCount)
@@ -765,11 +767,11 @@ int ButtonPanel_SetCurrentGroup(ButtonPanel_t* p, int g)
 	if(!p->groups[g].selectable)
 		return 0;
 	Window_GetTextArea(p->win, &area);
-	ButtonPanel_DirtyItem(p, 0);
-	ButtonPanel_DirtyItem(p, 1);
-	ButtonPanel_DrawOverlays(p, 0, p->groups[g].ov, &area);
+	ButtonPanel_DirtyItem(o, p, 0);
+	ButtonPanel_DirtyItem(o, p, 1);
+	ButtonPanel_DrawOverlays(o, p, 0, p->groups[g].ov, &area);
 	p->currentGroup = g;
-	ButtonPanel_ApplyLink(p, g);
+	ButtonPanel_ApplyLink(o, p, g);
 	return 1;
 }
 
@@ -781,7 +783,7 @@ int ButtonPanel_SetCurrentGroup(ButtonPanel_t* p, int g)
  * (its index is recorded as the selection even so, but nothing is drawn
  * and the links are not applied).  Also reached by message 0x10000002 of
  * "80 AC". */
-static int ButtonPanel_SetSelection(ButtonPanel_t* p, int g, int i)
+static int ButtonPanel_SetSelection(OpenBGI_t* o, ButtonPanel_t* p, int g, int i)
 {
 	PanelGroup_t* grp;
 	int old;
@@ -797,9 +799,9 @@ static int ButtonPanel_SetSelection(ButtonPanel_t* p, int g, int i)
 	if(old != -1)
 	{
 		int f = IsFocused(p, g, old);
-		PANEL_VT(p)->getBitmap(p, &a, g, old, f, 0);
-		PANEL_VT(p)->getBitmap(p, &b, g, old, f, 1);
-		ButtonPanel_Redraw(p, &BUTTONS_OF(grp)[old], a, b);
+		PANEL_VT(p)->getBitmap(o, p, &a, g, old, f, 0);
+		PANEL_VT(p)->getBitmap(o, p, &b, g, old, f, 1);
+		ButtonPanel_Redraw(o, p, &BUTTONS_OF(grp)[old], a, b);
 	}
 	grp->selected = i;
 	if(i == -1)
@@ -808,11 +810,11 @@ static int ButtonPanel_SetSelection(ButtonPanel_t* p, int g, int i)
 		return 0;
 	{
 		int f = IsFocused(p, g, i);
-		PANEL_VT(p)->getBitmap(p, &a, g, i, f, 1);
-		PANEL_VT(p)->getBitmap(p, &b, g, i, f, 0);
-		ButtonPanel_Redraw(p, &BUTTONS_OF(grp)[i], a, b);
+		PANEL_VT(p)->getBitmap(o, p, &a, g, i, f, 1);
+		PANEL_VT(p)->getBitmap(o, p, &b, g, i, f, 0);
+		ButtonPanel_Redraw(o, p, &BUTTONS_OF(grp)[i], a, b);
 	}
-	ButtonPanel_ApplyLink(p, g);
+	ButtonPanel_ApplyLink(o, p, g);
 	return 1;
 }
 
@@ -820,7 +822,7 @@ static int ButtonPanel_SetSelection(ButtonPanel_t* p, int g, int i)
  * every other group with the same id loses its selection, so that linked
  * groups behave like one set of radio buttons.  Returns 0 for a group out
  * of range, else 1. */
-int ButtonPanel_ApplyLink(ButtonPanel_t* p, int g)
+int ButtonPanel_ApplyLink(OpenBGI_t* o, ButtonPanel_t* p, int g)
 {
 	int link, h;
 	if(g < 0 || g >= p->groupCount)
@@ -832,7 +834,7 @@ int ButtonPanel_ApplyLink(ButtonPanel_t* p, int g)
 		return 1;
 	for(h = 0; h < p->groupCount; h++)
 		if(h != g && p->groups[h].linkId == link)
-			PANEL_VT(p)->setSelection(p, h, -1);
+			PANEL_VT(p)->setSelection(o, p, h, -1);
 	return 1;
 }
 
@@ -847,31 +849,42 @@ int ButtonPanel_ApplyLink(ButtonPanel_t* p, int g)
  * `useMask` the object's screen rectangle decides, with it the object's
  * own hit test (the mask bitmap) as well.  `outOffset` (may be NULL)
  * receives the pointer position relative to the button's top left. */
-int ButtonPanel_HitTest(ButtonPanel_t* p, int32_t* outOffset, int useMask)
+int ButtonPanel_HitTest(OpenBGI_t* o, ButtonPanel_t* p, int32_t* outOffset, int useMask)
 {
-	int m[2], k;
-	if(!p->inputEnabled)
+	int m[2];
+	if(!ButtonPanel_TakesPointer(o, p))
 		return -1;
-	if(!InputFocus_IsTop(WIN_KEY(p)))
-		return -1;
-	if(!Panel_Allowed())
-		return -1;
-	GetMouseClientPos(m);
+	GetMouseClientPos(o, m);
+	return ButtonPanel_HitTestAt(o, p, m[0], m[1], outOffset, useMask);
+}
+
+/* whether the panel follows the pointer at all: its input is enabled, its
+ * window holds the input focus and panels are allowed (Panel_Allowed) */
+int ButtonPanel_TakesPointer(OpenBGI_t* o, ButtonPanel_t* p)
+{
+	return p->inputEnabled && InputFocus_IsTop(o, WIN_KEY(o, p)) && Panel_Allowed(o);
+}
+
+/* The hit test of ButtonPanel_HitTest for the pointer at back-buffer
+ * position (x, y), whatever the panel's state; nothing changes. */
+int ButtonPanel_HitTestAt(OpenBGI_t* o, ButtonPanel_t* p, int x, int y, int32_t* outOffset, int useMask)
+{
+	int k;
 	for(k = 0; k < p->total; k++)
 	{
 		const PanelInfo_t* info = &p->buttons[k];
 		Rect_t r;
 		if(!info->hasBitmap)
 			continue;
-		info->virt->vt->screenRect(info->virt, &r);
-		if(m[0] < r.l || m[0] > r.r || m[1] < r.t || m[1] > r.b)
+		info->virt->vt->screenRect(o, info->virt, &r);
+		if(x < r.l || x > r.r || y < r.t || y > r.b)
 			continue;
-		if(useMask && !info->virt->vt->hitTest(info->virt, m[0] - r.l, m[1] - r.t))
+		if(useMask && !info->virt->vt->hitTest(o, info->virt, x - r.l, y - r.t))
 			continue;
 		if(outOffset)
 		{
-			outOffset[0] = m[0] - r.l;
-			outOffset[1] = m[1] - r.t;
+			outOffset[0] = x - r.l;
+			outOffset[1] = y - r.t;
 		}
 		return k;
 	}
@@ -880,12 +893,12 @@ int ButtonPanel_HitTest(ButtonPanel_t* p, int32_t* outOffset, int useMask)
 
 /* the masked hit test that also records the pointer offset inside the hit
  * button as the click position "90 BC" reports (-1, -1 for a miss) */
-int ButtonPanel_HitTestStore(ButtonPanel_t* p)
+int ButtonPanel_HitTestStore(OpenBGI_t* o, ButtonPanel_t* p)
 {
 	int32_t off[2];
 	int hit;
 	p->clickX = p->clickY = -1;
-	hit = ButtonPanel_HitTest(p, off, 1);
+	hit = ButtonPanel_HitTest(o, p, off, 1);
 	if(hit != -1)
 	{
 		p->clickX = off[0];
@@ -900,19 +913,19 @@ int ButtonPanel_HitTestStore(ButtonPanel_t* p)
  * held past the auto-repeat delay.  -1 when none is.  Only a modal panel
  * whose window holds the input focus and owns the top key layer sees the
  * keys. */
-int ButtonPanel_CheckHotkeys(ButtonPanel_t* p)
+int ButtonPanel_CheckHotkeys(OpenBGI_t* o, ButtonPanel_t* p)
 {
 	int k;
 	if(!p->modal)
 		return -1;
-	if(!InputFocus_IsTop(WIN_KEY(p)))
+	if(!InputFocus_IsTop(o, WIN_KEY(o, p)))
 		return -1;
 	for(k = 0; k < p->total; k++)
 	{
 		const PanelInfo_t* info = &p->buttons[k];
 		uint32_t hk;
 		int vk, held = 0;
-		if(!KeyLayer_IsTop(WIN_KEY(p)))
+		if(!KeyLayer_IsTop(o, WIN_KEY(o, p)))
 			continue;
 		if(!info->hasBitmap)
 			continue;
@@ -921,8 +934,8 @@ int ButtonPanel_CheckHotkeys(ButtonPanel_t* p)
 		if(!vk)
 			continue;
 		if(hk & 0x80000000u)
-			held = Key_IsRepeating(vk);
-		if(GetKeyTrigger(vk) || StdKey_MaskBit(p->input, vk) || held)
+			held = Key_IsRepeating(o, vk);
+		if(GetKeyTrigger(o, vk) || StdKey_MaskBit(p->input, vk) || held)
 			return k;
 	}
 	return -1;
@@ -933,7 +946,7 @@ int ButtonPanel_CheckHotkeys(ButtonPanel_t* p)
  * ButtonPanel_Update sets to 1 for the mouse and 0 for the keyboard.
  * Returns 0 for an index out of range, 1 when recorded; "90 BC" reads the
  * decision. */
-int ButtonPanel_Decide(ButtonPanel_t* p, int btn, int flag)
+int ButtonPanel_Decide(OpenBGI_t* o, ButtonPanel_t* p, int btn, int flag)
 {
 	if(btn != -1 && (btn < 0 || btn >= p->total))
 		return 0;
@@ -953,7 +966,7 @@ int ButtonPanel_Decide(ButtonPanel_t* p, int btn, int flag)
  * `flag`; -1 passes for either (a cancel is -1, -1).  Returns 0 when `g`
  * or `i` is out of range, 1 when recorded.  Reached by the keyboard decide
  * of ButtonPanel_Update and by message 0x10000000 of "80 AC". */
-int ButtonPanel_DecideAt(ButtonPanel_t* p, int g, int i, int flag)
+int ButtonPanel_DecideAt(OpenBGI_t* o, ButtonPanel_t* p, int g, int i, int flag)
 {
 	if(g != -1 && (g < 0 || g >= p->groupCount))
 		return 0;
@@ -973,24 +986,24 @@ int ButtonPanel_DecideAt(ButtonPanel_t* p, int g, int i, int flag)
 }
 
 // the `canDecide` hook: every button of a button panel may be decided
-static int ButtonPanel_CanDecide(ButtonPanel_t* p, int g, int i)
+static int ButtonPanel_CanDecide(OpenBGI_t* o, ButtonPanel_t* p, int g, int i)
 {
 	return 1;
 }
 
 // the `clickOutside` hook: a button panel ignores a click beside its buttons (the sprite panel reports it)
-static void ButtonPanel_ClickOutside(ButtonPanel_t* p)
+static void ButtonPanel_ClickOutside(OpenBGI_t* o, ButtonPanel_t* p)
 {
 }
 
 // the `finishOnDecide` hook: a decision ends a button panel
-static int ButtonPanel_FinishOnDecide(ButtonPanel_t* p)
+static int ButtonPanel_FinishOnDecide(OpenBGI_t* o, ButtonPanel_t* p)
 {
 	return 1;
 }
 
 // the `animate` hook: a button panel has nothing to animate
-static void ButtonPanel_Animate(ButtonPanel_t* p)
+static void ButtonPanel_Animate(OpenBGI_t* o, ButtonPanel_t* p)
 {
 }
 
@@ -1001,26 +1014,26 @@ static void ButtonPanel_Animate(ButtonPanel_t* p)
  * and keeps only the mouse buttons, the wheel and the cancel key, mask
  * 0x2c3), then run ButtonPanel_Update, which ends the panel when it returns
  * 1.  Always returns 0: a panel never stops the polling. */
-int ButtonPanel_Poll(ObjProc_t* base)
+int ButtonPanel_Poll(OpenBGI_t* o, ObjProc_t* base)
 {
 	ButtonPanel_t* p = (ButtonPanel_t*)base;
-	ObjProc_ProcessMessages(base);
+	ObjProc_ProcessMessages(o, base);
 	if(!p->started)
 		return 0;
 	if(p->inputEnabled)
 	{
 		uint32_t mask = 0;
 		if(p->modal)
-			mask = Input_Poll(WIN_KEY(p), WIN_KEY(p));
+			mask = Input_Poll(o, WIN_KEY(o, p), WIN_KEY(o, p));
 		else if(p->mouse)
-			mask = Input_Poll(0, WIN_KEY(p));
-		mask |= Input_Poll(0, p->virt->vt->sortKey(p->virt));
+			mask = Input_Poll(o, 0, WIN_KEY(o, p));
+		mask |= Input_Poll(o, 0, p->virt->vt->sortKey(o, p->virt));
 		p->input = p->modal ? mask : (mask & 0x2c3);
 	}
 	else
 		p->input = 0;
-	p->started = ButtonPanel_Update(p) == 0;
-	ObjProc_Flush(base);
+	p->started = ButtonPanel_Update(o, p) == 0;
+	ObjProc_Flush(o, base);
 	return 0;
 }
 
@@ -1033,7 +1046,7 @@ int ButtonPanel_Poll(ObjProc_t* base)
  *   0x10000003 (on)                       enable / disable the panel's input
  * Returns what the operation returned (1 when it took effect); 0 for an
  * unknown message, a bad dword count, or the input switch. */
-int ButtonPanel_OnMessage(ObjProc_t* base, int n, const uint32_t* data)
+int ButtonPanel_OnMessage(OpenBGI_t* o, ObjProc_t* base, int n, const uint32_t* data)
 {
 	ButtonPanel_t* p = (ButtonPanel_t*)base;
 	switch(data[0])
@@ -1041,13 +1054,13 @@ int ButtonPanel_OnMessage(ObjProc_t* base, int n, const uint32_t* data)
 		case 0x10000000:
 			if(n != 3)
 				return 0;
-			if(!PANEL_VT(p)->decideAt(p, (int16_t)(data[1] >> 16), (int16_t)(data[1] & 0xffff), (int)data[2]))
+			if(!PANEL_VT(p)->decideAt(o, p, (int16_t)(data[1] >> 16), (int16_t)(data[1] & 0xffff), (int)data[2]))
 				return 0;
-			if(PANEL_VT(p)->finishOnDecide(p))
+			if(PANEL_VT(p)->finishOnDecide(o, p))
 				p->started = 0;
 			return 1;
-		case 0x10000001: return ButtonPanel_SetCurrentGroup(p, (int)data[1]);
-		case 0x10000002: return PANEL_VT(p)->setSelection(p, (int)data[1], (int)data[2]);
+		case 0x10000001: return ButtonPanel_SetCurrentGroup(o, p, (int)data[1]);
+		case 0x10000002: return PANEL_VT(p)->setSelection(o, p, (int)data[1], (int)data[2]);
 		case 0x10000003: p->inputEnabled = (int)data[1]; return 0;
 		default: return 0;
 	}
@@ -1113,10 +1126,10 @@ static const uint32_t kPanelBits[24] = {0x1, 0x2, 0x4, 0x10, 0x20, 0x40, 0x80, 0
  * down between buttons and left / right between groups, map 2 moves in the
  * group's grid, map 3 moves in the grid with the axes swapped (up / down
  * move left / right).  Maps 4 .. 7 are the user maps of "91 BF". */
-int ButtonPanel_Update(ButtonPanel_t* p)
+int ButtonPanel_Update(OpenBGI_t* o, ButtonPanel_t* p)
 {
 	// the built-in maps (0..3) by standard-key index; Tab (index 23) is the next group, the previous with Shift
-	uint32_t tab = (GetKeyStateEx(0x10) & 0x8000) ? ACT_PREV_GROUP : ACT_NEXT_GROUP; // 0x10 = VK_SHIFT
+	uint32_t tab = (GetKeyStateEx(o, 0x10) & 0x8000) ? ACT_PREV_GROUP : ACT_NEXT_GROUP; // 0x10 = VK_SHIFT
 	uint32_t mapA[24] = {ACT_CLICK, ACT_CANCEL, 0, 0, 0, 0, 0, ACT_DECIDE, ACT_CANCEL_KEY, ACT_PREV_GROUP,
 		ACT_NEXT_GROUP, ACT_PREV, ACT_NEXT, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 	uint32_t mapB[24] = {ACT_CLICK, ACT_CANCEL, 0, 0, 0, 0, 0, ACT_DECIDE, ACT_CANCEL_KEY, ACT_LEFT, ACT_RIGHT,
@@ -1130,7 +1143,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 	int result = 0, g = p->currentGroup, sel = -1, hit, k, cols, rows, row, col, n, idx;
 	uint32_t act = ACT_NONE, bits;
 
-	PANEL_VT(p)->animate(p);
+	PANEL_VT(p)->animate(o, p);
 	if(g >= 0 && g < p->groupCount)
 	{
 		grp = &p->groups[g];
@@ -1140,7 +1153,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 		g = -1;
 
 	// the button under the pointer (rectangle test) is reported when it changes
-	hit = ButtonPanel_HitTest(p, NULL, 0);
+	hit = ButtonPanel_HitTest(o, p, NULL, 0);
 	if(hit != p->hover)
 	{
 		p->hover = hit;
@@ -1150,7 +1163,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 			ButtonPanel_PushEvent(p, 0x10000001, 0xffffffffu, 0xffffffffu);
 	}
 	// the focus follows the pointer (mask test)
-	if(PANEL_VT(p)->setFocus(p, ButtonPanel_HitTestStore(p), 0))
+	if(PANEL_VT(p)->setFocus(o, p, ButtonPanel_HitTestStore(o, p), 0))
 	{
 		if(p->focus != -1)
 		{
@@ -1167,23 +1180,23 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 	if(p->inputEnabled && p->focus != -1 && p->groups[p->buttons[p->focus].group].hoverSelects)
 	{
 		int m[2];
-		GetMouseClientPos(m);
+		GetMouseClientPos(o, m);
 		if(m[0] != p->lastMouse[0] || m[1] != p->lastMouse[1])
 		{
 			const PanelInfo_t* f = &p->buttons[p->focus];
 			int changed;
-			ButtonPanel_SetCurrentGroup(p, f->group);
-			changed = PANEL_VT(p)->setSelection(p, f->group, f->index);
+			ButtonPanel_SetCurrentGroup(o, p, f->group);
+			changed = PANEL_VT(p)->setSelection(o, p, f->group, f->index);
 			sel = grp ? grp->selected : sel;
 			p->lastMouse[0] = m[0];
 			p->lastMouse[1] = m[1];
-			if(changed || gEngine->gen < GEN_1_69_472)
+			if(changed || o->engine.profile->gen < GEN_1_69_472)
 				ButtonPanel_PushEvent(p, 0x10000004, PACK(f->group, f->index), 0);
 		}
 	}
 	// a held left button repeats as clicks on groups that ask for it
 	if(p->inputEnabled && p->focus != -1 && p->groups[p->buttons[p->focus].group].clickDecides &&
-		(Input_PollHeld(p->virt->vt->sortKey(p->virt)) & 1))
+		(Input_PollHeld(o, p->virt->vt->sortKey(o, p->virt)) & 1))
 		p->input |= 1;
 
 	mapA[23] = mapB[23] = mapC[23] = mapD[23] = tab;
@@ -1192,7 +1205,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 	maps[2] = mapD;
 	maps[3] = mapB;
 	for(k = 4; k < 8; k++)
-		maps[k] = Panel_UserKeyMap(k);
+		maps[k] = Panel_UserKeyMap(o, k);
 	// the lowest input bit that is not masked picks the action
 	bits = p->input & ~p->inputMask;
 	for(k = 0; k < 24; k++)
@@ -1209,33 +1222,33 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 		case ACT_CLICK:
 			if(p->focus == -1)
 			{
-				PANEL_VT(p)->clickOutside(p);
+				PANEL_VT(p)->clickOutside(o, p);
 				return result;
 			}
 			{
 				const PanelInfo_t* f = &p->buttons[p->focus];
-				if(!PANEL_VT(p)->canDecide(p, f->group, f->index))
+				if(!PANEL_VT(p)->canDecide(o, p, f->group, f->index))
 					return result;
-				PANEL_VT(p)->decide(p, p->focus, 1);
+				PANEL_VT(p)->decide(o, p, p->focus, 1);
 				if(p->selectOnDecide)
-					PANEL_VT(p)->setSelection(p, f->group, f->index);
-				result = PANEL_VT(p)->finishOnDecide(p);
+					PANEL_VT(p)->setSelection(o, p, f->group, f->index);
+				result = PANEL_VT(p)->finishOnDecide(o, p);
 				if(result)
 					return result;
-				ButtonPanel_SetCurrentGroup(p, f->group); // a panel that goes on moves to the clicked group
+				ButtonPanel_SetCurrentGroup(o, p, f->group); // a panel that goes on moves to the clicked group
 				return result;
 			}
 		case ACT_CANCEL:
-			PANEL_VT(p)->decide(p, -1, 1);
-			return PANEL_VT(p)->finishOnDecide(p);
+			PANEL_VT(p)->decide(o, p, -1, 1);
+			return PANEL_VT(p)->finishOnDecide(o, p);
 		case ACT_DECIDE:
-			if(!PANEL_VT(p)->canDecide(p, g, sel) || g == -1 || sel == -1)
+			if(!PANEL_VT(p)->canDecide(o, p, g, sel) || g == -1 || sel == -1)
 				return result;
-			PANEL_VT(p)->decideAt(p, g, sel, 0);
-			return PANEL_VT(p)->finishOnDecide(p);
+			PANEL_VT(p)->decideAt(o, p, g, sel, 0);
+			return PANEL_VT(p)->finishOnDecide(o, p);
 		case ACT_CANCEL_KEY:
-			PANEL_VT(p)->decide(p, -1, 0);
-			return PANEL_VT(p)->finishOnDecide(p);
+			PANEL_VT(p)->decide(o, p, -1, 0);
+			return PANEL_VT(p)->finishOnDecide(o, p);
 		case ACT_PREV:
 		case ACT_NEXT:
 			// the moves try every button (or group, row, column) once, so that a
@@ -1248,7 +1261,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 					idx = (idx - 1 < 0 || idx - 1 >= (int)grp->count) ? (int)grp->count - 1 : idx - 1;
 				else
 					idx = (idx + 1 < 0 || idx + 1 >= (int)grp->count) ? 0 : idx + 1;
-				if(PANEL_VT(p)->setSelection(p, g, idx))
+				if(PANEL_VT(p)->setSelection(o, p, g, idx))
 				{
 					ButtonPanel_PushEvent(p, 0x10000004, PACK(g, idx), act == ACT_PREV ? DIR_PREV : DIR_NEXT);
 					return result;
@@ -1265,7 +1278,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 					g = (g - 1 < 0 || g - 1 >= p->groupCount) ? p->groupCount - 1 : g - 1;
 				else
 					g = (g + 1 < 0 || g + 1 >= p->groupCount) ? 0 : g + 1;
-				if(ButtonPanel_SetCurrentGroup(p, g))
+				if(ButtonPanel_SetCurrentGroup(o, p, g))
 				{
 					ButtonPanel_PushEvent(p, 0x10000003, (uint32_t)g, act == ACT_PREV_GROUP ? DIR_PREV : DIR_NEXT);
 					return result;
@@ -1288,7 +1301,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 				if(act == ACT_RIGHT && col >= cols)
 					col = 0;
 				idx = row * cols + col;
-				if(PANEL_VT(p)->setSelection(p, g, idx))
+				if(PANEL_VT(p)->setSelection(o, p, g, idx))
 				{
 					ButtonPanel_PushEvent(p, 0x10000004, PACK(g, idx), act == ACT_LEFT ? DIR_LEFT : DIR_RIGHT);
 					return result;
@@ -1311,7 +1324,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 				if(act == ACT_DOWN && row >= rows)
 					row = 0;
 				idx = row * cols + idx % cols;
-				if(PANEL_VT(p)->setSelection(p, g, idx))
+				if(PANEL_VT(p)->setSelection(o, p, g, idx))
 				{
 					ButtonPanel_PushEvent(p, 0x10000004, PACK(g, idx), act == ACT_UP ? DIR_UP : DIR_DOWN);
 					return result;
@@ -1323,7 +1336,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 			// selection cannot move any further in that direction
 			if(!grp)
 				return result;
-			if(idx > 0 && PANEL_VT(p)->setSelection(p, g, idx - 1))
+			if(idx > 0 && PANEL_VT(p)->setSelection(o, p, g, idx - 1))
 				ButtonPanel_PushEvent(p, 0x10000004, PACK(g, idx - 1), DIR_PREV);
 			else
 				ButtonPanel_PushEvent(p, 0x10000005, PACK(g, idx), DIR_PREV);
@@ -1331,7 +1344,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 		case ACT_NEXT_STOP:
 			if(!grp)
 				return result;
-			if(PANEL_VT(p)->setSelection(p, g, idx + 1))
+			if(PANEL_VT(p)->setSelection(o, p, g, idx + 1))
 				ButtonPanel_PushEvent(p, 0x10000004, PACK(g, idx + 1), DIR_NEXT);
 			else
 				ButtonPanel_PushEvent(p, 0x10000005, PACK(g, idx), DIR_NEXT);
@@ -1344,7 +1357,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 			for(col = idx % cols; col > 0;)
 			{
 				col--;
-				if(PANEL_VT(p)->setSelection(p, g, row * cols + col))
+				if(PANEL_VT(p)->setSelection(o, p, g, row * cols + col))
 				{
 					ButtonPanel_PushEvent(p, 0x10000004, PACK(g, row * cols + col), DIR_LEFT);
 					return result;
@@ -1359,7 +1372,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 			row = idx / cols;
 			for(col = idx % cols + 1; col < cols; col++)
 			{
-				if(PANEL_VT(p)->setSelection(p, g, row * cols + col))
+				if(PANEL_VT(p)->setSelection(o, p, g, row * cols + col))
 				{
 					ButtonPanel_PushEvent(p, 0x10000004, PACK(g, row * cols + col), DIR_RIGHT);
 					return result;
@@ -1375,7 +1388,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 			for(row = idx / cols; row > 0;)
 			{
 				row--;
-				if(PANEL_VT(p)->setSelection(p, g, row * cols + col))
+				if(PANEL_VT(p)->setSelection(o, p, g, row * cols + col))
 				{
 					ButtonPanel_PushEvent(p, 0x10000004, PACK(g, row * cols + col), DIR_UP);
 					return result;
@@ -1391,7 +1404,7 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 			col = idx % cols;
 			for(row = idx / cols + 1; row < rows; row++)
 			{
-				if(PANEL_VT(p)->setSelection(p, g, row * cols + col))
+				if(PANEL_VT(p)->setSelection(o, p, g, row * cols + col))
 				{
 					ButtonPanel_PushEvent(p, 0x10000004, PACK(g, row * cols + col), DIR_DOWN);
 					return result;
@@ -1400,10 +1413,90 @@ int ButtonPanel_Update(ButtonPanel_t* p)
 			ButtonPanel_PushEvent(p, 0x10000005, PACK(g, idx), DIR_DOWN);
 			return result;
 		default: // no mapped key: a pressed hot key decides its button (flag 0) and ends the panel at once
-			k = ButtonPanel_CheckHotkeys(p);
+			k = ButtonPanel_CheckHotkeys(o, p);
 			result = k != -1;
 			if(result)
-				PANEL_VT(p)->decide(p, k, 0);
+				PANEL_VT(p)->decide(o, p, k, 0);
 			return result;
+	}
+}
+
+// ========================================================================
+// the targets (bgi/inputmap.h)
+// ========================================================================
+
+// would a click at (x, y) reach the panel through one of its mouse layers (the buttons', the window's)?
+static int PanelLayerAt(OpenBGI_t* o, ButtonPanel_t* p, int x, int y)
+{
+	if(MouseLayer_HitAt(o, p->virt->vt->sortKey(o, p->virt), x, y))
+		return 1;
+	return (p->modal || p->mouse) && MouseLayer_HitAt(o, WIN_KEY(o, p), x, y);
+}
+
+// a click at (x, y) is on button d->part: through the panel's layers, on the button's mask
+static int ReachButton(OpenBGI_t* o, const TargetDesc_t* d, int x, int y)
+{
+	ButtonPanel_t* p = (ButtonPanel_t*)d->ctx;
+	return PanelLayerAt(o, p, x, y) && ButtonPanel_HitTestAt(o, p, x, y, NULL, 1) == d->part;
+}
+
+// a click at (x, y) is beside the buttons, where the sprite panel reports it
+static int ReachBeside(OpenBGI_t* o, const TargetDesc_t* d, int x, int y)
+{
+	ButtonPanel_t* p = (ButtonPanel_t*)d->ctx;
+	return MouseLayer_HitAt(o, WIN_KEY(o, p), x, y) && ButtonPanel_HitTestAt(o, p, x, y, NULL, 1) == -1;
+}
+
+/* Every drawn and visible button of a started panel, and for a sprite
+ * panel of 1.492 on that takes the window's layer the area beside its
+ * buttons; a modal panel claims its window's layer.  A click decides a
+ * button while the panel follows the pointer and its key map gives the
+ * left button the click (the built-in maps do); the class may refuse
+ * a button (canDecide). */
+void ButtonPanel_Targets(OpenBGI_t* o, ButtonPanel_t* p, TargetSink_t* s)
+{
+	uint32_t off = 0;
+	int k, clicks;
+	if(!p->started || !p->win)
+		return;
+	if(p->modal)
+		TargetSink_Claim(s, WIN_KEY(o, p));
+	clicks = !(p->inputMask & kPanelBits[0]) && (p->keyMap < 4 || Panel_UserKeyMap(o, p->keyMap)[0] == ACT_CLICK);
+	if(!ObjProc_GetEnabled(&p->p) || !ButtonPanel_TakesPointer(o, p) || !clicks)
+		off = OPENBGI_TARGET_DISABLED;
+	for(k = 0; k < p->total; k++)
+	{
+		const PanelInfo_t* info = &p->buttons[k];
+		TargetDesc_t d;
+		if(!info->hasBitmap || !info->virt || !info->virt->vt->isVisible(o, info->virt))
+			continue;
+		TargetDesc_Init(&d, OPENBGI_TARGET_BUTTON, info->virt->vt->sortKey(o, info->virt));
+		info->virt->vt->screenRect(o, info->virt, &d.rect);
+		d.flags = off;
+		if(!info->virt->hitEnabled || !PANEL_VT(p)->canDecide(o, p, info->group, info->index))
+			d.flags |= OPENBGI_TARGET_DISABLED; // (a button that is not enabled has its hits switched off)
+		if(p->groups[info->group].selected == info->index)
+			d.flags |= OPENBGI_TARGET_SELECTED;
+		d.owner = p->p.id;
+		d.group = info->group;
+		d.index = info->index;
+		d.reach = ReachButton;
+		d.ctx = p;
+		d.part = k;
+		TargetSink_Add(s, &d);
+	}
+	if(p->isSprite && o->engine.profile->gen >= GEN_1_492 && (p->modal || p->mouse) && p->win->obj.vt->isVisible(o, &p->win->obj))
+	{
+		TargetDesc_t d;
+		TargetDesc_Init(&d, OPENBGI_TARGET_PANEL, WIN_KEY(o, p));
+		d.flags = off | OPENBGI_TARGET_ANYWHERE;
+		if(p->modal)
+			d.whole = 1;
+		else
+			p->win->obj.vt->screenRect(o, &p->win->obj, &d.rect);
+		d.owner = p->p.id;
+		d.reach = ReachBeside;
+		d.ctx = p;
+		TargetSink_Add(s, &d);
 	}
 }

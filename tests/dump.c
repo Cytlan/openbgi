@@ -2,10 +2,10 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * tests/dump.c - unit test of the dump and pack tools (src/dump/, declared
- *                in inc/bgi/dump.h) and of the codecs written for them
+ * tests/dump.c - unit test of the dump and pack tools (src/tools/dump/, declared
+ *                in src/tools/dump.h) and of the codecs written for them
  *                (deflate.h, png.h, the DSC / CompressedBG / BF_Movie
- *                encoders); built as bin/test_dump by `make test`
+ *                encoders); built as test_dump by `make test`
  *
  *   codecs  - CRC-32 against its check value; zlib streams through the
  *             compressor and the decompressor at several levels, a stream
@@ -15,12 +15,13 @@
  *             other encoders, and the channel conversions; the DSC,
  *             CompressedBG and BF_Movie encoders against the engine's
  *             decoders
- *   dump    - a small game is written into a scratch directory under
- *             /tmp: five archives of both index formats holding a program,
- *             a scenario file, two tables, images of every depth and
- *             storage, a movie, an SDC block with a prefix, two sounds,
- *             plain files, a Shift-JIS name and two names that want the
- *             same file - plus a file that only looks like an archive.
+ *   dump    - a small game is written into a scratch directory in the
+ *             temporary directory: five archives of both index formats
+ *             holding a program, a scenario file, two tables, images of
+ *             every depth and storage, a movie, an SDC block with a
+ *             prefix, two sounds, plain files, a Shift-JIS name and two
+ *             names that want the same file - plus a file that only looks
+ *             like an archive.
  *             Dump_Run has to identify the game, convert every entry to
  *             its kind and refuse to write over the dump a second time
  *   pack    - Pack_Run on the untouched dump gives archives identical to
@@ -36,7 +37,8 @@
  *
  * A failure names the check.  The scratch directory is removed at the end.
  */
-#include "bgi/dump.h"
+#include "tools/dump.h"
+#include "bgi/core.h"
 #include "bgi/arcread.h"
 #include "bgi/bfmovie.h"
 #include "bgi/bpc.h"
@@ -45,22 +47,11 @@
 #include "bgi/png.h"
 #include "bgi/scn.h"
 #include "bgi/snd/bw.h"
-#include "bgi/os.h"
+#include "host/os.h"
 
-#include <time.h>
-#include <unistd.h>
+#include "testhost.h"
 
-static int gFails; // the number of failed checks so far
-// evaluate a condition; print it with its location and count a failure when it is false
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 static uint32_t gSeed = 2026;
 // a small deterministic generator for test data
@@ -224,7 +215,7 @@ static void TestPng(void)
 	}
 }
 
-static void TestEncoders(void)
+static void TestEncoders(OpenBGI_t* o)
 {
 	uint32_t n = 300000, size = 0, i;
 	uint8_t* data = (uint8_t*)malloc(n);
@@ -238,14 +229,14 @@ static void TestEncoders(void)
 	{
 		z = BGI_DscEncode(data, sizes[i], 0x12345 + i, &size);
 		CHECK(BGI_IsDsc(z) && BGI_DscOutSize(z) == sizes[i]);
-		CHECK(BGI_DscDecode(z, back) == sizes[i] && memcmp(back, data, sizes[i]) == 0);
+		CHECK(BGI_DscDecode(o, z, back) == sizes[i] && memcmp(back, data, sizes[i]) == 0);
 		if(sizes[i] == 300000)
 			CHECK(size < 200000);
 		BGI_Free(z);
 	}
 	memset(data, 'a', 1000); // a run: copies at the smallest distance
 	z = BGI_DscEncode(data, 1000, 7, &size);
-	CHECK(BGI_DscDecode(z, back) == 1000 && memcmp(back, data, 1000) == 0 && size < 0x220 + 40);
+	CHECK(BGI_DscDecode(o, z, back) == 1000 && memcmp(back, data, 1000) == 0 && size < 0x220 + 40);
 	BGI_Free(z);
 	free(data);
 	free(back);
@@ -329,12 +320,15 @@ static void TestEncoders(void)
 
 static char gRoot[0x200]; // the scratch directory
 
+// `rel` (UTF-8) as a native path in the scratch directory (Shift-JIS on Windows)
 static const char* Path(const char* rel)
 {
 	static char bufs[8][0x400];
 	static int next;
 	char* p = bufs[next++ & 7];
-	snprintf(p, 0x400, "%s/%s", gRoot, rel);
+	char native[0x300];
+	OS_Utf8ToNative(rel, native, sizeof native);
+	snprintf(p, 0x400, "%s/%s", gRoot, native);
 	return p;
 }
 
@@ -370,24 +364,6 @@ static int SameFile(const char* a, const char* b)
 	return same;
 }
 
-// remove a directory with everything in it
-static void RemoveTreeEntry(void* ctx, const char* name, int isDir);
-static void RemoveTree(const char* path)
-{
-	OS_NativeList(path, RemoveTreeEntry, (void*)path);
-	remove(path);
-}
-
-static void RemoveTreeEntry(void* ctx, const char* name, int isDir)
-{
-	char path[0x800];
-	snprintf(path, sizeof path, "%s/%s", (const char*)ctx, name);
-	if(isDir)
-		RemoveTree(path);
-	else
-		remove(path);
-}
-
 // replace the first occurrence of `from` in a text file of the dump by `to`; 1 when it was there
 static int EditText(const char* rel, const char* from, const char* to)
 {
@@ -410,11 +386,11 @@ static int EditText(const char* rel, const char* from, const char* to)
 }
 
 // an entry of an archive of the scratch directory as the engine reads it (BGI_Free it); NULL when it is not there
-static uint8_t* Entry(const char* arcRel, const char* name, uint32_t* size, int* dsc)
+static uint8_t* Entry(OpenBGI_t* o, const char* arcRel, const char* name, uint32_t* size, int* dsc)
 {
 	ArcRead_t* a = ArcRead_Open(Path(arcRel));
-	const ArcEntry_t* e = a ? ArcRead_Find(a, name) : NULL;
-	uint8_t* data = e ? ArcRead_Load(a, e, size, dsc) : NULL;
+	const ArcReadEntry_t* e = a ? ArcRead_Find(a, name) : NULL;
+	uint8_t* data = e ? ArcRead_Load(o, a, e, size, dsc) : NULL;
 	if(a)
 		ArcRead_Close(a);
 	return data;
@@ -468,7 +444,9 @@ static void WriteArc(TestArc_t* a, const char* rel, int arc20)
 	a->count = 0;
 }
 
-static const char* kProgram = "#engine 1.69/444\n\nmain() { int a;\n    a = 3;\n    debug_msg(\"Tayutama\");\n}\n";
+// the boot program: it checks the product name, which identifies the game (detect.h)
+static const char* kProgram = "#engine 1.69/444\n\nmain() { int a; char name[64];\n    a = 3;\n    sys.get_product_name(name);\n"
+							  "    if (streq(name, \"Tayutama\") == 0) sys.quit();\n    debug_msg(\"Tayutama\");\n}\n";
 
 static const char* kScenario = "#style library\n"
 							   "#source \"main.bss\"\n"
@@ -543,7 +521,7 @@ static uint8_t* VorbisSound(uint32_t* size)
 }
 
 // the archives of the game into <root>/game
-static void MakeGame(void)
+static void MakeGame(OpenBGI_t* o)
 {
 	TestArc_t a;
 	uint32_t size, i;
@@ -551,9 +529,9 @@ static void MakeGame(void)
 	memset(&a, 0, sizeof a);
 	OS_NativeMkdir(Path("game"));
 
-	{ // system.arc: the boot program, whose string names the game
+	{ // system.arc: the boot program, whose product name check names the game
 		BpcResult_t r;
-		Bpc_Compile(kProgram, strlen(kProgram), "ipl", GEN_1_69_444, NULL, stdout, &r);
+		Bpc_Compile(o, kProgram, strlen(kProgram), "ipl", GEN_1_69_444, NULL, stdout, &r);
 		CHECK(r.errors == 0 && r.file != NULL);
 		BGI_Free(r.labels);
 		if(r.file)
@@ -564,7 +542,7 @@ static void MakeGame(void)
 	{ // data01000.arc: a scenario file and the two tables
 		ScnCompileResult_t r;
 		uint8_t table[4 + 3 * 32], scenes[4 + 2 * 64];
-		Scn_Compile(kScenario, strlen(kScenario), "main", NULL, NULL, stdout, &r);
+		Scn_Compile(o, kScenario, strlen(kScenario), "main", NULL, NULL, stdout, &r);
 		CHECK(r.errors == 0);
 		data = Scn_Save(&r.file, &size);
 		Scn_Free(&r.file);
@@ -618,7 +596,7 @@ static void MakeGame(void)
 			payload[i] = (uint8_t)(i / 9);
 		Put32(blob, 7);
 		Put32(blob + 4, 0x1234);
-		size = SdcEncode(blob + 8, payload, sizeof payload);
+		size = SdcEncode(o, blob + 8, payload, sizeof payload);
 		CHECK(size != 0 && size <= sizeof blob - 8);
 		Add(&a, "blob", blob, 8 + size, 0);
 		Add(&a, "notes.txt", (const uint8_t*)"plain text\r\n", 12, 1);
@@ -659,10 +637,10 @@ static const char* const kArchives[] = {"system.arc", "data01000.arc", "sysgrp.a
 #define ARCHIVES (sizeof kArchives / sizeof kArchives[0])
 
 // the decoded picture of an image entry (RawImageHeader + pixels; BGI_Free it)
-static uint8_t* DecodedImage(const char* arcRel, const char* name, uint32_t* size, int* cbgVersion)
+static uint8_t* DecodedImage(OpenBGI_t* o, const char* arcRel, const char* name, uint32_t* size, int* cbgVersion)
 {
 	int dsc;
-	uint8_t* data = Entry(arcRel, name, size, &dsc);
+	uint8_t* data = Entry(o, arcRel, name, size, &dsc);
 	*cbgVersion = 0;
 	if(data && *size >= 0x30 && BGI_IsCbg(data))
 	{
@@ -677,7 +655,7 @@ static uint8_t* DecodedImage(const char* arcRel, const char* name, uint32_t* siz
 	return data;
 }
 
-static void TestDump(void)
+static void TestDump(OpenBGI_t* o)
 {
 	DumpOptions_t opt;
 	uint32_t n;
@@ -688,7 +666,7 @@ static void TestDump(void)
 	opt.outDir = Keep("dump");
 	opt.jobs = 1;
 	opt.log = log;
-	CHECK(Dump_Run(&opt) == 0);
+	CHECK(Dump_Run(o, &opt) == 0);
 	// every entry as its kind
 	CHECK(Exists("dump/bgidump.json"));
 	CHECK(Exists("dump/system/ipl.bpc"));
@@ -776,20 +754,20 @@ static void TestDump(void)
 		free(f);
 	}
 	// a dump is not written over, unless told to
-	CHECK(Dump_Run(&opt) == 2);
+	CHECK(Dump_Run(o, &opt) == 2);
 	opt.force = 1;
-	CHECK(Dump_Run(&opt) == 0);
+	CHECK(Dump_Run(o, &opt) == 0);
 	// no archives, an unknown profile
 	opt.gameDir = Keep("dump");
 	opt.outDir = Keep("dump_none");
-	CHECK(Dump_Run(&opt) == 2);
+	CHECK(Dump_Run(o, &opt) == 2);
 	opt.gameDir = Keep("game");
 	opt.engine = "9.99";
-	CHECK(Dump_Run(&opt) == 2);
+	CHECK(Dump_Run(o, &opt) == 2);
 	fclose(log);
 }
 
-static void TestPack(void)
+static void TestPack(OpenBGI_t* o)
 {
 	PackOptions_t opt;
 	FILE* log = fopen(Path("pack.log"), "w");
@@ -802,7 +780,7 @@ static void TestPack(void)
 	opt.outDir = Keep("pack");
 	opt.log = log;
 	// untouched: the archives come back byte for byte
-	CHECK(Pack_Run(&opt) == 0);
+	CHECK(Pack_Run(o, &opt) == 0);
 	for(i = 0; i < ARCHIVES; i++)
 	{
 		snprintf(a, sizeof a, "game/%s", kArchives[i]);
@@ -813,24 +791,24 @@ static void TestPack(void)
 	// and nothing is written when only changed archives are wanted
 	opt.outDir = Keep("pack_changed");
 	opt.changedOnly = 1;
-	CHECK(Pack_Run(&opt) == 0);
+	CHECK(Pack_Run(o, &opt) == 0);
 	CHECK(!Exists("pack_changed/system.arc") && !Exists("pack_changed/sysgrp.arc"));
 	opt.changedOnly = 0;
 	// the output may not be the directory of the originals
 	opt.outDir = Keep("game");
-	CHECK(Pack_Run(&opt) == 2);
+	CHECK(Pack_Run(o, &opt) == 2);
 	CHECK(SameFile("game/system.arc", "pack/system.arc"));
 	// not a dump
 	opt.dumpDir = Keep("game");
 	opt.outDir = Keep("pack_none");
-	CHECK(Pack_Run(&opt) == 2);
+	CHECK(Pack_Run(o, &opt) == 2);
 
 	// everything from the files alone: the same content, entry by entry
 	opt.dumpDir = Keep("dump");
 	opt.outDir = Keep("pack_all");
 	opt.rebuildAll = 1;
 	opt.sourceDir = Keep("nowhere");
-	CHECK(Pack_Run(&opt) == 0);
+	CHECK(Pack_Run(o, &opt) == 0);
 	CHECK(SameFile("game/data03000.arc", "pack_all/data03000.arc")); // the sounds' headers are made again exactly
 	CHECK(SameFile("game/data04000.arc", "pack_all/data04000.arc"));
 	{
@@ -843,8 +821,8 @@ static void TestPack(void)
 			int dsc2;
 			snprintf(a, sizeof a, "game/%s", same[i][0]);
 			snprintf(b, sizeof b, "pack_all/%s", same[i][0]);
-			x = Entry(a, same[i][1], &n, &dsc);
-			y = Entry(b, same[i][1], &m, &dsc2);
+			x = Entry(o, a, same[i][1], &n, &dsc);
+			y = Entry(o, b, same[i][1], &m, &dsc2);
 			CHECK(x && y && n == m && memcmp(x, y, n) == 0 && dsc == dsc2);
 			BGI_Free(x);
 			BGI_Free(y);
@@ -852,8 +830,8 @@ static void TestPack(void)
 		for(i = 0; i < sizeof images / sizeof images[0]; i++)
 		{
 			int v2;
-			x = DecodedImage("game/sysgrp.arc", images[i], &n, &version);
-			y = DecodedImage("pack_all/sysgrp.arc", images[i], &m, &v2);
+			x = DecodedImage(o, "game/sysgrp.arc", images[i], &n, &version);
+			y = DecodedImage(o, "pack_all/sysgrp.arc", images[i], &m, &v2);
 			CHECK(x && y && n == m && memcmp(x, y, n) == 0 && version == v2);
 			BGI_Free(x);
 			BGI_Free(y);
@@ -862,11 +840,11 @@ static void TestPack(void)
 	{ // the SDC block decodes to the same bytes behind the same prefix; the movie to the same frames
 		uint8_t out[600], slotA[16 * 8 * 4], slotB[16 * 8 * 4];
 		uint32_t f;
-		y = Entry("pack_all/sysgrp.arc", "blob", &m, &dsc);
-		CHECK(y && Get32(y) == 7 && Get32(y + 4) == 0x1234 && SdcIsFormat(y + 8) && SdcDecode(out, y + 8) == 500 && out[499] == 499 / 9);
+		y = Entry(o, "pack_all/sysgrp.arc", "blob", &m, &dsc);
+		CHECK(y && Get32(y) == 7 && Get32(y + 4) == 0x1234 && SdcIsFormat(y + 8) && SdcDecode(o, out, y + 8) == 500 && out[499] == 499 / 9);
 		BGI_Free(y);
-		x = Entry("game/sysgrp.arc", "anim.bm", &n, &dsc);
-		y = Entry("pack_all/sysgrp.arc", "anim.bm", &m, &dsc);
+		x = Entry(o, "game/sysgrp.arc", "anim.bm", &n, &dsc);
+		y = Entry(o, "pack_all/sysgrp.arc", "anim.bm", &m, &dsc);
 		CHECK(x && y && BfMovie_Check(y, m) && ((const BfMovieHeader_t*)y)->frames == 3 && ((const BfMovieHeader_t*)y)->fps == 30);
 		memset(slotA, 0, sizeof slotA);
 		memset(slotB, 0, sizeof slotB);
@@ -878,16 +856,15 @@ static void TestPack(void)
 	fclose(log);
 }
 
-static void TestEdit(void)
+static void TestEdit(OpenBGI_t* o)
 {
 	PackOptions_t opt;
 	FILE* log = fopen(Path("edit.log"), "w");
-	struct timespec pause = {0, 30 * 1000 * 1000};
 	uint32_t n, m, i;
 	int dsc, version;
 	uint8_t *x, *y;
-	nanosleep(&pause, NULL); // the edits are later than the dump by more than the clock's step
-	{                        // a new picture of another size, and the grey mask given in colour
+	OS_SleepMs(30); // the edits are later than the dump by more than the clock's step
+	{               // a new picture of another size, and the grey mask given in colour
 		uint8_t pic[6 * 2 * 4], mask[7 * 5 * 3];
 		size_t size;
 		uint8_t* png;
@@ -927,35 +904,35 @@ static void TestEdit(void)
 	opt.outDir = Keep("edit");
 	opt.changedOnly = 1;
 	opt.log = log;
-	CHECK(Pack_Run(&opt) == 0);
+	CHECK(Pack_Run(o, &opt) == 0);
 	CHECK(Exists("edit/system.arc") && Exists("edit/data01000.arc") && Exists("edit/sysgrp.arc") && Exists("edit/data03000.arc"));
 	CHECK(!Exists("edit/data04000.arc")); // nothing of it changed
 
 	// the changes are in
-	x = Entry("edit/system.arc", "ipl._bp", &n, &dsc);
+	x = Entry(o, "edit/system.arc", "ipl._bp", &n, &dsc);
 	CHECK(x && dsc && Holds(x, n, "Tayutama in English"));
 	BGI_Free(x);
-	x = Entry("edit/data01000.arc", "main", &n, &dsc);
+	x = Entry(o, "edit/data01000.arc", "main", &n, &dsc);
 	CHECK(x && dsc && memcmp(x, SCN_MAGIC, 27) == 0 && Holds(x, n, "HELLO, WORLD") && !Holds(x, n, "hello"));
 	BGI_Free(x);
-	x = Entry("edit/data01000.arc", "StringsDB", &n, &dsc);
+	x = Entry(o, "edit/data01000.arc", "StringsDB", &n, &dsc);
 	CHECK(x && dsc && n == 4 + 3 * 32 && strcmp((const char*)x + 4 + 32 + 4, "bg01_night") == 0 && Get32(x + 4 + 32) == 1001);
 	BGI_Free(x);
-	x = Entry("edit/data03000.arc", "bgm_with_a_name_longer_than_fifteen", &n, &dsc);
+	x = Entry(o, "edit/data03000.arc", "bgm_with_a_name_longer_than_fifteen", &n, &dsc);
 	CHECK(x && n == 0x40 + 91 && ((const BwHeader_t*)x)->loopStart == 777 && ((const BwHeader_t*)x)->loopFlag == 1 && ((const BwHeader_t*)x)->frames == 1000);
 	BGI_Free(x);
-	x = DecodedImage("edit/sysgrp.arc", "pic", &n, &version);
+	x = DecodedImage(o, "edit/sysgrp.arc", "pic", &n, &version);
 	CHECK(x && version == 0 && n == 16 + 6 * 2 * 4 && x[0] == 6 && x[2] == 2 && x[4] == 32 && x[16] == 200 && x[16 + 47] == 200 - 47);
 	BGI_Free(x);
-	x = DecodedImage("edit/sysgrp.arc", "mask", &n, &version);
+	x = DecodedImage(o, "edit/sysgrp.arc", "mask", &n, &version);
 	// still a CompressedBG of 8 bits with its extra words; the coloured pixel became its luma
 	CHECK(x && version == 1 && n == 16 + 35 && x[4] == 8 && Get32(x + 8) == 0x10000 && Get32(x + 12) == 0x00050003);
 	CHECK(x && x[16 + 2] == 10 && x[16 + 3] == (uint8_t)((28 * 15 + 77 * 15) >> 8) && x[16 + 34] == 170);
 	BGI_Free(x);
 	{
 		uint8_t slot[16 * 8 * 4], first[16 * 8 * 4];
-		x = Entry("edit/sysgrp.arc", "anim.bm", &n, &dsc);
-		y = Entry("game/sysgrp.arc", "anim.bm", &m, &dsc);
+		x = Entry(o, "edit/sysgrp.arc", "anim.bm", &n, &dsc);
+		y = Entry(o, "game/sysgrp.arc", "anim.bm", &m, &dsc);
 		memset(slot, 0, sizeof slot);
 		memset(first, 0, sizeof first);
 		CHECK(x && y && BfMovie_DecodeFrame(x, n, 0, slot, 64) && BfMovie_DecodeFrame(y, m, 0, first, 64) && memcmp(slot, first, sizeof slot) == 0);
@@ -970,7 +947,7 @@ static void TestEdit(void)
 		{
 			char a[64], b[64];
 			ArcRead_t *p, *q;
-			const ArcEntry_t *e, *g;
+			const ArcReadEntry_t *e, *g;
 			snprintf(a, sizeof a, "game/%s", kept[i][0]);
 			snprintf(b, sizeof b, "edit/%s", kept[i][0]);
 			p = ArcRead_Open(Path(a));
@@ -998,10 +975,10 @@ static void TestEdit(void)
 	// a source that does not compile: the archive is written with the original entry, and the status says so
 	CHECK(EditText("dump/data01000/main.bsc", "return l4;", "return l4 +;"));
 	opt.outDir = Keep("edit_bad");
-	CHECK(Pack_Run(&opt) == 1);
+	CHECK(Pack_Run(o, &opt) == 1);
 	CHECK(SameFile("edit_bad/data01000.arc", "edit/data01000.arc") == 0);
-	x = Entry("edit_bad/data01000.arc", "main", &n, &dsc);
-	y = Entry("game/data01000.arc", "main", &m, &dsc);
+	x = Entry(o, "edit_bad/data01000.arc", "main", &n, &dsc);
+	y = Entry(o, "game/data01000.arc", "main", &m, &dsc);
 	CHECK(x && y && n == m && memcmp(x, y, n) == 0);
 	BGI_Free(x);
 	BGI_Free(y);
@@ -1009,26 +986,29 @@ static void TestEdit(void)
 	opt.outDir = Keep("edit_bad2");
 	opt.rebuildAll = 1;
 	opt.changedOnly = 0;
-	CHECK(Pack_Run(&opt) == 2);
+	CHECK(Pack_Run(o, &opt) == 2);
 	CHECK(!Exists("edit_bad2/data01000.arc") && Exists("edit_bad2/sysgrp.arc"));
 	fclose(log);
 }
 
 int main(void)
 {
-	snprintf(gRoot, sizeof gRoot, "/tmp/bgi_dump_%ld", (long)getpid());
+	OpenBGI_t* o = OpenBGI_New(OS_Host()); // the engine whose code the test runs
+	if(!o)
+		return 1;
+	TestHost_ScratchName(gRoot, sizeof gRoot, "bgi_dump");
 	OS_Init();
 	if(!OS_NativeMkdir(gRoot))
 		return 1;
 	TestDeflate();
 	TestPng();
-	TestEncoders();
-	MakeGame();
-	TestDump();
-	TestPack();
-	TestEdit();
+	TestEncoders(o);
+	MakeGame(o);
+	TestDump(o);
+	TestPack(o);
+	TestEdit(o);
 	if(gFails == 0)
-		RemoveTree(gRoot);
+		TestHost_RemoveTree(gRoot);
 	else
 		printf("  the scratch directory %s is kept\n", gRoot);
 	printf("%s\n", gFails ? "FAILED" : "ok");

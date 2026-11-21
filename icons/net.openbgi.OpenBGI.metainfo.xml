@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- This file is part of OpenBGI (https://openbgi.net). -->
+<component type="desktop-application">
+  <id>net.openbgi.OpenBGI</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0-only</project_license>
+  <name>OpenBGI</name>
+  <summary>Plays the games of the BGI/Ethornell engine</summary>
+  <description>
+    <p>
+      OpenBGI is an open-source reimplementation of Ethornell's Buriko
+      General Interpreter, the engine of many visual novels. It plays
+      the games from their own files: a folder, a zip archive or a disc
+      image, none of which it changes.
+    </p>
+    <p>
+      Started without a game it shows a launcher: the games of the
+      folders it was told about, each with a picture, to start with a
+      click. The same program holds the tools to take a game's archives,
+      scenarios and programs apart and to put them together again.
+    </p>
+  </description>
+  <launchable type="desktop-id">openbgi.desktop</launchable>
+  <url type="homepage">https://openbgi.net</url>
+  <url type="bugtracker">https://github.com/Cytlan/openbgi/issues</url>
+  <developer id="net.openbgi">
+    <name>OpenBGI Team</name>
+  </developer>
+  <update_contact>maintainer@openbgi.net</update_contact>
+  <categories>
+    <category>Game</category>
+  </categories>
+  <provides>
+    <binary>openbgi</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0" date="2026-11-19"/>
+  </releases>
+</component>

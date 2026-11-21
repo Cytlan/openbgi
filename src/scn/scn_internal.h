@@ -6,7 +6,7 @@
  *                  compiler (scncomp.c) of the scenario source language
  *
  * The two agree on the shapes the original compilers give each construct
- * (docs/scenario.md); this header holds what both sides refer to: the
+ * (docs/modding/scenario.md); this header holds what both sides refer to: the
  * token mnemonics of the `__asm` blocks, the operator table and the two
  * compiler styles.
  */
@@ -116,7 +116,7 @@ typedef struct Scn16Scene
 
 const Scn16Op_t* Scn16_FindOp(uint32_t op);
 const Scn16Op_t* Scn16_FindOpByName(const char* name, size_t len);
-// the opcode table as text (what `bgiscn --scan` prints for a 1.64 game)
+// the opcode table as text (what `openbgi scn --scan` prints for a 1.64 game)
 void Scn16_WriteOps(FILE* out);
 /* Decode a whole file (Scn16_FreeScene when done).  Returns 1 when it is
  * a 16-bit scene in the layout the games' compiler wrote (every opcode
@@ -130,7 +130,7 @@ int Scn16_Check(const uint8_t* data, uint32_t size);
  * by compiling it back unless `opt->noVerify`.  Returns 0 when the source
  * reproduces the file, 1 when it does not (it is still written, with a
  * note), -1 when the file does not decode. */
-int Scn16_Decompile(const uint8_t* data, uint32_t size, const ScnDecOptions_t* opt, FILE* out);
+int Scn16_Decompile(OpenBGI_t* o, const uint8_t* data, uint32_t size, const ScnDecOptions_t* opt, FILE* out);
 // 1 when the text begins with `#style inline` (after comments and blank lines)
 int Scn16_IsSource(const char* text, size_t len);
 /* Compile `#style inline` source into a scene image (`*outData`, malloc'ed,
@@ -138,7 +138,7 @@ int Scn16_IsSource(const char* text, size_t len);
  * (prep.h; `inc` says where its `#include` looks, may be NULL).  Returns
  * the number of errors, written to `log` as "<file>:<line>: error: ..."
  * (0: success). */
-int Scn16_Compile(const char* text, size_t len, const char* fileName, const PrepIncludes_t* inc, FILE* log, uint8_t** outData,
+int Scn16_Compile(OpenBGI_t* o, const char* text, size_t len, const char* fileName, const PrepIncludes_t* inc, FILE* log, uint8_t** outData,
 	uint32_t* outSize);
 
 #endif

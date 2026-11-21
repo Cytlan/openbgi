@@ -14,31 +14,31 @@
 #include "bgi/snd/wavemaster.h"
 
 // the two panes, one row per voice (effect rows beyond the pane are left out)
-static void SoundDraw(int x, int y, int w, int h)
+static void SoundDraw(OpenBGI_t* o, int x, int y, int w, int h)
 {
 	int i, ly;
 	int half = (w - 3 * DBG_PAD) / 2;
 	WmVoiceInfo_t v;
-	DbgPane_Frame(x + DBG_PAD, y + DBG_PAD, half, h - 2 * DBG_PAD, "ch  state    rate xc   frames volume  pan  lp   (music channels)");
+	DbgPane_Frame(o, x + DBG_PAD, y + DBG_PAD, half, h - 2 * DBG_PAD, "ch  state    rate xc   frames volume  pan  lp   (music channels)");
 	ly = y + DBG_PAD + DBG_CELL_H + 6;
 	for(i = 0; i < WM_BGM_CHANNELS; i++)
 	{
-		Wm_DebugVoice(1, i, &v);
-		DbgDraw_TextF(x + 2 * DBG_PAD, ly + i * DBG_CELL_H, v.loaded ? DBG_TEXT : DBG_DIM, "%2d  %-7s %5u x%u %8u %6d %4d %3d", i,
+		Wm_DebugVoice(o, 1, i, &v);
+		DbgDraw_TextF(o, x + 2 * DBG_PAD, ly + i * DBG_CELL_H, v.loaded ? DBG_TEXT : DBG_DIM, "%2d  %-7s %5u x%u %8u %6d %4d %3d", i,
 			!v.loaded ? "-" : v.paused ? "paused"
 				: v.playing            ? "playing"
 									   : "stopped",
 			(unsigned)v.rate, (unsigned)v.channels,
 			(unsigned)v.frames, (int)v.dsVolume, (int)v.pan, v.loops);
 	}
-	DbgPane_Frame(x + 2 * DBG_PAD + half, y + DBG_PAD, half, h - 2 * DBG_PAD, "no  state    rate xc   frames      pos volume  pan   (effect slots)");
+	DbgPane_Frame(o, x + 2 * DBG_PAD + half, y + DBG_PAD, half, h - 2 * DBG_PAD, "no  state    rate xc   frames      pos volume  pan   (effect slots)");
 	ly = y + DBG_PAD + DBG_CELL_H + 6;
 	for(i = 0; i < WM_SE_SLOTS; i++)
 	{
-		Wm_DebugVoice(0, i, &v);
+		Wm_DebugVoice(o, 0, i, &v);
 		if(ly + (i + 1) * DBG_CELL_H > y + h - DBG_PAD)
 			break;
-		DbgDraw_TextF(x + 3 * DBG_PAD + half, ly + i * DBG_CELL_H, v.loaded ? DBG_TEXT : DBG_DIM, "%2d  %-7s %5u x%u %8u %8u %6d %4d", i,
+		DbgDraw_TextF(o, x + 3 * DBG_PAD + half, ly + i * DBG_CELL_H, v.loaded ? DBG_TEXT : DBG_DIM, "%2d  %-7s %5u x%u %8u %8u %6d %4d", i,
 			!v.loaded ? "-" : v.paused ? "paused"
 				: v.playing            ? "playing"
 									   : "loaded",
@@ -47,17 +47,17 @@ static void SoundDraw(int x, int y, int w, int h)
 	}
 }
 
-static int SoundKey(int vk, int ch)
+static int SoundKey(OpenBGI_t* o, int vk, int ch)
 {
 	return 0;
 }
 
-static int SoundClick(int x, int y, int button)
+static int SoundClick(OpenBGI_t* o, int x, int y, int button)
 {
 	return 0;
 }
 
-static int SoundWheel(int x, int y, int delta)
+static int SoundWheel(OpenBGI_t* o, int x, int y, int delta)
 {
 	return 0;
 }

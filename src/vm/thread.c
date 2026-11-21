@@ -3,21 +3,22 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * thread.c - script threads (Thread_t), the buffers they are made of
- *            (PixBuf_t, inc/bgi/pixbuf.h) and the thread-local heap
- *            (Heap_t); the interface is inc/bgi/vm.h
+ *            (PixBuf_t, src/include/bgi/pixbuf.h) and the thread-local heap
+ *            (Heap_t); the interface is src/include/bgi/vm.h
  *
  * A thread owns three PixBuf-backed areas (evaluation stack, code, data),
  * a heap for "70" / "71", a list of the modules loaded into its code area,
  * a timer, a message queue and an optional wait object.  Threads form a
- * singly linked list behind gRootThread, a buffer-less head that never
- * runs; the scheduler (sched.c) walks that list.  Nothing here executes
- * instructions: the fetch, stack and frame primitives are the inline
- * functions of vm.h.
+ * singly linked list behind o->vm.rootThread, a buffer-less head that
+ * never runs; the scheduler (sched.c) walks that list.  Nothing here
+ * executes instructions: the fetch, stack and frame primitives are the
+ * inline functions of vm.h.
  */
 #include "bgi/vm.h"
 #include "bgi/dbg.h"
 #include "bgi/wait.h"
 #include "bgi/sys.h"
+#include "bgi/core.h"
 
 // -------------------------------------------------------------------------
 // PixBuf
@@ -49,12 +50,14 @@ void PixBuf_Dtor(PixBuf_t* b)
 	PixBuf_Free(b);
 }
 
-// n uninitialised bytes; NULL (nothing changes) while a previous allocation is still held
+/* n zero bytes; NULL (nothing changes) while a previous allocation is still
+ * held.  Zero rather than what the heap held before, so that a bitmap shown
+ * before anything is drawn into it is black, the same on every run. */
 uint8_t* PixBuf_Alloc(PixBuf_t* b, uint32_t n)
 {
 	if(b->allocated)
 		return NULL;
-	b->data = (uint8_t*)BGI_Alloc(n);
+	b->data = (uint8_t*)BGI_Calloc(n);
 	b->size = n;
 	b->allocated = 1;
 	return b->data;
@@ -226,9 +229,6 @@ uint8_t* Heap_Ptr(Heap_t* h, uint32_t off)
 // Thread
 // -------------------------------------------------------------------------
 
-Thread_t* gRootThread;  // the list head (id 0, no buffers); created by VmMain
-uint32_t gThreadSerial; // the id the next Thread_New hands out
-
 /*
  * Allocate a thread.  With all three sizes non-zero it gets an evaluation
  * stack of stackEntries values, a code area of codeSize bytes, a data area
@@ -237,7 +237,7 @@ uint32_t gThreadSerial; // the id the next Thread_New hands out
  * root thread (`valid` 0), only good as a list head.  Either way the thread
  * takes the next serial number as its id and is not linked anywhere.
  */
-Thread_t* Thread_New(uint32_t stackEntries, uint32_t codeSize, uint32_t dataSize)
+Thread_t* Thread_New(OpenBGI_t* o, uint32_t stackEntries, uint32_t codeSize, uint32_t dataSize)
 {
 	Thread_t* t = (Thread_t*)BGI_Calloc(sizeof(Thread_t));
 
@@ -246,7 +246,8 @@ Thread_t* Thread_New(uint32_t stackEntries, uint32_t codeSize, uint32_t dataSize
 		t->stackEntries = stackEntries;
 		t->stackBuf = (PixBuf_t*)BGI_Alloc(sizeof(PixBuf_t));
 		PixBuf_Ctor(t->stackBuf);
-		t->stack = (uint32_t*)PixBuf_Alloc(t->stackBuf, stackEntries * 4);
+		t->stack = (uint32_t*)PixBuf_Alloc(t->stackBuf, stackEntries * 5); // the values, then a mark for each
+		t->stackMark = (uint8_t*)(t->stack + stackEntries);
 		t->codeSize = codeSize;
 		t->codeBuf = (PixBuf_t*)BGI_Alloc(sizeof(PixBuf_t));
 		PixBuf_Ctor(t->codeBuf);
@@ -265,7 +266,7 @@ Thread_t* Thread_New(uint32_t stackEntries, uint32_t codeSize, uint32_t dataSize
 		// the root thread: list head only, no buffers
 		t->valid = 0;
 	}
-	t->id = gThreadSerial++;
+	t->id = o->vm.threadSerial++;
 	t->next = NULL;
 	t->modules = NULL;
 	Thread_FreeModules(t);
@@ -364,7 +365,7 @@ static void Thread_TakeBack(Thread_t* l, Thread_t* holder)
 		l->loanCount--;
 }
 
-int Thread_SpawnBorrower(Thread_t* t, uint32_t stackEntries, uint32_t codeSize, uint32_t dataSize, uint32_t ip, Thread_t** out)
+int Thread_SpawnBorrower(OpenBGI_t* o, Thread_t* t, uint32_t stackEntries, uint32_t codeSize, uint32_t dataSize, uint32_t ip, Thread_t** out)
 {
 	Thread_t* l = t->lender ? t->lender : t;
 	Thread_t* c = (Thread_t*)BGI_Calloc(sizeof(Thread_t));
@@ -375,13 +376,14 @@ int Thread_SpawnBorrower(Thread_t* t, uint32_t stackEntries, uint32_t codeSize, 
 	c->stackEntries = stackEntries ? stackEntries : 1; // the original has no stack at all for 0
 	c->stackBuf = (PixBuf_t*)BGI_Alloc(sizeof(PixBuf_t));
 	PixBuf_Ctor(c->stackBuf);
-	c->stack = (uint32_t*)PixBuf_Alloc(c->stackBuf, c->stackEntries * 4);
+	c->stack = (uint32_t*)PixBuf_Alloc(c->stackBuf, c->stackEntries * 5); // the values, then a mark for each
+	c->stackMark = (uint8_t*)(c->stack + c->stackEntries);
 	c->valid = 1;
-	c->id = gThreadSerial++;
+	c->id = o->vm.threadSerial++;
 	r = Thread_Lend(l, c, codeSize, dataSize, &codeOff, &dataOff);
 	if(r != 0)
 	{
-		Thread_Delete(c);
+		Thread_Delete(o, c);
 		return r;
 	}
 	c->lender = l;
@@ -408,7 +410,7 @@ int Thread_SpawnBorrower(Thread_t* t, uint32_t stackEntries, uint32_t codeSize, 
  * them back; the loans of a lender whose borrowers still exist (which
  * Thread_KillChild does not leave) are cut loose.
  */
-void Thread_Delete(Thread_t* t)
+void Thread_Delete(OpenBGI_t* o, Thread_t* t)
 {
 	uint32_t dummy;
 	if(t->lender)
@@ -427,6 +429,15 @@ void Thread_Delete(Thread_t* t)
 		Loan_Remove(&t->dataLoans, t->dataLoans->holder);
 	if(t->valid)
 	{
+		if(o->vm.follow.live) // the thread's areas go: nothing in them is followed any more
+		{
+			if(t->codeBuf && t->codeBuf->data)
+				Follow_Released(o, t->codeBuf->data, t->codeBuf->size);
+			if(t->dataBuf && t->dataBuf->data)
+				Follow_Released(o, t->dataBuf->data, t->dataBuf->size);
+			if(t->heap)
+				Follow_Released(o, t->heap->base, t->heap->size);
+		}
 		if(t->stackBuf)
 		{
 			PixBuf_Dtor(t->stackBuf);
@@ -449,25 +460,25 @@ void Thread_Delete(Thread_t* t)
 	}
 	Thread_FreeModules(t);
 	if(t->wait)
-		Wait_Release(t->wait);
+		Wait_Release(o, t->wait);
 	while(Thread_ListPopFront(t, &dummy))
 		;
 	BGI_Free(t);
 }
 
 // a new thread (Thread_New) appended at the end of the list `root` heads; returns it
-Thread_t* Thread_SpawnChild(Thread_t* root, uint32_t stackEntries, uint32_t codeSize, uint32_t dataSize)
+Thread_t* Thread_SpawnChild(OpenBGI_t* o, Thread_t* root, uint32_t stackEntries, uint32_t codeSize, uint32_t dataSize)
 {
 	// append at the end of the list (recursive in the original)
 	Thread_t* t = root;
 	while(t->next)
 		t = t->next;
-	t->next = Thread_New(stackEntries, codeSize, dataSize);
+	t->next = Thread_New(o, stackEntries, codeSize, dataSize);
 	return t->next;
 }
 
 // unlink `victim` from the list behind `root` and delete it; 0 when it is not in that list
-int Thread_KillChild(Thread_t* root, Thread_t* victim)
+int Thread_KillChild(OpenBGI_t* o, Thread_t* root, Thread_t* victim)
 {
 	Thread_t *prev = root, *t = root->next;
 	while(t && t != victim)
@@ -478,21 +489,21 @@ int Thread_KillChild(Thread_t* root, Thread_t* victim)
 	if(!t)
 		return 0;
 	// the threads that run in areas it lent end first, while it still links them in
-	while(victim->codeLoans && Thread_KillChild(victim, victim->codeLoans->holder))
+	while(victim->codeLoans && Thread_KillChild(o, victim, victim->codeLoans->holder))
 		;
 	prev->next = Thread_Next(victim);
-	Thread_Delete(victim);
+	Thread_Delete(o, victim);
 	return 1;
 }
 
 // delete every thread behind `root`, leaving `root` alone in the list
-void Thread_KillAllChildren(Thread_t* root)
+void Thread_KillAllChildren(OpenBGI_t* o, Thread_t* root)
 {
 	// recursive in the original: the last thread is destroyed first
 	if(root->next)
 	{
-		Thread_KillAllChildren(root->next);
-		Thread_Delete(root->next);
+		Thread_KillAllChildren(o, root->next);
+		Thread_Delete(o, root->next);
 		root->next = NULL;
 	}
 }
@@ -537,7 +548,7 @@ void Thread_FreeModules(Thread_t* t)
  * Returns the offset of the module's first byte in the code area, or
  * 0x80000000 when the room left in the area is too small for it.
  */
-uint32_t Thread_LoadModule(Thread_t* t, const void* file, const char* name)
+uint32_t Thread_LoadModule(OpenBGI_t* o, Thread_t* t, const void* file, const char* name)
 {
 	const ProgramHeader_t* h = (const ProgramHeader_t*)file;
 	ModuleNode_t* m;
@@ -552,7 +563,7 @@ uint32_t Thread_LoadModule(Thread_t* t, const void* file, const char* name)
 	memcpy(t->code + m->base, (const uint8_t*)file + h->codeOffset, h->codeSize);
 	t->codeUsed += h->codeSize;
 	t->moduleCount++;
-	Dbg_Log("thread %u: module %s at %x (%u bytes)", (unsigned)t->id, name, (unsigned)m->base, (unsigned)m->size);
+	Dbg_Log(o, "thread %u: module %s at %x (%u bytes)", (unsigned)t->id, name, (unsigned)m->base, (unsigned)m->size);
 	return m->base;
 }
 
@@ -609,10 +620,10 @@ int RdBytes(Thread_t* t, void* dst, uint32_t n)
 }
 
 // install the wait object `w` (the thread owns it from now on; one still installed is released first) and mark the thread blocked
-void Thread_SetWait(Thread_t* t, struct Wait* w)
+void Thread_SetWait(OpenBGI_t* o, Thread_t* t, struct Wait* w)
 {
 	if(t->wait)
-		Wait_Release(t->wait);
+		Wait_Release(o, t->wait);
 	t->wait = w;
 	Thread_SetFlags(t, THR_FLAG_WAITING);
 }
@@ -623,20 +634,29 @@ void Thread_SetWait(Thread_t* t, struct Wait* w)
  * object).  On 1 and -1 the object is released and the thread unblocked;
  * the object's poll may have pushed results on the thread's stack.
  */
-int Thread_PollWait(Thread_t* t)
+int Thread_PollWait(OpenBGI_t* o, Thread_t* t)
 {
 	int r;
 	if(!t->wait)
 		return -1;
-	r = t->wait->vt->poll(t->wait);
+	r = t->wait->vt->poll(o, t->wait);
 	if(r == 1 || r == -1)
 	{
 		if(t->wait)
-			Wait_Release(t->wait);
+			Wait_Release(o, t->wait);
 		t->wait = NULL;
 		Thread_ClrFlags(t, THR_FLAG_WAITING);
 	}
 	return r;
+}
+
+void Thread_DropWait(OpenBGI_t* o, Thread_t* t)
+{
+	Wait_t* w = t->wait;
+	t->wait = NULL;
+	Thread_ClrFlags(t, THR_FLAG_WAITING);
+	if(w)
+		Wait_Release(o, w);
 }
 
 // queue the notification (a, b, c) on the thread's wait object ("80 4C"); 1 when it had one, 0 when the thread was not waiting
@@ -648,16 +668,16 @@ int Thread_WaitNotify(Thread_t* t, uint32_t a, uint32_t b, uint32_t c)
 }
 
 // milliseconds until the thread timer expires, 0 once it has
-uint32_t Thread_TimerRemaining(Thread_t* t)
+uint32_t Thread_TimerRemaining(OpenBGI_t* o, Thread_t* t)
 {
-	int32_t rem = (int32_t)(t->timerDeadline - GetTicks());
+	int32_t rem = (int32_t)(t->timerDeadline - GetTicks(o));
 	return rem > 0 ? (uint32_t)rem : 0;
 }
 
 // the thread timer expires `ms` milliseconds from now ("80 58")
-void Thread_TimerSet(Thread_t* t, uint32_t ms)
+void Thread_TimerSet(OpenBGI_t* o, Thread_t* t, uint32_t ms)
 {
-	t->timerDeadline = GetTicks() + ms;
+	t->timerDeadline = GetTicks(o) + ms;
 }
 
 // append v to the end of the thread's message queue ("80 48", "80 4A")

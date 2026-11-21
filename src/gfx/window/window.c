@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * window.c - the message Window display object: construction, the display
- *            object interface, and compositing of its layers (inc/bgi/gfx/window.h)
+ *            object interface, and compositing of its layers (src/include/bgi/gfx/window.h)
  *
  * A window is a stack of three same-sized layers - the frame, the text and
  * the sub-sprites (plus a few "items": small bitmaps placed on the text) -
@@ -14,20 +14,18 @@
  * codes of this file onto the script's.
  */
 #include "window_internal.h"
-
-int gWindowsShown = 1; // "90 0C": all windows hidden when 0
-int gWindowsLevel = 0; // "90 0C": the transparency added to every window
+#include "bgi/core.h"
 
 // Show or hide every window at once ("90 0C").
-void Window_SetGlobalShown(int f)
+void Window_SetGlobalShown(OpenBGI_t* o, int f)
 {
-	gWindowsShown = f;
+	o->gfx.windowsShown = f;
 }
 
 // The transparency (0..0x100) every window is drawn with on top of its own ("90 0C").
-void Window_SetGlobalLevel(int level)
+void Window_SetGlobalLevel(OpenBGI_t* o, int level)
 {
-	gWindowsLevel = level;
+	o->gfx.windowsLevel = level;
 }
 
 // ---- construction ------------------------------------------------------------------------------
@@ -51,11 +49,11 @@ static void DeletePixBuf(PixBuf_t* b)
 /* construct a window of class order 3 with every layer switched off and
  * no surfaces (Window_CreateSurfaces gives it its size); `slotId` is the
  * manager's object id.  The effect is 1 (alpha blend) at level 0. */
-void Window_Ctor(Window_t* w, int slotId)
+void Window_Ctor(OpenBGI_t* o, Window_t* w, int slotId)
 {
 	int i;
 
-	DispObj_Ctor(&w->obj, 3, slotId);
+	DispObj_Ctor(o, &w->obj, 3, slotId);
 	w->obj.vt = &Window_Vtbl;
 
 	// the eleven pixel holders; the layers themselves come with
@@ -67,21 +65,21 @@ void Window_Ctor(Window_t* w, int slotId)
 	{
 		w->item[i].buf = NewPixBuf();
 		w->item[i].bmp.pixels = NULL;
-		Window_ItemSet(w, i, 0, 0, 0);
-		Window_ItemEnable(w, i, 0);
+		Window_ItemSet(o, w, i, 0, 0, 0);
+		Window_ItemEnable(o, w, i, 0);
 	}
 	w->subCount = 0;
 	w->sub = NULL;
 	w->subComp = NULL;
 	w->ready = 0;
 	Window_SetLayerOrder(w, 0);
-	Window_SetPunch(w, 0);
-	Window_ShowFrame(w, 0);
+	Window_SetPunch(o, w, 0);
+	Window_ShowFrame(o, w, 0);
 	Window_SetTextLevel(w, 0);
 	Window_ShowText(w, 0);
-	Window_RecompositeAll(w);      // a no-op: not ready yet
+	Window_RecompositeAll(o, w);   // a no-op: not ready yet
 	DispObj_SetEffect(&w->obj, 1); // alpha blend
-	DispObj_SetLevel(&w->obj, 0);
+	DispObj_SetLevel(o, &w->obj, 0);
 	w->font = 0;
 	w->fontSize = 0;
 	Window_SetSpacing(w, 0);
@@ -93,7 +91,7 @@ void Window_Ctor(Window_t* w, int slotId)
 }
 
 // release the layers, the items and the sub-sprites (the font handle stays with the cache)
-void Window_Dtor(Window_t* w)
+void Window_Dtor(OpenBGI_t* o, Window_t* w)
 {
 	int i;
 
@@ -104,16 +102,16 @@ void Window_Dtor(Window_t* w)
 	DeletePixBuf(w->textBuf);
 	for(i = 0; i < WIN_ITEMS; i++)
 		DeletePixBuf(w->item[i].buf);
-	Window_SubAlloc(w, 0);
+	Window_SubAlloc(o, w, 0);
 	DispObj_Dtor(&w->obj);
 }
 
 // the vtable's destroy: flags & 1 frees the object as well
-static void Window_Destroy(DispObj_t* o, int flags)
+static void Window_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 {
-	Window_Dtor((Window_t*)o);
+	Window_Dtor(o, (Window_t*)obj);
 	if(flags & 1)
-		BGI_Free(o);
+		BGI_Free(obj);
 }
 
 // ---- drawing -----------------------------------------------------------------------------------
@@ -122,21 +120,21 @@ static void Window_Destroy(DispObj_t* o, int flags)
  * the window's own level and the global window level are combined as
  * opacities:
  *   level = 0x100 - ((0x100 - own) * (0x100 - global)) >> 8
- * Nothing is drawn while gWindowsShown is off. */
-static void Window_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t minKey)
+ * Nothing is drawn while o->gfx.windowsShown is off. */
+static void Window_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t* local, uint32_t minKey)
 {
-	Window_t* w = (Window_t*)o;
+	Window_t* w = (Window_t*)obj;
 	Bmp_t src;
 	int own, level;
 
 	(void)minKey;
-	if(!gWindowsShown)
+	if(!o->gfx.windowsShown)
 		return;
 	src = w->comp;
 	Bmp_Crop(&src, local);
-	own = DispObj_EffectiveLevel(o);
-	level = (int)(0x100u - (((uint32_t)(0x100 - own) * (uint32_t)(0x100 - gWindowsLevel)) >> 8));
-	Bmp_BlitEffect(dst, &src, DispObj_GetEffect(o), level);
+	own = DispObj_EffectiveLevel(obj);
+	level = (int)(0x100u - (((uint32_t)(0x100 - own) * (uint32_t)(0x100 - o->gfx.windowsLevel)) >> 8));
+	Bmp_BlitEffect(dst, &src, DispObj_GetEffect(obj), level);
 }
 
 /* "90 80": allocate the composite, frame and text layers at cw x ch
@@ -144,7 +142,7 @@ static void Window_Draw(DispObj_t* o, Bmp_t* dst, const Rect_t* local, uint32_t 
  * cells), clear the frame and the text, reset the text area to the whole
  * layer and size the display object.  Returns `ready` (the setSize
  * result, 1), 0 when the size is 0 or above the build's limit. */
-int Window_CreateSurfaces(Window_t* w, int cw, int ch)
+int Window_CreateSurfaces(OpenBGI_t* o, Window_t* w, int cw, int ch)
 {
 	uint32_t uw = (uint32_t)cw, uh = (uint32_t)ch;
 
@@ -154,22 +152,22 @@ int Window_CreateSurfaces(Window_t* w, int cw, int ch)
 	if(uh < 0x14)
 		uh <<= 5;
 	// 1024 x 768 at most up to 1.494; 1920 x 32768 from 1.529 on
-	if(uw == 0 || uw > (gEngine->gen >= GEN_1_529 ? 0x780u : 0x400u) || uh == 0 ||
-		uh > (gEngine->gen >= GEN_1_529 ? 0x8000u : 0x300u))
+	if(uw == 0 || uw > (o->engine.profile->gen >= GEN_1_529 ? 0x780u : 0x400u) || uh == 0 ||
+		uh > (o->engine.profile->gen >= GEN_1_529 ? 0x8000u : 0x300u))
 		return w->ready;
 	w->w = (int)uw;
 	w->h = (int)uh;
 
-	DispObj_AllocLike(&w->obj, &w->comp, w->compBuf, (int)uw, (int)uh, NULL);
-	Window_ShowFrame(w, 0);
-	DispObj_AllocLike(&w->obj, &w->frame, w->frameBuf, (int)uw, (int)uh, NULL);
+	DispObj_AllocLike(o, &w->obj, &w->comp, w->compBuf, (int)uw, (int)uh, NULL);
+	Window_ShowFrame(o, w, 0);
+	DispObj_AllocLike(o, &w->obj, &w->frame, w->frameBuf, (int)uw, (int)uh, NULL);
 	Bmp_Clear(&w->frame, NULL);
 	Window_ShowText(w, 0);
-	DispObj_AllocLike(&w->obj, &w->text, w->textBuf, (int)uw, (int)uh, NULL);
+	DispObj_AllocLike(o, &w->obj, &w->text, w->textBuf, (int)uw, (int)uh, NULL);
 	Rect_FromBmp(&w->textArea, &w->text);
 	Window_ResetCursor(w);
-	Window_ClearText(w); // recomposites nothing: not ready yet
-	w->ready = w->obj.vt->setSize(&w->obj, (int)uw, (int)uh);
+	Window_ClearText(o, w); // recomposites nothing: not ready yet
+	w->ready = w->obj.vt->setSize(o, &w->obj, (int)uw, (int)uh);
 	return w->ready;
 }
 
@@ -200,12 +198,12 @@ int Window_CopyComposite(Window_t* w, Bmp_t* dst)
 // ---- compositing -------------------------------------------------------------------------------
 
 // rebuild the whole composite; returns `ready`
-int Window_RecompositeAll(Window_t* w)
+int Window_RecompositeAll(OpenBGI_t* o, Window_t* w)
 {
 	Rect_t r;
 
 	Rect_FromBmp(&r, &w->comp);
-	return Window_Recomposite(w, &r);
+	return Window_Recomposite(o, w, &r);
 }
 
 // the frame pass: the frame layer copied into `dst` (the view of rectangle `r`), or black
@@ -229,7 +227,7 @@ static void Window_ComposeFrame(Window_t* w, Bmp_t* dst, const Rect_t* r)
  * (effect 0x40, level 1) - then the enabled items in index order,
  * alpha-blended by their level.  The items are drawn even while the text
  * layer is hidden. */
-static void Window_ComposeText(Window_t* w, Bmp_t* dst, const Rect_t* r)
+static void Window_ComposeText(OpenBGI_t* o, Window_t* w, Bmp_t* dst, const Rect_t* r)
 {
 	Bmp_t src, tmp;
 	int i;
@@ -239,7 +237,7 @@ static void Window_ComposeText(Window_t* w, Bmp_t* dst, const Rect_t* r)
 		Bmp_Crop(&src, r);
 		if(w->punchItems)
 		{
-			Bmp_AllocScreen(&tmp, src.w, src.h, 1);
+			Bmp_AllocScreen(o, &tmp, src.w, src.h, 1);
 			Bmp_BlitEffect(&tmp, &src, 0x80, 0);
 			for(i = 0; i < WIN_ITEMS; i++)
 			{
@@ -266,14 +264,14 @@ static void Window_ComposeText(Window_t* w, Bmp_t* dst, const Rect_t* r)
 /* the sub-sprite pass: the private compositor renders them into the
  * composite (its surface) after being handed the *unclipped* rectangle
  * as dirty */
-static void Window_ComposeSubs(Window_t* w, const Rect_t* want)
+static void Window_ComposeSubs(OpenBGI_t* o, Window_t* w, const Rect_t* want)
 {
 	if(w->subComp)
 	{
 		Rect_t* scratch = (Rect_t*)BGI_Alloc((size_t)w->subCount * sizeof(Rect_t));
 		Rect_t dirty = *want;
 		Compositor_AddDirty(w->subComp, 0, &dirty);
-		Compositor_Render(w->subComp, scratch);
+		Compositor_Render(o, w->subComp, scratch);
 		BGI_Free(scratch);
 	}
 }
@@ -282,7 +280,7 @@ static void Window_ComposeSubs(Window_t* w, const Rect_t* want)
  * (frame, text with its items, sub-sprites) in the order "90 82" set.
  * Returns `ready`; nothing happens when the window is not ready or the
  * rectangle misses the composite. */
-int Window_Recomposite(Window_t* w, const Rect_t* want)
+int Window_Recomposite(OpenBGI_t* o, Window_t* w, const Rect_t* want)
 {
 	Rect_t r, all;
 	Bmp_t dst;
@@ -307,15 +305,15 @@ int Window_Recomposite(Window_t* w, const Rect_t* want)
 		switch(w->layerOrder[pass])
 		{
 			case 0: Window_ComposeFrame(w, &dst, &r); break;
-			case 1: Window_ComposeText(w, &dst, &r); break;
-			case 2: Window_ComposeSubs(w, want); break;
+			case 1: Window_ComposeText(o, w, &dst, &r); break;
+			case 2: Window_ComposeSubs(o, w, want); break;
 			default: break;
 		}
 	}
 	return w->ready;
 }
 
-/* "90 82" of 1.494 on: the pass order by number: 0 frame, text, subs;
+/* "90 82" of 1.492 on: the pass order by number: 0 frame, text, subs;
  * 1 frame, subs, text; 2 text, frame, subs; 3 text, subs, frame; 4 subs,
  * frame, text; 5 subs, text, frame.  0 ok, 1 when the number is out of
  * range (nothing changes).  The caller recomposites. */
@@ -329,13 +327,13 @@ int Window_SetLayerOrder(Window_t* w, int order)
 }
 
 // recomposite the footprint of `src` placed at (x, y); returns `ready`
-int Window_RecompositeAt(Window_t* w, int x, int y, const Bmp_t* src)
+int Window_RecompositeAt(OpenBGI_t* o, Window_t* w, int x, int y, const Bmp_t* src)
 {
 	Rect_t r;
 
 	Rect_FromBmp(&r, src);
 	Rect_Offset(&r, x, y);
-	return Window_Recomposite(w, &r);
+	return Window_Recomposite(o, w, &r);
 }
 
 // ---- only destroy and draw are overridden ------------------------------------------------------

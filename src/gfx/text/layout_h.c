@@ -7,31 +7,32 @@
  *              pass (layout_internal.h)
  */
 #include "layout_internal.h"
+#include "bgi/core.h"
 
 /* The layout core: one node per glyph, left to right, from the cursor
  * `cur` inside `area`, lines `adv` pixels apart.  A control byte at the
  * start of the string selects underlining (2), the leading bracket to hang
  * (4 .. 8) or, from 1.529, no measuring of that bracket (3); 0x0A in the
  * text is a line break, other control bytes are skipped.  With `hang` the
- * closing punctuation after a character stays on its line (it may run
- * into the right-hand reserve of one glyph size), an opening bracket never
- * ends a line, and a leading bracket hangs into the left margin
- * (gHangBrackets).  With `rubyOn` every line keeps the ruby size above it
- * and starts at the indent; a dictionary word is kept together and its
- * base node remembers the word (Text_RubyPlaceH fills the readings in).
- * The nodes are built for `colour` and the shadow `style`, each with the
- * reveal delay of its position.  From 1.494 on the walk also interprets
- * the inline markup (tags in angle brackets: bold / italic / link fonts,
- * colours, ruby, delays), keeps Latin words together, swallows a space
- * that would end a line, and knows the outline style; those parts are
- * gated on the generation.  *outLines receives the line count, `cur` the
- * cursor behind the text.  1 ok, 0 when the font is unknown.
+ * closing punctuation after a character stays on its line (it may run into
+ * the right-hand reserve of one glyph size), an opening bracket never ends
+ * a line, and a leading bracket hangs into the left margin
+ * (o->text.hangBrackets).  With `rubyOn` every line keeps the ruby size
+ * above it and starts at the indent; a dictionary word is kept together
+ * and its base node remembers the word (Text_RubyPlaceH fills the readings
+ * in).  The nodes are built for `colour` and the shadow `style`, each with
+ * the reveal delay of its position.  From 1.492 on the walk also
+ * interprets the inline markup (tags in angle brackets: bold / italic /
+ * link fonts, colours, ruby, delays), keeps Latin words together, swallows
+ * a space that would end a line, and knows the outline style; those parts
+ * are gated on the generation.  *outLines receives the line count, `cur`
+ * the cursor behind the text.  1 ok, 0 when the font is unknown.
  *
- * OpenBGI extensions (docs/obgi.md): with gTextWordWrap ("EF 03") the word
- * keeping and the swallowed space also apply before 1.494, and while
- * gTextDirection ("EF 01") is not 0 the whole layout is done by
- * Text_LayoutCoreBidi instead. */
-int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int rubyOn, RubyDict_t* dict,
+ * OpenBGI extensions (docs/modding/obgi.md): with o->text.textWordWrap ("EF 03")
+ * the word keeping and the swallowed space also apply before 1.492, and
+ * while o->text.textDirection ("EF 01") is not 0 the whole layout is done
+ * by Text_LayoutCoreBidi instead. */
+int Text_LayoutCoreH(OpenBGI_t* o, RichState_t* rich, int32_t* outLines, const char* str, int rubyOn, RubyDict_t* dict,
 	int32_t cur[2], const Rect_t* area, int adv, int font, int proportional,
 	int hang, uint32_t colour, const int32_t style[5])
 {
@@ -49,19 +50,19 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 	char word[0x400], run[0x100], tagBuf[0x100], buf[TEXT_CHAR_MAX];
 	char* wordRun;
 
-	if(gTextDirection != 0) // OpenBGI "EF 01": bidirectional text has a layout of its own
-		return Text_LayoutCoreBidi(rich, outLines, str, rubyOn, dict, cur, area, adv, font, proportional, hang, colour, style);
-	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+	if(o->text.textDirection != 0) // OpenBGI "EF 01": bidirectional text has a layout of its own
+		return Text_LayoutCoreBidi(o, rich, outLines, str, rubyOn, dict, cur, area, adv, font, proportional, hang, colour, style);
+	if(!BmpMgr_FontInfo(o->text.textBmpMgr, &fi, font))
 		return 0;
 	memset(&m, 0, sizeof m);
-	m.on = gEngine->gen >= GEN_1_494;
+	m.on = o->engine.profile->gen >= GEN_1_492;
 	m.base = &fi;
 	m.cur = fi;
 	m.cur.font = NULL;
 	m.fi = &fi;
 	m.colour = colour;
 	if(m.on)
-		TextLinks_Clear();
+		TextLinks_Clear(o);
 
 	// a control byte in front of the text: 2 = underline, 4..8 = a bracket
 	// hung into the margin; 3 (1.529 on) keeps a leading bracket from being
@@ -75,7 +76,7 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 			underline = 1;
 			str++;
 		}
-		else if(c == 3 && gEngine->gen >= GEN_1_529)
+		else if(c == 3 && o->engine.profile->gen >= GEN_1_529)
 		{
 			noHangMeasure = 1;
 			str++;
@@ -83,7 +84,7 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 		else if(c >= 4 && c <= 8)
 		{
 			const char* lb = gLeadingBracket[c - 4];
-			leadingCode = TextTableChar(&lb);
+			leadingCode = TextTableChar(o, &lb);
 			hasLeading = 1;
 			str++;
 		}
@@ -91,36 +92,36 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 
 	size = fi.size;
 	glyphW = FontInfo_GlyphW(&fi);
-	rubySize = rubyOn ? Text_RubySize(size) : 0;
+	rubySize = rubyOn ? Text_RubySize(o, size) : 0;
 	sdx = Layout_Min1(Layout_Pct(size, style[1]));
 	sdy = Layout_Min1(Layout_Pct(size, style[2]));
-	sdxOn = Layout_ShadowReserve(style, sdx);
-	sdyOn = Layout_ShadowReserve(style, sdy);
+	sdxOn = Layout_ShadowReserve(o, style, sdx);
+	sdyOn = Layout_ShadowReserve(o, style, sdy);
 	// the painting cell: 3 x 2 sizes up to 1.494, 5/4 glyph widths by one
 	// size from then on (room for the italic shear)
 	if(m.on)
-		Bmp_AllocScreen(&cell, (glyphW * 5) / 4, size, 1);
+		Bmp_AllocScreen(o, &cell, (glyphW * 5) / 4, size, 1);
 	else
-		Bmp_AllocScreen(&cell, 3 * size, 2 * size, 1);
+		Bmp_AllocScreen(o, &cell, 3 * size, 2 * size, 1);
 	wordRun = (char*)BGI_Alloc(strlen(str) + 1);
 
 	if(hang)
 	{
 		hangSize = size;
-		if(gHangBrackets && !noHangMeasure)
+		if(o->text.hangBrackets && !noHangMeasure)
 		{
 			// a paragraph that starts with an opening bracket (or carries a
 			// leading control byte) hangs it: later lines start that much in
-			int isBracket = Text_IsHangBracket(str);
+			int isBracket = Text_IsHangBracket(o, str);
 			const char* measured = NULL;
 			if(hasLeading)
 			{
-				buf[TextPutChar(buf, leadingCode)] = 0;
+				buf[TextPutChar(o, buf, leadingCode)] = 0;
 				measured = buf;
 			}
 			else if(isBracket)
 			{
-				int len = TextCharLen(str);
+				int len = TextCharLen(o, str);
 				memcpy(buf, str, (size_t)len);
 				buf[len] = 0;
 				measured = buf;
@@ -128,8 +129,8 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 			if(measured)
 			{
 				int32_t mm[3];
-				Text_MeasureInfo(mm, measured, &fi, proportional);
-				lineStartOffset = mm[0] + Layout_Pitch(proportional, &fi);
+				Text_MeasureInfo(o, mm, measured, &fi, proportional);
+				lineStartOffset = mm[0] + Layout_Pitch(o, proportional, &fi);
 			}
 		}
 	}
@@ -137,8 +138,8 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 	{
 		// the ruby margin ("91 98"): the first line only when it starts at the edge
 		if(cur[0] == area->l)
-			cur[0] += Text_GetIndent();
-		lineStartOffset += Text_GetIndent();
+			cur[0] += Text_GetIndent(o);
+		lineStartOffset += Text_GetIndent(o);
 	}
 
 	*outLines = 1;
@@ -180,9 +181,9 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 					m.literal = 0; // "</>" before it: the '<' is drawn
 				else
 				{
-					int tag = Markup_Match(tagBuf, sizeof tagBuf, p + 1, close - 1);
+					int tag = Markup_Match(o, tagBuf, sizeof tagBuf, p + 1, close - 1);
 					if(tag >= 0)
-						Markup_Apply(&m, tag, tagBuf + strlen(gMarkupTags[tag].name), p + close + 1, p, dict, cur, area);
+						Markup_Apply(o, &m, tag, tagBuf + strlen(gMarkupTags[tag].name), p + close + 1, p, dict, cur, area);
 					pos += close + 1;
 					continue;
 				}
@@ -191,15 +192,15 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 
 		cf = m.fi;
 		cw = FontInfo_GlyphW(cf);
-		len = TextGetChar(&code, p);
-		dbcs = TextIsWide(code, len);
-		if((m.on || gTextWordWrap) && hang)
+		len = TextGetChar(o, &code, p);
+		dbcs = TextIsWide(o, code, len);
+		if((m.on || o->text.textWordWrap) && hang)
 		{
 			// a space that would end the line is dropped with a line break
 			// instead, unless the one before it was a space too
 			int spaceW = dbcs ? cw : cw / 2;
 			const char* sp = MSG_TXT_BRACKET_SPACE;
-			if((code == 0x20 || code == TextTableChar(&sp)) && pos >= len &&
+			if((code == 0x20 || code == TextTableChar(o, &sp)) && pos >= len &&
 				memcmp(str + pos - len, p, (size_t)len) != 0 && cur[0] + spaceW > area->r - size + 1)
 			{
 				lineStart = 1;
@@ -211,10 +212,10 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 			}
 		}
 
-		node = Layout_NewNode(m.delay);
+		node = Layout_NewNode(o, m.delay);
 		node->srcOfs = pos;
 		Bmp_Fill(&view, NULL, 0);
-		Text_PaintGlyph(&view, &g, (int)code, cf->font, m.colour);
+		Text_PaintGlyph(o, &view, &g, (int)code, cf->font, m.colour);
 		if(underline || m.linkStart)
 		{
 			// the underline: the cell's bottom row in the text colour
@@ -232,31 +233,31 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 			width = dbcs ? cw : cw / 2;
 			gap = 0;
 		}
-		// 1.494 on: the font's extra width, and half a glyph more in italics
+		// 1.492 on: the font's extra width, and half a glyph more in italics
 		extra = 0;
 		if(m.on)
 			extra = cf->italic ? (width >> 1) + cf->font->extraW[1] : cf->font->extraW[0];
-		Layout_GlyphBitmap(&node->glyph, width + extra + sdxOn, size + sdyOn, &view, &g, (int)code, cf->font, style, sdx,
+		Layout_GlyphBitmap(o, &node->glyph, width + extra + sdxOn, size + sdyOn, &view, &g, (int)code, cf->font, style, sdx,
 			sdy, 0);
 
 		// how far the cursor moves; a word, the ruby word and trailing
 		// punctuation may widen it
-		advanceX = width + gap - (gap >> 1) + Layout_Pitch(proportional, cf);
+		advanceX = width + gap - (gap >> 1) + Layout_Pitch(o, proportional, cf);
 		nextPos = pos + len;
 		nextPtr = str + nextPos;
-		if(m.on || gTextWordWrap)
+		if(m.on || o->text.textWordWrap)
 		{
 			/* the word that starts here; `chars` is its length in characters.
 			 * The original's runs are single-byte text, where that is the
 			 * byte count n; the runs of the "EF 03" word wrap for the older
 			 * generations may hold multi-byte letters. */
-			int n = m.on ? Markup_WordRun(wordRun, p) : Text_WrapWordRun(wordRun, p);
+			int n = m.on ? Markup_WordRun(o, wordRun, p) : Text_WrapWordRun(o, wordRun, p);
 			int chars = n;
 			if(!m.on)
 			{
 				int k;
 				for(chars = 0, k = 0; k < n; chars++)
-					k += TextCharLen(wordRun + k);
+					k += TextCharLen(o, wordRun + k);
 			}
 			if(n < 1)
 				lineStart = 0;
@@ -267,7 +268,7 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 				// a Latin word is kept together: it needs its whole width
 				// now (not at the start of a line, where it cannot move)
 				int32_t mm[3];
-				Text_MeasureInfo(mm, wordRun, cf, proportional);
+				Text_MeasureInfo(o, mm, wordRun, cf, proportional);
 				if(advanceX < mm[0])
 					advanceX = mm[0];
 				wordSkip = skipChars = chars - 1;
@@ -284,12 +285,12 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 				// carries the word for Text_RubyPlaceH
 				int32_t mm[3];
 				int n;
-				Text_MeasureInfo(mm, word, cf, proportional);
+				Text_MeasureInfo(o, mm, word, cf, proportional);
 				if(advanceX < mm[m.on ? 0 : 2])
 					advanceX = mm[m.on ? 0 : 2];
 				node->rubyWord = BGI_Strdup(word);
 				node->rubyExtent = mm[1];
-				n = SjisCodes(NULL, word) - 1;
+				n = SjisCodes(o, NULL, word) - 1;
 				rubySkip = wordSkip = skipChars = n;
 				nextPtr = p + strlen(word); // kinsoku looks past the whole word
 			}
@@ -300,7 +301,7 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 				punctSkip--;
 			else
 			{
-				int n = Text_CollectClosing(run, nextPtr);
+				int n = Text_CollectClosing(o, run, nextPtr);
 				if(n > 0)
 				{
 					// closing punctuation must stay on this line: reserve its
@@ -308,24 +309,24 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 					// still be placed when the line is full
 					int32_t mm[3];
 					char ch[TEXT_CHAR_MAX];
-					Text_MeasureInfo(mm, run, cf, proportional);
+					Text_MeasureInfo(o, mm, run, cf, proportional);
 					advanceX += mm[m.on ? 0 : 2];
 					punctSkip = n + skipChars;
-					Text_NthChar(ch, run, n - 1);
+					Text_NthChar(o, ch, run, n - 1);
 					// (text function 0 of 1.573 on switches this rule off)
-					closingFollows = gTextFunc[0] ? Text_IsClosing(ch) : 0;
+					closingFollows = o->text.textFunc[0] ? Text_IsClosing(o, ch) : 0;
 					if(closingFollows)
-						TextGetChar(&pendingClose, ch);
+						TextGetChar(o, &pendingClose, ch);
 				}
-				else if(Text_IsOpening(p) && *nextPtr)
+				else if(Text_IsOpening(o, p) && *nextPtr)
 				{
 					// an opening bracket never ends a line: it needs room
 					// for the character after it as well
 					int32_t mm[3];
-					int nl = TextCharLen(nextPtr);
+					int nl = TextCharLen(o, nextPtr);
 					memcpy(run, nextPtr, (size_t)nl);
 					run[nl] = 0;
-					Text_MeasureInfo(mm, run, cf, proportional);
+					Text_MeasureInfo(o, mm, run, cf, proportional);
 					advanceX += mm[m.on ? 0 : 2];
 				}
 			}
@@ -349,15 +350,15 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
 		}
 		node->x = cur[0] + (gap >> 1);
 		node->y = cur[1] + rubySize; // the reading's room is above the glyph
-		cur[0] += width + gap + Layout_Pitch(proportional, cf);
+		cur[0] += width + gap + Layout_Pitch(o, proportional, cf);
 		*link = node;
 		link = &node->next;
-		m.delay += gRubyCharDelay;
+		m.delay += o->text.rubyCharDelay;
 		pos = nextPos;
 	}
 	BGI_Free(wordRun);
 	BGI_Free(cell.pixels);
-	gTextLastColour = m.colour; // for "92 9B"
+	o->text.textLastColour = m.colour; // for "92 9B"
 	Markup_Free(&m);
 	return 1;
 }
@@ -367,7 +368,7 @@ int Text_LayoutCoreH(RichState_t* rich, int32_t* outLines, const char* str, int 
  * width apart), centred, starting size / 8 to the right of `x`, at `y`.
  * Each gets a share of the word's reveal delay, starting at `delay`.  The
  * new nodes (kind 2) are spliced in behind `base`. */
-static void RubyEmitH(RichChar_t* base, const RubyNode_t* entry, const FontInfo_t* rfi, uint32_t colour,
+static void RubyEmitH(OpenBGI_t* o, RichChar_t* base, const RubyNode_t* entry, const FontInfo_t* rfi, uint32_t colour,
 	const int32_t style[5], int x, int y, int extent, int delay)
 {
 	int size = rfi->size;
@@ -386,23 +387,23 @@ static void RubyEmitH(RichChar_t* base, const RubyNode_t* entry, const FontInfo_
 	if(perChar < glyphW)
 		perChar = glyphW;
 	startX = x + size / 8 + (extent - (n - 1) * perChar - glyphW) / 2;
-	delayStep = (int)((uint32_t)(entry->wordChars * gRubyCharDelay) / (uint32_t)n);
+	delayStep = (int)((uint32_t)(entry->wordChars * o->text.rubyCharDelay) / (uint32_t)n);
 	curDelay = delay + (int)((uint32_t)delayStep >> 1);
-	Bmp_AllocScreen(&cell, 3 * size, 2 * size, 1);
+	Bmp_AllocScreen(o, &cell, 3 * size, 2 * size, 1);
 	for(i = 0; i < n; i++)
 	{
 		int code = entry->readingCodes[i];
 		int w = code >= 0x100 ? glyphW : glyphW / 2;
 		Glyph_t g;
-		RichChar_t* node = Layout_NewNode(curDelay);
+		RichChar_t* node = Layout_NewNode(o, curDelay);
 
 		node->x = startX;
 		node->y = y;
 		node->kind = 2;
 		node->srcOfs = base->srcOfs;
 		Bmp_Fill(&cell, NULL, 0);
-		Font_PaintGlyph(&cell, &g, code, rfi->font, colour);
-		Layout_GlyphBitmap(&node->glyph, w + sdxOn, size + sdyOn, &cell, &g, code, rfi->font, style, sdx, sdy, 0);
+		Font_PaintGlyph(o, &cell, &g, code, rfi->font, colour);
+		Layout_GlyphBitmap(o, &node->glyph, w + sdxOn, size + sdyOn, &cell, &g, code, rfi->font, style, sdx, sdy, 0);
 		*link = node;
 		link = &node->next;
 		curDelay += delayStep;
@@ -417,31 +418,31 @@ static void RubyEmitH(RichChar_t* base, const RubyNode_t* entry, const FontInfo_
  * "92 97" overrides) and emit the reading of every node that starts a
  * dictionary word, in `colour` with the `style` shadow.  1 ok, 0 when the
  * base font is unknown or the ruby font cannot be opened. */
-int Text_RubyPlaceH(RichState_t* rich, int font, uint32_t colour, const int32_t style[5], RubyDict_t* dict)
+int Text_RubyPlaceH(OpenBGI_t* o, RichState_t* rich, int font, uint32_t colour, const int32_t style[5], RubyDict_t* dict)
 {
 	FontInfo_t fi, rfi;
 	int handle, rsz;
 	int32_t rstyle[5];
 	RichChar_t* c;
 
-	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+	if(!BmpMgr_FontInfo(o->text.textBmpMgr, &fi, font))
 		return 0;
 	// the ruby font: the base face at the ruby size, or the "91 97" override
-	rsz = gRubySizeFixed > 0 ? gRubySizeFixed : Text_RubySize(fi.size);
-	if(BmpMgr_FontOpen(gTextBmpMgr, &handle, gRubyFace[0] ? gRubyFace : fi.name, rsz,
-		   gRubyWidthPct > 0 ? gRubyWidthPct : fi.widthPct, gRubyBold != -1 ? gRubyBold : fi.bold) != 0)
+	rsz = o->text.rubySizeFixed > 0 ? o->text.rubySizeFixed : Text_RubySize(o, fi.size);
+	if(BmpMgr_FontOpen(o, o->text.textBmpMgr, &handle, o->text.rubyFace[0] ? o->text.rubyFace : fi.name, rsz,
+		   o->text.rubyWidthPct > 0 ? o->text.rubyWidthPct : fi.widthPct, o->text.rubyBold != -1 ? o->text.rubyBold : fi.bold) != 0)
 		return 0;
-	BmpMgr_FontInfo(gTextBmpMgr, &rfi, handle);
+	BmpMgr_FontInfo(o->text.textBmpMgr, &rfi, handle);
 	memcpy(rstyle, style, sizeof rstyle);
-	if(gRubyShadow != -1)
-		rstyle[3] = gRubyShadow; // the ruby's own shadow colour
+	if(o->text.rubyShadow != -1)
+		rstyle[3] = o->text.rubyShadow; // the ruby's own shadow colour
 	for(c = rich->head; c; c = c->next)
 	{
 		RubyNode_t entry;
 		if(!c->rubyWord)
 			continue;
 		RubyDict_Find(&entry, c->rubyWord, dict);
-		RubyEmitH(c, &entry, &rfi, colour, rstyle, c->x + gRubyDx, c->y - rsz + gRubyDy, c->rubyExtent, c->delay);
+		RubyEmitH(o, c, &entry, &rfi, colour, rstyle, c->x + o->text.rubyDx, c->y - rsz + o->text.rubyDy, c->rubyExtent, c->delay);
 	}
 	return 1;
 }
@@ -464,7 +465,7 @@ void Layout_FreeLineRecs(LineRec_t* r)
  * are the runs of normal nodes sharing a y; ruby glyphs follow their line
  * (they shift with the shift in force when they are met).  The cursor
  * moves with the last line when it is not at the left edge. */
-void Text_AlignH(RichState_t* rich, int32_t cur[2], const Rect_t* area, int font, int hang,
+void Text_AlignH(OpenBGI_t* o, RichState_t* rich, int32_t cur[2], const Rect_t* area, int font, int hang,
 	const int32_t style[5], int swing)
 {
 	LineRec_t head = {0, 0x80000000, 0x80000000, NULL};
@@ -475,7 +476,7 @@ void Text_AlignH(RichState_t* rich, int32_t cur[2], const Rect_t* area, int font
 
 	if(swing == 0)
 		return;
-	if(gTextDirection == 1)
+	if(o->text.textDirection == 1)
 	{ // (OpenBGI) right-to-left lines start at the right edge
 		Text_AlignBidi(rich, cur, area, swing);
 		return;
@@ -499,9 +500,9 @@ void Text_AlignH(RichState_t* rich, int32_t cur[2], const Rect_t* area, int font
 		if(rec->extent < right)
 			rec->extent = right;
 	}
-	if(BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+	if(BmpMgr_FontInfo(o->text.textBmpMgr, &fi, font))
 		size = fi.size;
-	cursorItemH = gTextItems ? gTextItems[0].h : 0; // the first cursor picture's height is what a right-aligned line leaves free
+	cursorItemH = o->text.textItems ? o->text.textItems[0].h : 0; // the first cursor picture's height is what a right-aligned line leaves free
 	sdx = Layout_Pct(size, style[1]);
 
 	// pass 2: shift every node by its line's amount
@@ -514,7 +515,7 @@ void Text_AlignH(RichState_t* rich, int32_t cur[2], const Rect_t* area, int font
 			if(swing == 1)
 			{
 				int reserve = hang && rec->extent < area->r ? size : 0;
-				shift = (area->r - rec->extent - reserve + sdx - Text_GetIndent()) >> 1;
+				shift = (area->r - rec->extent - reserve + sdx - Text_GetIndent(o)) >> 1;
 			}
 			else if(swing == 2)
 				shift = area->r - rec->extent - cursorItemH + sdx;

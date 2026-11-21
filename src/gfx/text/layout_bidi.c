@@ -3,14 +3,14 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * layout_bidi.c - the rich text layout for right-to-left and
- *                 mixed-direction text (inc/bgi/gfx/text.h)
+ *                 mixed-direction text (src/include/bgi/gfx/text.h)
  *
- * An OpenBGI extension ("EF 01", docs/obgi.md): Text_LayoutCoreH hands the
- * string to Text_LayoutCoreBidi while gTextDirection is not 0, and gets
- * back the same kind of node list, so the paced output, the immediate
- * drawing and the bitmap text all work unchanged.  Direction 2 is also
- * the layout for left-to-right languages other than Japanese and Chinese
- * (step 2 below).
+ * An OpenBGI extension ("EF 01", docs/modding/obgi.md): Text_LayoutCoreH hands the
+ * string to Text_LayoutCoreBidi while o->text.textDirection is not 0, and
+ * gets back the same kind of node list, so the paced output, the immediate
+ * drawing and the bitmap text all work unchanged.  Direction 2 is also the
+ * layout for left-to-right languages other than Japanese and Chinese (step
+ * 2 below).
  *
  * What it does, per paragraph (the text between line breaks):
  *
@@ -34,7 +34,7 @@
  * that order, so the paced output "types" Arabic from the right.  Not
  * supported here: the readings of the ruby dictionary, the leading
  * control bytes (underline, hung bracket), the kinsoku rules and the
- * inline markup of 1.494 on.
+ * inline markup of 1.492 on.
  *
  * The cursor.  In a right-to-left paragraph the text grows to the left,
  * and the cursor that the layout returns is where the click-wait picture
@@ -44,7 +44,8 @@
  */
 #include "layout_internal.h"
 #include "bgi/bidi.h"
-#include "bgi/os.h"
+#include "bgi/sjis.h"
+#include "bgi/core.h"
 
 typedef struct BidiChar // one character of the string
 {
@@ -87,35 +88,35 @@ static int IsEastAsianWide(uint32_t cp)
 }
 
 // the Unicode code point of a code of the text encoding (the same number in UTF-8 mode)
-static uint32_t CodePointOf(uint32_t code)
+static uint32_t CodePointOf(OpenBGI_t* o, uint32_t code)
 {
-	if(gTextUtf8 || code < 0x80)
+	if(o->enc.textUtf8 || code < 0x80)
 		return code;
 	if(code < 0x100)
 		return 0xff61 + (code - 0xa1); // the half-width katakana
-	return OS_SjisToCodePoint((uint16_t)code);
+	return Sjis_CodePoint((uint16_t)code);
 }
 
 /* build the glyph of one character and measure it (step 2 above): the
  * node with its bitmap, the advance and where the bitmap sits relative to
  * the pen */
-static void BuildGlyph(BidiCtx_t* x, BidiChar_t* ch, int delay)
+static void BuildGlyph(OpenBGI_t* o, BidiCtx_t* x, BidiChar_t* ch, int delay)
 {
 	Bmp_t view = x->cell;
 	Glyph_t g;
 	int width;
 
-	ch->node = Layout_NewNode(delay);
+	ch->node = Layout_NewNode(o, delay);
 	ch->node->srcOfs = ch->ofs;
 	Bmp_Fill(&view, NULL, 0);
-	Text_PaintGlyph(&view, &g, (int)ch->code, x->fi->font, x->colour);
+	Text_PaintGlyph(o, &view, &g, (int)ch->code, x->fi->font, x->colour);
 	if(ch->natural)
 	{
 		// the ink where the font puts it, the pen moved by the font's advance
 		Bmp_CropGlyph(&view, &g);
 		width = view.w;
 		ch->dx = g.left;
-		ch->advance = ch->mark ? 0 : FontRaster_Advance(x->fi->font, (int)ch->code);
+		ch->advance = ch->mark ? 0 : FontRaster_Advance(o, x->fi->font, (int)ch->code);
 		if(!ch->mark && ch->advance <= 0)
 			ch->advance = g.right + 1; // the font cannot measure: the ink's extent
 	}
@@ -134,11 +135,11 @@ static void BuildGlyph(BidiCtx_t* x, BidiChar_t* ch, int delay)
 		// fixed pitch: a full or half cell
 		width = ch->wide ? x->glyphW : x->glyphW / 2;
 		ch->dx = 0;
-		ch->advance = width + Layout_Pitch(0, x->fi);
+		ch->advance = width + Layout_Pitch(o, 0, x->fi);
 	}
 	ch->inkL = ch->dx;
 	ch->inkR = ch->dx + (g.right - g.left);
-	Layout_GlyphBitmap(&ch->node->glyph, width + x->sdxOn, x->size + x->sdyOn, &view, &g, (int)ch->code, x->fi->font,
+	Layout_GlyphBitmap(o, &ch->node->glyph, width + x->sdxOn, x->size + x->sdyOn, &view, &g, (int)ch->code, x->fi->font,
 		x->style, x->sdx, x->sdy, 0);
 }
 
@@ -183,7 +184,7 @@ static int PlaceLine(BidiChar_t* c, const uint32_t* cp, const uint8_t* levels, i
 }
 
 // See text.h and the top of this file.
-int Text_LayoutCoreBidi(RichState_t* rich, int32_t* outLines, const char* str, int rubyOn, RubyDict_t* dict,
+int Text_LayoutCoreBidi(OpenBGI_t* o, RichState_t* rich, int32_t* outLines, const char* str, int rubyOn, RubyDict_t* dict,
 	int32_t cur[2], const Rect_t* area, int adv, int font, int proportional,
 	int hang, uint32_t colour, const int32_t style[5])
 {
@@ -193,13 +194,13 @@ int Text_LayoutCoreBidi(RichState_t* rich, int32_t* outLines, const char* str, i
 	uint32_t *cp, *shaped;
 	uint8_t* levels;
 	RichChar_t** link = &rich->head;
-	int base = gTextDirection == 1; // the paragraph level: 1 = right to left
+	int base = o->text.textDirection == 1; // the paragraph level: 1 = right to left
 	int count = 0, pos, a, i, delay = 0, rubySize, indent, reserve;
 	int left, right, lineL, lineR, full, pen, avail, partial;
 	size_t cap = strlen(str) + 1;
 
 	(void)dict;
-	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+	if(!BmpMgr_FontInfo(o->text.textBmpMgr, &fi, font))
 		return 0;
 	memset(&x, 0, sizeof x);
 	x.fi = &fi;
@@ -208,13 +209,13 @@ int Text_LayoutCoreBidi(RichState_t* rich, int32_t* outLines, const char* str, i
 	x.proportional = proportional;
 	x.sdx = Layout_Min1(Layout_Pct(fi.size, style[1]));
 	x.sdy = Layout_Min1(Layout_Pct(fi.size, style[2]));
-	x.sdxOn = Layout_ShadowReserve(style, x.sdx);
-	x.sdyOn = Layout_ShadowReserve(style, x.sdy);
+	x.sdxOn = Layout_ShadowReserve(o, style, x.sdx);
+	x.sdyOn = Layout_ShadowReserve(o, style, x.sdy);
 	x.colour = colour;
 	x.style = style;
-	Bmp_AllocScreen(&x.cell, 3 * fi.size, 2 * fi.size, 1);
-	rubySize = rubyOn ? Text_RubySize(fi.size) : 0; // the lines keep the room above them that the left-to-right layout leaves for readings
-	indent = rubyOn ? Text_GetIndent() : 0;
+	Bmp_AllocScreen(o, &x.cell, 3 * fi.size, 2 * fi.size, 1);
+	rubySize = rubyOn ? Text_RubySize(o, fi.size) : 0; // the lines keep the room above them that the left-to-right layout leaves for readings
+	indent = rubyOn ? Text_GetIndent(o) : 0;
 	reserve = hang ? fi.size : 0; // free room at the line's end, where the click cursor goes
 
 	c = (BidiChar_t*)BGI_Calloc(cap * sizeof(BidiChar_t));
@@ -226,13 +227,13 @@ int Text_LayoutCoreBidi(RichState_t* rich, int32_t* outLines, const char* str, i
 	for(pos = 0; str[pos];)
 	{
 		uint32_t code;
-		int len = TextGetChar(&code, str + pos);
+		int len = TextGetChar(o, &code, str + pos);
 		if(code >= 0x20 || code == 0x0a)
 		{
 			c[count].code = code;
 			c[count].ofs = pos;
-			c[count].wide = (uint8_t)TextIsWide(code, len);
-			cp[count] = CodePointOf(code);
+			c[count].wide = (uint8_t)TextIsWide(o, code, len);
+			cp[count] = CodePointOf(o, code);
 			count++;
 		}
 		pos += len;
@@ -265,7 +266,7 @@ int Text_LayoutCoreBidi(RichState_t* rich, int32_t* outLines, const char* str, i
 		// the paragraph a .. b-1
 		for(b = a; b < count && c[b].code != 0x0a; b++)
 			;
-		if(gTextUtf8)
+		if(o->enc.textUtf8)
 			Arabic_Shape(cp + a, b - a, shaped + a);
 		else
 			memcpy(shaped + a, cp + a, (size_t)(b - a) * sizeof(uint32_t)); // code page 932 has no letters that join
@@ -275,7 +276,7 @@ int Text_LayoutCoreBidi(RichState_t* rich, int32_t* outLines, const char* str, i
 			BidiChar_t* ch = &c[i];
 			BidiClass_t cls = Bidi_ClassOf(cp[i]);
 			uint32_t drawn = shaped[i];
-			if((levels[i] & 1) && (gTextUtf8 || drawn < 0x80))
+			if((levels[i] & 1) && (o->enc.textUtf8 || drawn < 0x80))
 				drawn = Bidi_Mirror(drawn); // a bracket in right-to-left text opens the other way
 			ch->space = cp[i] == 0x20 || cp[i] == 0x3000;
 			ch->breakable = !Bidi_IsRtlScript(cp[i]) && (ch->wide && cp[i] >= 0x2e80);
@@ -286,12 +287,12 @@ int Text_LayoutCoreBidi(RichState_t* rich, int32_t* outLines, const char* str, i
 				ch->code = 0;
 				continue;
 			}
-			if(gTextUtf8)
+			if(o->enc.textUtf8)
 				ch->code = drawn;
 			else if(drawn != cp[i])
 				ch->code = drawn; // a mirrored ASCII bracket
-			BuildGlyph(&x, ch, delay);
-			delay += gRubyCharDelay;
+			BuildGlyph(o, &x, ch, delay);
+			delay += o->text.rubyCharDelay;
 			*link = ch->node;
 			link = &ch->node->next;
 		}
@@ -372,7 +373,7 @@ int Text_LayoutCoreBidi(RichState_t* rich, int32_t* outLines, const char* str, i
 	BGI_Free(cp);
 	BGI_Free(c);
 	BGI_Free(x.cell.pixels);
-	gTextLastColour = colour; // for "92 9B"
+	o->text.textLastColour = colour; // for "92 9B"
 	return 1;
 }
 
@@ -411,7 +412,7 @@ void Text_AlignBidi(RichState_t* rich, int32_t cur[2], const Rect_t* area, int s
  * blit the glyphs so that the leftmost one starts at x.  A string with
  * line breaks comes out as several lines, `size` pixels apart, aligned on
  * the side the text starts from.  See text.h. */
-int Text_DrawBidiLine(Bmp_t* dst, int* measure, int x, int y, const char* str, int font, uint32_t colour, int effect,
+int Text_DrawBidiLine(OpenBGI_t* o, Bmp_t* dst, int* measure, int x, int y, const char* str, int font, uint32_t colour, int effect,
 	int level, int proportional)
 {
 	RichState_t rich;
@@ -419,16 +420,16 @@ int Text_DrawBidiLine(Bmp_t* dst, int* measure, int x, int y, const char* str, i
 	FontInfo_t fi;
 	Rect_t area = {0, 0, 0xfffff, 0xfffff};
 	int32_t cur[2] = {0, 0}, lineCount, style[5];
-	uint32_t savedColour = gTextLastColour;
+	uint32_t savedColour = o->text.textLastColour;
 	int left = 0x7fffffff, right = -0x7fffffff;
 
 	*measure = 0;
-	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, font))
+	if(!BmpMgr_FontInfo(o->text.textBmpMgr, &fi, font))
 		return 0;
 	memset(&rich, 0, sizeof rich);
-	Text_MakeStyle(style, 0, 0, 0, 0, 0);
-	Text_LayoutCoreBidi(&rich, &lineCount, str, 0, NULL, cur, &area, fi.size, font, proportional, 0, colour, style);
-	gTextLastColour = savedColour;
+	Text_MakeStyle(o, style, 0, 0, 0, 0, 0);
+	Text_LayoutCoreBidi(o, &rich, &lineCount, str, 0, NULL, cur, &area, fi.size, font, proportional, 0, colour, style);
+	o->text.textLastColour = savedColour;
 	for(c = rich.head; c; c = c->next)
 	{
 		if(c->x < left)

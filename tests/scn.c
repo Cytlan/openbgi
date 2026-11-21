@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * tests/scn.c - unit test of the scenario decompiler and compiler
- *               (src/scn/, declared in inc/bgi/scn.h); built as
- *               bin/test_scn by `make test`
+ *               (src/scn/, declared in src/include/bgi/scn.h); built as
+ *               test_scn by `make test`
  *
  * The groups of tests, in the order they run:
  *
@@ -29,20 +29,12 @@
  * (the real one comes from a game's sysprg.arc, Scn_ScanCommands).
  */
 #include "bgi/scn.h"
-#include "bgi/os.h"
+#include "bgi/core.h"
+#include "host/os.h"
 
 #include <stdio.h>
 
-static int gFails; // the number of failed checks so far
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 // a command table with the handful of commands the tests use
 static ScnCmd_t gCmdList[] = {
@@ -70,12 +62,12 @@ static uint32_t Rd32(const uint8_t* p)
 }
 
 // compile `text` and hand back the file image (BGI_Free it); NULL on errors (reported when `quiet` is 0)
-static uint8_t* Compile(const char* text, uint32_t* size, int quiet)
+static uint8_t* Compile(OpenBGI_t* o, const char* text, uint32_t* size, int quiet)
 {
 	ScnCompileResult_t r;
 	uint8_t* out;
 	FILE* log = quiet ? fopen("/dev/null", "w") : stderr;
-	Scn_Compile(text, strlen(text), "test", &gCmds, NULL, log, &r);
+	Scn_Compile(o, text, strlen(text), "test", &gCmds, NULL, log, &r);
 	if(quiet)
 		fclose(log);
 	if(r.errors)
@@ -86,7 +78,7 @@ static uint8_t* Compile(const char* text, uint32_t* size, int quiet)
 }
 
 // decompile an image into a malloc'ed string (NULL on a load error)
-static char* Decompile(const uint8_t* data, uint32_t size, int* fallbacks)
+static char* Decompile(OpenBGI_t* o, const uint8_t* data, uint32_t size, int* fallbacks)
 {
 	ScnFile_t f;
 	ScnDecOptions_t opt;
@@ -102,7 +94,7 @@ static char* Decompile(const uint8_t* data, uint32_t size, int* fallbacks)
 	memset(&opt, 0, sizeof opt);
 	opt.cmds = &gCmds;
 	opt.name = "test";
-	*fallbacks = Scn_Decompile(&f, &opt, mem);
+	*fallbacks = Scn_Decompile(o, &f, &opt, mem);
 	Scn_Free(&f);
 	n = ftell(mem);
 	fseek(mem, 0, SEEK_SET);
@@ -267,10 +259,10 @@ static const char* kLibrary = "#style library\n"
 							  "    }\n"
 							  "}\n";
 
-static void TestCompile(void)
+static void TestCompile(OpenBGI_t* o)
 {
 	uint32_t size, base, i, n;
-	uint8_t* img = Compile(kScenario, &size, 0);
+	uint8_t* img = Compile(o, kScenario, &size, 0);
 	CHECK(img != NULL);
 	if(!img)
 		return;
@@ -314,7 +306,7 @@ static void TestCompile(void)
 	}
 	BGI_Free(img);
 
-	img = Compile(kScenarioLine, &size, 0);
+	img = Compile(o, kScenarioLine, &size, 0);
 	CHECK(img != NULL);
 	if(!img)
 		return;
@@ -330,7 +322,7 @@ static void TestCompile(void)
 	CHECK(Tok(img, i + 2) == SCN_LINE && Tok(img, i + 5) == SCN_STR && Tok(img, i + 7) == 0xf6 && Tok(img, i + 8) == SCN_ADDR && Tok(img, i + 9) == 0 && Tok(img, i + 10) == SCN_JMP);
 	BGI_Free(img);
 
-	img = Compile(kLibrary, &size, 0);
+	img = Compile(o, kLibrary, &size, 0);
 	CHECK(img != NULL);
 	if(!img)
 		return;
@@ -360,7 +352,7 @@ static void TestCompile(void)
 	BGI_Free(img);
 }
 
-static void TestRoundTrip(void)
+static void TestRoundTrip(OpenBGI_t* o)
 {
 	const char* sources[3];
 	int s;
@@ -370,21 +362,21 @@ static void TestRoundTrip(void)
 	for(s = 0; s < 3; s++)
 	{
 		uint32_t size, size2;
-		uint8_t* img = Compile(sources[s], &size, 0);
+		uint8_t* img = Compile(o, sources[s], &size, 0);
 		char* text;
 		uint8_t* img2;
 		int fallbacks = -1;
 		CHECK(img != NULL);
 		if(!img)
 			continue;
-		text = Decompile(img, size, &fallbacks);
+		text = Decompile(o, img, size, &fallbacks);
 		CHECK(text != NULL && fallbacks == 0);
 		if(!text)
 		{
 			BGI_Free(img);
 			continue;
 		}
-		img2 = Compile(text, &size2, 0);
+		img2 = Compile(o, text, &size2, 0);
 		CHECK(img2 != NULL && size2 == size && memcmp(img, img2, size) == 0);
 		if(s == 0)
 		{
@@ -442,10 +434,10 @@ static const char* kRaw = "#style library-raw\n"
 						  "    msg(\"hi\", \"n\", 0, 1, 1);\n"
 						  "}\n";
 
-static void TestRaw(void)
+static void TestRaw(OpenBGI_t* o)
 {
 	uint32_t size, size2, i, n;
-	uint8_t* img = Compile(kRaw, &size, 0);
+	uint8_t* img = Compile(o, kRaw, &size, 0);
 	ScnFile_t f;
 	char err[128];
 	char* text;
@@ -491,11 +483,11 @@ static void TestRaw(void)
 	}
 	Scn_Free(&f);
 	// the round trip, and the shapes in the decompiled text
-	text = Decompile(img, size, &fallbacks);
+	text = Decompile(o, img, size, &fallbacks);
 	CHECK(text != NULL && fallbacks == 0);
 	if(text)
 	{
-		img2 = Compile(text, &size2, 0);
+		img2 = Compile(o, text, &size2, 0);
 		CHECK(img2 != NULL && size2 == size && memcmp(img, img2, size) == 0);
 		CHECK(strstr(text, "#style library-raw") != NULL);
 		CHECK(strstr(text, "#string \"hi\"") != NULL);
@@ -534,10 +526,10 @@ static const char* kScene16 = "#style inline\n"
 							  "return;\n"
 							  "end;\n";
 
-static void TestScene16(void)
+static void TestScene16(OpenBGI_t* o)
 {
 	uint32_t size, size2, i;
-	uint8_t* img = Compile(kScene16, &size, 0);
+	uint8_t* img = Compile(o, kScene16, &size, 0);
 	ScnFile_t f;
 	char err[128];
 	char* text;
@@ -598,11 +590,11 @@ static void TestScene16(void)
 	BGI_Free(img2);
 	Scn_Free(&f);
 	// the round trip and the spellings
-	text = Decompile(img, size, &fallbacks);
+	text = Decompile(o, img, size, &fallbacks);
 	CHECK(text != NULL && fallbacks == 0);
 	if(text)
 	{
-		img2 = Compile(text, &size2, 0);
+		img2 = Compile(o, text, &size2, 0);
 		CHECK(img2 != NULL && size2 == size && memcmp(img, img2, size) == 0);
 		CHECK(strstr(text, "#style inline") != NULL);
 		CHECK(strstr(text, "msg(0, 1, \"Hello\");") != NULL);
@@ -620,7 +612,7 @@ static void TestScene16(void)
 	}
 	BGI_Free(img);
 	// a scene without a message has no padding; one with no instruction is not a scene
-	img = Compile("#style inline\nwait(5);\nend;\n", &size, 0);
+	img = Compile(o, "#style inline\nwait(5);\nend;\n", &size, 0);
 	CHECK(img != NULL && size == 8);
 	if(img)
 	{
@@ -635,12 +627,12 @@ static void TestScene16(void)
 		CHECK(!Scn_Load(pad, sizeof pad, &f, err, sizeof err));
 	}
 	// errors
-	CHECK(Compile("#style inline\nnothing(1);\n", &size, 1) == NULL);         // an unknown command
-	CHECK(Compile("#style inline\ngoto nowhere;\n", &size, 1) == NULL);       // an undefined label
-	CHECK(Compile("#style inline\nselect();\n", &size, 1) == NULL);           // an empty list
-	CHECK(Compile("#style inline\nmsg(0, 1);\n", &size, 1) == NULL);          // an argument missing
-	CHECK(Compile("#style inline\nbg(1, 2);\n", &size, 1) == NULL);           // a string expected
-	CHECK(Compile("#style inline\n#source \"x\"\nend;\n", &size, 1) == NULL); // no other directive
+	CHECK(Compile(o, "#style inline\nnothing(1);\n", &size, 1) == NULL);         // an unknown command
+	CHECK(Compile(o, "#style inline\ngoto nowhere;\n", &size, 1) == NULL);       // an undefined label
+	CHECK(Compile(o, "#style inline\nselect();\n", &size, 1) == NULL);           // an empty list
+	CHECK(Compile(o, "#style inline\nmsg(0, 1);\n", &size, 1) == NULL);          // an argument missing
+	CHECK(Compile(o, "#style inline\nbg(1, 2);\n", &size, 1) == NULL);           // a string expected
+	CHECK(Compile(o, "#style inline\n#source \"x\"\nend;\n", &size, 1) == NULL); // no other directive
 }
 
 // the reader of PrepIncludes_t for the one file the scene below includes
@@ -662,7 +654,7 @@ static uint8_t* ReadStrings(void* ctx, const char* path, uint32_t* size)
 
 /* a 16-bit scene goes through the preprocessor: the constants of an
  * included file and of the scene itself give the bytes of the literals */
-static void TestScene16Prep(void)
+static void TestScene16Prep(OpenBGI_t* o)
 {
 	static const char named[] = "#style inline\n"
 								"#include \"strings.inc\"\n"
@@ -684,10 +676,10 @@ static void TestScene16Prep(void)
 	ScnCompileResult_t r;
 	uint32_t size = 0, size2 = 0;
 	uint8_t* a;
-	uint8_t* b = Compile(plain, &size2, 0);
+	uint8_t* b = Compile(o, plain, &size2, 0);
 	memset(&inc, 0, sizeof inc);
 	inc.read = ReadStrings;
-	Scn_Compile(named, strlen(named), "scene.bsc", &gCmds, &inc, stderr, &r);
+	Scn_Compile(o, named, strlen(named), "scene.bsc", &gCmds, &inc, stderr, &r);
 	CHECK(r.errors == 0);
 	a = r.errors ? NULL : Scn_Save(&r.file, &size);
 	if(!r.errors)
@@ -695,27 +687,27 @@ static void TestScene16Prep(void)
 	CHECK(a != NULL && b != NULL && size == size2 && memcmp(a, b, size) == 0);
 	BGI_Free(a);
 	BGI_Free(b);
-	CHECK(Compile("#style inline\nmsg(0, 1, T_NONE);\nend;\n", &size, 1) == NULL);                 // a name nothing defines
-	CHECK(Compile("#style inline\n#include \"no/such.inc\"\nend;\n", &size, 1) == NULL);           // a file that is not there
-	CHECK(Compile("#style inline\n#define A 1\n#define A 2\nwait(A);\nend;\n", &size, 1) == NULL); // defined twice
-	{                                                                                              // the other styles are not preprocessed: their #include names a header of the original source
-		uint8_t* img = Compile("#style library\n#include \"header.h\"\nf() { return; }\n", &size, 0);
+	CHECK(Compile(o, "#style inline\nmsg(0, 1, T_NONE);\nend;\n", &size, 1) == NULL);                 // a name nothing defines
+	CHECK(Compile(o, "#style inline\n#include \"no/such.inc\"\nend;\n", &size, 1) == NULL);           // a file that is not there
+	CHECK(Compile(o, "#style inline\n#define A 1\n#define A 2\nwait(A);\nend;\n", &size, 1) == NULL); // defined twice
+	{                                                                                                 // the other styles are not preprocessed: their #include names a header of the original source
+		uint8_t* img = Compile(o, "#style library\n#include \"header.h\"\nf() { return; }\n", &size, 0);
 		CHECK(img != NULL);
 		BGI_Free(img);
 	}
 }
 
-static void TestErrors(void)
+static void TestErrors(OpenBGI_t* o)
 {
 	uint32_t size;
-	CHECK(Compile("#style library\nf() { x = 1; }\n", &size, 1) == NULL);                     // an unknown variable
-	CHECK(Compile("#style scenario\nbreak;\n", &size, 1) == NULL);                            // a break outside a loop
-	CHECK(Compile("#style library\nf() { int a; a = ; }\n", &size, 1) == NULL);               // a syntax error
-	CHECK(Compile("#style scenario\nmsg(1\n", &size, 1) == NULL);                             // unterminated
-	CHECK(Compile("#style library\nf() { goto nowhere; }\n", &size, 1) == NULL);              // an undefined label
-	CHECK(Compile("#style library\nf() { if (1) { } else if (2) { } }\n", &size, 1) == NULL); // no else-if form with markers
+	CHECK(Compile(o, "#style library\nf() { x = 1; }\n", &size, 1) == NULL);                     // an unknown variable
+	CHECK(Compile(o, "#style scenario\nbreak;\n", &size, 1) == NULL);                            // a break outside a loop
+	CHECK(Compile(o, "#style library\nf() { int a; a = ; }\n", &size, 1) == NULL);               // a syntax error
+	CHECK(Compile(o, "#style scenario\nmsg(1\n", &size, 1) == NULL);                             // unterminated
+	CHECK(Compile(o, "#style library\nf() { goto nowhere; }\n", &size, 1) == NULL);              // an undefined label
+	CHECK(Compile(o, "#style library\nf() { if (1) { } else if (2) { } }\n", &size, 1) == NULL); // no else-if form with markers
 	{
-		uint8_t* img = Compile("#style scenario\n_F(1);\n", &size, 1); // no #source: no markers at all
+		uint8_t* img = Compile(o, "#style scenario\n_F(1);\n", &size, 1); // no #source: no markers at all
 		CHECK(img != NULL && Tok(img, 3) == SCN_PUSH);
 		BGI_Free(img);
 	}
@@ -723,21 +715,24 @@ static void TestErrors(void)
 
 int main(void)
 {
+	OpenBGI_t* o = OpenBGI_New(OS_Host()); // the engine whose code the test runs
+	if(!o)
+		return 1;
 	if(!OS_Init())
 		return 1;
 	printf("container\n");
 	TestContainer();
 	printf("compile\n");
-	TestCompile();
+	TestCompile(o);
 	printf("round trip\n");
-	TestRoundTrip();
+	TestRoundTrip(o);
 	printf("raw\n");
-	TestRaw();
+	TestRaw(o);
 	printf("16-bit scenes\n");
-	TestScene16();
-	TestScene16Prep();
+	TestScene16(o);
+	TestScene16Prep(o);
 	printf("errors\n");
-	TestErrors();
+	TestErrors(o);
 	OS_Shutdown();
 	if(gFails)
 	{

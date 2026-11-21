@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * monofont.c - the 1-bit font class of the "92 1E" text instruction and
- *              the text drawer built on it (inc/bgi/gfx/font.h)
+ *              the text drawer built on it (src/include/bgi/gfx/font.h)
  *
  * Unlike the anti-aliased FontRaster of font.c this class draws a glyph into
  * a monochrome DIB and keeps the raw bits: a glyph cell is `size` rows of
@@ -16,7 +16,6 @@
 
 #include "bgi/gfx/font.h"
 #include "bgi/strutil.h"
-#include "bgi/os.h"
 
 // construct a closed font; the placeholder buffers are replaced by MonoFont_Init
 void MonoFont_Ctor(MonoFont_t* f)
@@ -33,7 +32,7 @@ void MonoFont_Close(MonoFont_t* f)
 {
 	if(!f->open)
 		return;
-	OS_FontClose(f->os);
+	Typeface_Close(f->os);
 	f->os = NULL;
 	BGI_Free(f->dib);
 	f->dib = NULL;
@@ -66,14 +65,13 @@ static void MonoFont_AllocSlots(MonoFont_t* f, int size, int capacity)
 		f->slots[i].bits = f->pool + (size_t)i * (size_t)f->bytesPerGlyph;
 }
 
-/* open the OS font (the original's CreateFontA(size, size / 2, bold ? 700
+/* open the font (the original's CreateFontA(size, size / 2, bold ? 700
  * : 400, SHIFTJIS_CHARSET, DRAFT_QUALITY, FIXED_PITCH | FF_ROMAN) with a
  * two-entry palette) and allocate the 1-bit top-down DIB of
- * ((size + 31) & ~31) x size pixels.  1 ok, 0 when the OS refuses the
- * font. */
-static int MonoFont_CreateFont(MonoFont_t* f, const char* name, int size, int bold)
+ * ((size + 31) & ~31) x size pixels.  1 ok, 0 when no font can be had. */
+static int MonoFont_CreateFont(OpenBGI_t* o, MonoFont_t* f, const char* name, int size, int bold)
 {
-	f->os = OS_FontOpenMono(name, size, bold != 0);
+	f->os = Typeface_OpenMono(o, name, size, bold != 0);
 	if(!f->os)
 		return 0;
 	f->dibW = (size + 31) & ~31;
@@ -86,7 +84,7 @@ static int MonoFont_CreateFont(MonoFont_t* f, const char* name, int size, int bo
 /* (re)open the font with a cache of `capacity` glyphs.  0 ok, 0x80000001
  * capacity < 2, 0x80000002 size outside 8..200, 0x80000004 the font could
  * not be created */
-int MonoFont_Init(MonoFont_t* f, const char* name, int size, int bold, int capacity)
+int MonoFont_Init(OpenBGI_t* o, MonoFont_t* f, const char* name, int size, int bold, int capacity)
 {
 	MonoFont_Close(f);
 	if(capacity < 2)
@@ -94,7 +92,7 @@ int MonoFont_Init(MonoFont_t* f, const char* name, int size, int bold, int capac
 	if(size < 8 || size > 200)
 		return (int)0x80000002;
 	MonoFont_AllocSlots(f, size, capacity);
-	if(!MonoFont_CreateFont(f, name, size, bold))
+	if(!MonoFont_CreateFont(o, f, name, size, bold))
 		return (int)0x80000004;
 	f->open = 1;
 	f->fixedCount = 0;
@@ -104,14 +102,14 @@ int MonoFont_Init(MonoFont_t* f, const char* name, int size, int bold, int capac
 /* draw one character into the DIB, copy its bits into `bits`
  * (bpr bytes per row) and report the inked extent in *out, padded by a
  * byte's worth of pixels on both sides and clamped to the cell. */
-static void MonoFont_Render(MonoFont_t* f, Rect_t* out, uint8_t* bits, int code)
+static void MonoFont_Render(OpenBGI_t* o, MonoFont_t* f, Rect_t* out, uint8_t* bits, int code)
 {
 	char str[8];
 	int len, y, x, minCol = f->size - 1, maxCol = 0, pad;
 
 	memset(f->dib, 0, (size_t)f->dibPitch * (size_t)f->size);
-	len = TextPutChar(str, (uint32_t)code); // the bytes in the text encoding
-	OS_FontRenderMono(f->os, str, len, f->dib, f->dibPitch, f->dibW, f->size);
+	len = TextPutChar(o, str, (uint32_t)code); // the bytes in the text encoding
+	Typeface_RenderMono(f->os, str, len, f->dib, f->dibPitch, f->dibW, f->size);
 	for(y = 0; y < f->size; y++)
 		memcpy(bits + (size_t)y * (size_t)f->bpr, f->dib + (size_t)y * (size_t)f->dibPitch, (size_t)f->bpr);
 	for(y = 0; y < f->size; y++)
@@ -148,7 +146,7 @@ static void MonoFont_Render(MonoFont_t* f, Rect_t* out, uint8_t* bits, int code)
  * that last entry before moving it to the front, so the list then contains
  * a cycle; it is only ever walked `used` steps, so the behaviour is kept
  * (and harmless).  *out receives a copy of the entry. */
-static void MonoFont_Lookup(MonoFont_t* f, MonoGlyph_t* out, int code)
+static void MonoFont_Lookup(OpenBGI_t* o, MonoFont_t* f, MonoGlyph_t* out, int code)
 {
 	MonoGlyph_t* n = f->lru;
 	MonoGlyph_t* prev = NULL; // "prev == NULL" stands for the list head itself
@@ -177,7 +175,7 @@ static void MonoFont_Lookup(MonoFont_t* f, MonoGlyph_t* out, int code)
 			n = prev; // the last entry, reused in place (see above)
 		n->code = code;
 		n->dbcs = code >= 0x100;
-		MonoFont_Render(f, &n->rect, n->bits, code);
+		MonoFont_Render(o, f, &n->rect, n->bits, code);
 	}
 	n->next = f->lru;
 	f->lru = n;
@@ -202,23 +200,23 @@ static int MonoFont_LookupFixed(MonoFont_t* f, MonoGlyph_t* out, int code)
 }
 
 // fetch (render if needed) the glyph of `code` into *out
-void MonoFont_Glyph(MonoFont_t* f, MonoGlyph_t* out, int code)
+void MonoFont_Glyph(OpenBGI_t* o, MonoFont_t* f, MonoGlyph_t* out, int code)
 {
 	if(!MonoFont_LookupFixed(f, out, code))
-		MonoFont_Lookup(f, out, code);
+		MonoFont_Lookup(o, f, out, code);
 }
 
 /* fetch the glyph of `code` into *g and paint it into the top-left of
  * `cell` in `colour` (clipped to the cell and the font size): set bits
  * become solid pixels (RGB16 gets the 5-5-5 colour, RGB32 the colour,
  * ARGB32 the colour with full alpha), clear bits become zero. */
-void MonoGlyph_Paint(Bmp_t* cell, MonoGlyph_t* g, int code, MonoFont_t* font, uint32_t colour)
+void MonoGlyph_Paint(OpenBGI_t* o, Bmp_t* cell, MonoGlyph_t* g, int code, MonoFont_t* font, uint32_t colour)
 {
 	int rows, cols, y;
 	const uint8_t* bits;
 	uint16_t c16;
 
-	MonoFont_Glyph(font, g, code);
+	MonoFont_Glyph(o, font, g, code);
 	bits = g->bits;
 	rows = font->size < cell->h ? font->size : cell->h;
 	cols = font->size < cell->w ? font->size : cell->w;
@@ -256,22 +254,22 @@ void MonoGlyph_Paint(Bmp_t* cell, MonoGlyph_t* g, int code, MonoFont_t* font, ui
  * character; a single-byte character is half a cell wide.  *outWidth
  * receives the advance.  Stops at the first glyph the blitter rejects
  * (incompatible pixel modes, or nothing of it inside the bitmap). */
-void MonoText_Draw(Bmp_t* dst, int x, int y, const char* str, MonoFont_t* font, int spacing, uint32_t colour,
+void MonoText_Draw(OpenBGI_t* o, Bmp_t* dst, int x, int y, const char* str, MonoFont_t* font, int spacing, uint32_t colour,
 	int32_t* outWidth)
 {
 	Bmp_t cell;
 	int size = font->size;
 
-	Bmp_AllocScreen(&cell, size, size, 1);
+	Bmp_AllocScreen(o, &cell, size, size, 1);
 	*outWidth = 0;
 	while(*str)
 	{
 		MonoGlyph_t g;
 		Bmp_t view;
 		uint32_t code;
-		int len = TextGetChar(&code, str);
-		int dbcs = TextIsWide(code, len);
-		MonoGlyph_Paint(&cell, &g, (int)code, font, colour);
+		int len = TextGetChar(o, &code, str);
+		int dbcs = TextIsWide(o, code, len);
+		MonoGlyph_Paint(o, &cell, &g, (int)code, font, colour);
 		view = cell;
 		if(!dbcs)
 			view.w = cell.w / 2;

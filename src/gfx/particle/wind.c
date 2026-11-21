@@ -58,11 +58,11 @@ void Wind_SetCurrent(Wind_t* w, int32_t x, int32_t y, int32_t z)
 }
 
 // draw a random target: base - var + Rnd(2 var) per axis
-static void Wind_Pick(const Wind_t* w, int32_t out[3])
+static void Wind_Pick(OpenBGI_t* o, const Wind_t* w, int32_t out[3])
 {
 	int i;
 	for(i = 0; i < 3; i++)
-		out[i] = Ptcl_Rnd(2 * w->var[i]) + w->base[i] - w->var[i];
+		out[i] = Ptcl_Rnd(o, 2 * w->var[i]) + w->base[i] - w->var[i];
 }
 
 // enter a phase of `len` ticks (at least 1)
@@ -74,20 +74,20 @@ static void Wind_SetPhase(Wind_t* w, int phase, uint32_t len)
 }
 
 // begin a hold; `first` draws both vectors, else the old target becomes the start
-static void Wind_NextTarget(Wind_t* w, int first)
+static void Wind_NextTarget(OpenBGI_t* o, Wind_t* w, int first)
 {
-	Wind_SetPhase(w, 0, w->holdT + (uint32_t)Ptcl_Rnd((int32_t)w->holdVarT));
+	Wind_SetPhase(w, 0, w->holdT + (uint32_t)Ptcl_Rnd(o, (int32_t)w->holdVarT));
 	if(first)
 	{
-		Wind_Pick(w, w->from);
-		Wind_Pick(w, w->to);
+		Wind_Pick(o, w, w->from);
+		Wind_Pick(o, w, w->to);
 	}
 	else
 	{
 		w->from[0] = w->to[0];
 		w->from[1] = w->to[1];
 		w->from[2] = w->to[2];
-		Wind_Pick(w, w->to);
+		Wind_Pick(o, w, w->to);
 	}
 }
 
@@ -96,7 +96,7 @@ static void Wind_NextTarget(Wind_t* w, int first)
  * arrive 16.16 and are stored 24.8.  The wind is enabled only when
  * `enable` is set and the engine has a tick length; a fresh hold with two
  * new random vectors starts at once.  Always 1. */
-int Wind_Set(Wind_t* w, const int32_t a[11])
+int Wind_Set(OpenBGI_t* o, Wind_t* w, const int32_t a[11])
 {
 	w->base[0] = a[1] >> 8;
 	w->var[0] = a[2] >> 8;
@@ -109,14 +109,14 @@ int Wind_Set(Wind_t* w, const int32_t a[11])
 	w->moveMs = (uint32_t)a[9];
 	w->moveVarMs = (uint32_t)a[10];
 	w->enabled = a[0] != 0 && Wind_RecalcTimes(w);
-	Wind_NextTarget(w, 1);
+	Wind_NextTarget(o, w, 1);
 	return 1;
 }
 
 /* one tick: hold the vector, then glide linearly to the freshly drawn
  * target, then hold that one, and so on.  A disabled wind reports a zero
  * vector. */
-void Wind_Step(Wind_t* w)
+void Wind_Step(OpenBGI_t* o, Wind_t* w)
 {
 	if(!w->enabled)
 	{
@@ -134,7 +134,7 @@ void Wind_Step(Wind_t* w)
 	if(++w->pos < w->len)
 		return;
 	if(w->phase == 0)
-		Wind_SetPhase(w, 1, w->moveT + (uint32_t)Ptcl_Rnd((int32_t)w->moveVarT));
+		Wind_SetPhase(w, 1, w->moveT + (uint32_t)Ptcl_Rnd(o, (int32_t)w->moveVarT));
 	else if(w->phase == 1)
-		Wind_NextTarget(w, 0);
+		Wind_NextTarget(o, w, 0);
 }

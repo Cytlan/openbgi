@@ -4,8 +4,8 @@
  *
  * tests/snd.c - unit test of the BW sound container, its codecs and the
  *               Wave Master API (src/snd/bw/ and src/snd/wm/, declared in
- *               inc/bgi/snd/bw.h and inc/bgi/snd/wavemaster.h); built as
- *               bin/test_snd by `make test`
+ *               src/include/bgi/snd/bw.h and src/include/bgi/snd/wavemaster.h); built as
+ *               test_snd by `make test`
  *
  * The codec tests encode with the inverse of each decoder's arithmetic and
  * check that the decoder reproduces the encoder's own reconstruction, in
@@ -43,8 +43,9 @@
  * project root (as `make test` does).
  */
 #include "bgi/snd/bw.h"
+#include "bgi/core.h"
 #include "bgi/snd/wavemaster.h"
-#include "bgi/os.h"
+#include "host/os.h"
 #include "bgi/version.h"
 #include "bgi/sound.h"
 #include "../src/snd/wm/wm_internal.h"
@@ -52,17 +53,7 @@
 #include <stdio.h>
 #include <math.h>
 
-static int gFails; // the number of failed checks so far
-// evaluate a condition; print it with its location and count a failure when it is false
-#define CHECK(c)                                                  \
-	do                                                            \
-	{                                                             \
-		if(!(c))                                                  \
-		{                                                         \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-			gFails++;                                             \
-		}                                                         \
-	} while(0)
+#include "check.h"
 
 /* write a 0x40-byte BW header (BwHeader_t) with the given data size, frame count, rate,
  * channel count and codec; the loop fields stay 0 */
@@ -96,7 +87,7 @@ static int16_t Signal(uint32_t i, uint32_t ch)
  * flag), restarts at the loop start and counts its restarts.  A failure
  * means the PCM path, the fade, or the loop logic shared by every codec
  * changed. */
-static void TestPcm(void)
+static void TestPcm(OpenBGI_t* o)
 {
 	enum
 	{
@@ -116,7 +107,7 @@ static void TestPcm(void)
 		pcm[i * 2 + 1] = Signal(i, 1);
 	}
 	src = WmSource_FromMemory(file, 0x40 + N * 4);
-	s = WmStream_Open(src, 1.0, 1, &err);
+	s = WmStream_Open(o, src, 1.0, 1, &err);
 	CHECK(s != NULL && err == 0);
 	if(s)
 	{
@@ -126,14 +117,14 @@ static void TestPcm(void)
 		// the gain multiplies and clamps
 		WmStream_Close(s);
 		src = WmSource_FromMemory(file, 0x40 + N * 4);
-		s = WmStream_Open(src, 4.0, 1, &err);
+		s = WmStream_Open(o, src, 4.0, 1, &err);
 		out = WmStream_Samples(s);
 		CHECK(out[0] == (int16_t)(pcm[0] * 4 > 32767 ? 32767 : pcm[0] * 4 < -32768 ? -32768
 																				   : pcm[0] * 4));
 		// the burnt-in fade: frames = ms * rate / 1000, sample i scaled by i / frames
 		WmStream_Close(s);
 		src = WmSource_FromMemory(file, 0x40 + N * 4);
-		s = WmStream_Open(src, 1.0, 1, &err);
+		s = WmStream_Open(o, src, 1.0, 1, &err);
 		CHECK(WmStream_FadeIn(s, 10) == 0); // 220 frames
 		out = WmStream_Samples(s);
 		CHECK(out[0] == 0 && out[1] == 0);
@@ -144,7 +135,7 @@ static void TestPcm(void)
 	}
 	// a streaming open decodes on demand through the same path
 	src = WmSource_FromMemory(file, 0x40 + N * 4);
-	s = WmStream_Open(src, 1.0, 0, &err);
+	s = WmStream_Open(o, src, 1.0, 0, &err);
 	CHECK(s != NULL);
 	if(s)
 	{
@@ -157,8 +148,8 @@ static void TestPcm(void)
 		CHECK(WmStream_Continues(s) == 0); // a plain file ends
 		WmStream_SetLoop(s, 2, 0);         // the override: continues, restarting at frame 0
 		CHECK(WmStream_Continues(s) == 2);
-		WmStream_Restart(s);
-		CHECK(WmStream_LoopCount(s) == 0); // one restart, but inside the 4-second grace
+		WmStream_Restart(o, s);
+		CHECK(WmStream_LoopCount(o, s) == 0); // one restart, but inside the 4-second grace
 		got = WmStream_Decode(s, buf, 64);
 		CHECK(got == 64 && memcmp(buf, pcm, 64 * 4) == 0);
 		WmStream_Close(s);
@@ -170,7 +161,7 @@ static void TestPcm(void)
 		memcpy(file + 0x18, &one, 4);   // loopFlag
 		memcpy(file + 0x1c, &start, 4); // loopStart, frames
 		src = WmSource_FromMemory(file, 0x40 + N * 4);
-		s = WmStream_Open(src, 1.0, 0, &err);
+		s = WmStream_Open(o, src, 1.0, 0, &err);
 		CHECK(s != NULL);
 		if(s)
 		{
@@ -180,7 +171,7 @@ static void TestPcm(void)
 			while((got = WmStream_Decode(s, buf, 64)) != 0)
 				total += got;
 			CHECK(total == N);
-			WmStream_Restart(s); // the pump's reaction to a short decode of a continuing stream
+			WmStream_Restart(o, s); // the pump's reaction to a short decode of a continuing stream
 			got = WmStream_Decode(s, buf, 64);
 			CHECK(got == 64 && memcmp(buf, pcm + 300 * 2, 64 * 4) == 0); // playback resumes at the restart frame
 			WmStream_SetLoop(s, 0, 0);                                   // the pair openers' override wins over the header
@@ -248,7 +239,7 @@ static uint32_t Enc4(int16_t target, St* st)
  * encoder saw is the reference.  A whole-file stream has to reproduce it
  * exactly, and so does a music stream decoded in chunks of 7, 3, 11 and
  * 5 frames, which in mono splits bytes between requests. */
-static void TestAdpcm4(int channels, uint32_t frames)
+static void TestAdpcm4(OpenBGI_t* o, int channels, uint32_t frames)
 {
 	uint32_t samples = frames * channels, nibbles = samples, bytes = (nibbles + 1) / 2;
 	uint8_t* file = (uint8_t*)calloc(0x40 + bytes + 1, 1);
@@ -274,7 +265,7 @@ static void TestAdpcm4(int channels, uint32_t frames)
 			file[0x40 + i / 2] |= (uint8_t)nib;
 	}
 	src = WmSource_FromMemory(file, 0x40 + bytes);
-	s = WmStream_Open(src, 1.0, 1, &err);
+	s = WmStream_Open(o, src, 1.0, 1, &err);
 	CHECK(s != NULL);
 	if(s)
 	{
@@ -283,7 +274,7 @@ static void TestAdpcm4(int channels, uint32_t frames)
 	}
 	// streaming in odd chunks exercises the pending sample of mono files
 	src = WmSource_FromMemory(file, 0x40 + bytes);
-	s = WmStream_Open(src, 1.0, 0, &err);
+	s = WmStream_Open(o, src, 1.0, 0, &err);
 	CHECK(s != NULL);
 	if(s)
 	{
@@ -396,7 +387,7 @@ static int CodeBits(int sym, uint32_t* bits)
  * the header's loop bit position, 0 here) the music stream replays the
  * file.  A failure means the tree walk, the bit reader's window refill or
  * the ADPCM step changed. */
-static void TestHuffman(int channels, uint32_t frames, uint32_t param)
+static void TestHuffman(OpenBGI_t* o, int channels, uint32_t frames, uint32_t param)
 {
 	uint32_t samples = frames * channels, i;
 	uint32_t cap = 0x448 + samples * 2 + 16;
@@ -432,7 +423,7 @@ static void TestHuffman(int channels, uint32_t frames, uint32_t param)
 		memcpy(file + 8, &dataSize, 4);
 	}
 	src = WmSource_FromMemory(file, 0x448 + (bitPos + 7) / 8);
-	s = WmStream_Open(src, 1.0, 1, &err);
+	s = WmStream_Open(o, src, 1.0, 1, &err);
 	CHECK(s != NULL);
 	if(s)
 	{
@@ -440,7 +431,7 @@ static void TestHuffman(int channels, uint32_t frames, uint32_t param)
 		WmStream_Close(s);
 	}
 	src = WmSource_FromMemory(file, 0x448 + (bitPos + 7) / 8);
-	s = WmStream_Open(src, 1.0, 0, &err);
+	s = WmStream_Open(o, src, 1.0, 0, &err);
 	CHECK(s != NULL);
 	if(s)
 	{
@@ -451,7 +442,7 @@ static void TestHuffman(int channels, uint32_t frames, uint32_t param)
 		CHECK(done == frames);
 		CHECK(memcmp(out, ref, samples * 2) == 0);
 		// a loop restart at the header's bit position (0 here) replays the file
-		WmStream_Restart(s);
+		WmStream_Restart(o, s);
 		done = 0;
 		while(done < frames && (got = WmStream_Decode(s, out + done * channels, 50)) != 0)
 			done += got;
@@ -475,7 +466,7 @@ static void TestHuffman(int channels, uint32_t frames, uint32_t param)
  * gone on and crosses over 5 ms (110 frames) to its own samples, which
  * it then copies; the frames past the last chunk are silent.  A failure
  * means the length, the chunk positions or the crossfade changed. */
-static void TestStretch(double rate, uint32_t want, int32_t skip)
+static void TestStretch(OpenBGI_t* o, double rate, uint32_t want, int32_t skip)
 {
 	enum
 	{
@@ -497,7 +488,7 @@ static void TestStretch(double rate, uint32_t want, int32_t skip)
 		pcm[i * 2 + 1] = Signal(i, 1);
 	}
 	src = WmSource_FromMemory(file, 0x40 + N * 4);
-	s = WmStream_Open(src, 1.0, 1, &err);
+	s = WmStream_Open(o, src, 1.0, 1, &err);
 	CHECK(s != NULL);
 	if(s)
 	{
@@ -534,27 +525,27 @@ static void TestStretch(double rate, uint32_t want, int32_t skip)
  * four volumes, silence (0x80) from 48 dB.  From 1.588 on the sum is not
  * cut; only one volume at 0 by itself silences.  A failure means the
  * attenuation rule of a generation changed. */
-static void TestLevels(void)
+static void TestLevels(OpenBGI_t* o)
 {
 	WmRecord_t r;
 	printf("levels\n");
 	memset(&r, 0, sizeof r);
 	r.master = r.aux = r.volume = r.fadeLevel = 0x80;
-	CHECK(Engine_SelectProfile("1.573"));
-	CHECK(Record_Level(&r) == 0);
+	CHECK(Engine_SelectProfile(o, "1.573"));
+	CHECK(Record_Level(o, &r) == 0);
 	r.aux = 0x40;
-	CHECK(Record_Level(&r) == 24); // 64 steps of 0.375 dB
+	CHECK(Record_Level(o, &r) == 24); // 64 steps of 0.375 dB
 	r.volume = 0x40;
-	CHECK(Record_Level(&r) == 0x80); // 48 dB in sum
-	CHECK(Engine_SelectProfile("1.636"));
-	CHECK(Record_Level(&r) == 48); // 128 / 2.66666666, truncated; not cut
+	CHECK(Record_Level(o, &r) == 0x80); // 48 dB in sum
+	CHECK(Engine_SelectProfile(o, "1.636"));
+	CHECK(Record_Level(o, &r) == 48); // 128 / 2.66666666, truncated; not cut
 	r.aux = 0x20;
-	CHECK(Record_Level(&r) == 60);
+	CHECK(Record_Level(o, &r) == 60);
 	r.aux = 0;
-	CHECK(Record_Level(&r) == 0x80); // one volume at 0
+	CHECK(Record_Level(o, &r) == 0x80); // one volume at 0
 	r.aux = 1;
-	CHECK(Record_Level(&r) == 71);
-	CHECK(Engine_SelectProfile("1.69/444"));
+	CHECK(Record_Level(o, &r) == 71);
+	CHECK(Engine_SelectProfile(o, "1.69/444"));
 }
 
 /* Se_GetLength on a one-second effect (44100 frames at 44100 Hz) loaded
@@ -563,22 +554,22 @@ static void TestLevels(void)
  * is not running, so the loads fail, but the descriptor is kept, as in
  * the original.  A failure means the descriptor's rate word or its use
  * changed. */
-static void TestSeLength(void)
+static void TestSeLength(OpenBGI_t* o)
 {
 	uint8_t hdr[0x40];
 	printf("length\n");
 	PutHeader(hdr, 0, 44100, 44100, 1, BW_CODEC_PCM);
-	CHECK(Engine_SelectProfile("1.529"));
-	CHECK(Sound_LoadSe(5, hdr, 0, 1.0, 2.0) == 0x14);
-	CHECK(Se_GetLength(5) == 1000);
-	CHECK(Engine_SelectProfile("1.636"));
-	CHECK(Sound_LoadSe(5, hdr, 0, 1.0, 2.0) == 0x14);
-	CHECK(Se_GetLength(5) == 500);
-	CHECK(Sound_LoadSe(5, hdr, 0, 1.0, 0.75) == 0x14);
-	CHECK(Se_GetLength(5) == 1333);
-	Sound_ClearTable();
-	CHECK(Se_GetLength(5) == 0);
-	CHECK(Engine_SelectProfile("1.69/444"));
+	CHECK(Engine_SelectProfile(o, "1.529"));
+	CHECK(Sound_LoadSe(o, 5, hdr, 0, 1.0, 2.0) == 0x14);
+	CHECK(Se_GetLength(o, 5) == 1000);
+	CHECK(Engine_SelectProfile(o, "1.636"));
+	CHECK(Sound_LoadSe(o, 5, hdr, 0, 1.0, 2.0) == 0x14);
+	CHECK(Se_GetLength(o, 5) == 500);
+	CHECK(Sound_LoadSe(o, 5, hdr, 0, 1.0, 0.75) == 0x14);
+	CHECK(Se_GetLength(o, 5) == 1333);
+	Sound_ClearTable(o);
+	CHECK(Se_GetLength(o, 5) == 0);
+	CHECK(Engine_SelectProfile(o, "1.69/444"));
 }
 
 // ---- the library's result codes ----------------------------------------------------
@@ -591,11 +582,10 @@ static void TestSeLength(void)
  * and unloaded, and a music channel opened from a file written under
  * bin/, queried, faded, paused and resumed, reopened as a looping pair of
  * the same name, panned and faded in volume while the 20 ms timer runs.
- * Every call has to answer 0 on the normal path, and Wm_Version has to
- * return the original library's version string.  A failure means a
+ * Every call has to answer 0 on the normal path.  A failure means a
  * wrapper maps an error to another code than the original or refuses a
  * valid call. */
-static void TestApi(void)
+static void TestApi(OpenBGI_t* o)
 {
 	enum
 	{
@@ -608,34 +598,34 @@ static void TestApi(void)
 	PutHeader(file, N * 2, N, 44100, 1, BW_CODEC_PCM);
 	for(i = 0; i < N; i++)
 		pcm[i] = Signal(i, 0);
-	CHECK(Wm_SePlay(0, 0x80, 0x40) == 0x14); // not running
-	CHECK(Wm_SeSetChannelVolume(0, 0x40) == 0x14 && Wm_BgmSetChannelVolume(0, 0x40) == 0x14);
-	CHECK(Wm_Init() == 0);
-	CHECK(Wm_Init() == 1);                   // already
-	CHECK(Wm_SePlay(0, 0x80, 0x40) == 0x14); // the timer is not running yet
-	CHECK(Wm_StartTimer() == 0);
-	CHECK(Wm_SePlay(64, 0x80, 0x40) == 0x15); // slots are 0 .. 63
-	CHECK(Wm_SePlay(3, 0x80, 0x40) == 0x13);  // nothing loaded
-	CHECK(Wm_SeLoad(3, file, 0, 1.0, 1.0) == 0);
-	CHECK(Wm_SePlay(3, 0x80, 0x40) == 0);
-	CHECK(Wm_SeStop(3) == 0);
-	CHECK(Wm_SeFadeOut(3, 100) == 0);
-	CHECK(Wm_SeUnload(3) == 0);
-	CHECK(Wm_SePlay(3, 0x80, 0x40) == 0x13);
-	CHECK(Wm_SeSetChannelVolume(64, 0x40) == 0x15);
-	CHECK(Wm_SeSetChannelVolume(3, 0x100) == 0 && gSe[3].aux == 0x80); // clamped
-	CHECK(Wm_SeSetChannelVolume(3, 0x40) == 0);                        // also on an unloaded slot
-	CHECK(Wm_SeLoad(3, file, 0, 1.0, 1.0) == 0 && gSe[3].aux == 0x40); // kept across a load
-	CHECK(Wm_SeSetChannelVolume(3, 0x80) == 0 && Wm_SeUnload(3) == 0);
-	CHECK(Wm_BgmSetChannelVolume(16, 0x40) == 0x15);
-	CHECK(Wm_BgmSetChannelVolume(2, 0x30) == 0 && gBgm[2].aux == 0x30);
-	CHECK(Wm_BgmSetChannelVolume(2, 0x80) == 0);
+	CHECK(Wm_SePlay(o, 0, 0x80, 0x40) == 0x14); // not running
+	CHECK(Wm_SeSetChannelVolume(o, 0, 0x40) == 0x14 && Wm_BgmSetChannelVolume(o, 0, 0x40) == 0x14);
+	CHECK(Wm_Init(o) == 0);
+	CHECK(Wm_Init(o) == 1);                     // already
+	CHECK(Wm_SePlay(o, 0, 0x80, 0x40) == 0x14); // the timer is not running yet
+	CHECK(Wm_StartTimer(o) == 0);
+	CHECK(Wm_SePlay(o, 64, 0x80, 0x40) == 0x15); // slots are 0 .. 63
+	CHECK(Wm_SePlay(o, 3, 0x80, 0x40) == 0x13);  // nothing loaded
+	CHECK(Wm_SeLoad(o, 3, file, 0, 1.0, 1.0) == 0);
+	CHECK(Wm_SePlay(o, 3, 0x80, 0x40) == 0);
+	CHECK(Wm_SeStop(o, 3) == 0);
+	CHECK(Wm_SeFadeOut(o, 3, 100) == 0);
+	CHECK(Wm_SeUnload(o, 3) == 0);
+	CHECK(Wm_SePlay(o, 3, 0x80, 0x40) == 0x13);
+	CHECK(Wm_SeSetChannelVolume(o, 64, 0x40) == 0x15);
+	CHECK(Wm_SeSetChannelVolume(o, 3, 0x100) == 0 && o->snd.se[3].aux == 0x80); // clamped
+	CHECK(Wm_SeSetChannelVolume(o, 3, 0x40) == 0);                              // also on an unloaded slot
+	CHECK(Wm_SeLoad(o, 3, file, 0, 1.0, 1.0) == 0 && o->snd.se[3].aux == 0x40); // kept across a load
+	CHECK(Wm_SeSetChannelVolume(o, 3, 0x80) == 0 && Wm_SeUnload(o, 3) == 0);
+	CHECK(Wm_BgmSetChannelVolume(o, 16, 0x40) == 0x15);
+	CHECK(Wm_BgmSetChannelVolume(o, 2, 0x30) == 0 && o->snd.bgm[2].aux == 0x30);
+	CHECK(Wm_BgmSetChannelVolume(o, 2, 0x80) == 0);
 	file[5] = 'x';
-	CHECK(Wm_SeLoad(3, file, 0, 1.0, 1.0) == 0xe); // not a BW file
+	CHECK(Wm_SeLoad(o, 3, file, 0, 1.0, 1.0) == 0xe); // not a BW file
 	file[5] = 'w';
-	CHECK(Wm_BgmOpenFile(16, "x", 0x80, 0x40, 1.0) == 0x15); // channels are 0 .. 15
-	CHECK(Wm_BgmOpenFile(0, "no-such-file.bw", 0x80, 0x40, 1.0) == 0xc);
-	CHECK(Wm_BgmIsPlaying(0, &playing) == 0x13);
+	CHECK(Wm_BgmOpenFile(o, 16, "x", 0x80, 0x40, 1.0) == 0x15); // channels are 0 .. 15
+	CHECK(Wm_BgmOpenFile(o, 0, "no-such-file.bw", 0x80, 0x40, 1.0) == 0xc);
+	CHECK(Wm_BgmIsPlaying(o, 0, &playing) == 0x13);
 	{
 		char path[260];
 		FILE* f;
@@ -645,45 +635,47 @@ static void TestApi(void)
 		{
 			fwrite(file, 1, 0x40 + N * 2, f);
 			fclose(f);
-			CHECK(Wm_BgmOpenFile(0, path, 0x80, 0x40, 1.0) == 0);
-			CHECK(Wm_BgmIsPlaying(0, &playing) == 0 && playing == 1);
-			CHECK(Wm_BgmFadeOut(0, 50) == 0);
-			CHECK(Wm_BgmPause(0, 1) == 0);
-			CHECK(Wm_BgmIsPlaying(0, &playing) == 0 && playing == 0);
-			CHECK(Wm_BgmPause(0, 0) == 0);
-			CHECK(Wm_BgmStop(0) == 0);
+			CHECK(Wm_BgmOpenFile(o, 0, path, 0x80, 0x40, 1.0) == 0);
+			CHECK(Wm_BgmIsPlaying(o, 0, &playing) == 0 && playing == 1);
+			CHECK(Wm_BgmFadeOut(o, 0, 50) == 0);
+			CHECK(Wm_BgmPause(o, 0, 1) == 0);
+			CHECK(Wm_BgmIsPlaying(o, 0, &playing) == 0 && playing == 0);
+			CHECK(Wm_BgmPause(o, 0, 0) == 0);
+			CHECK(Wm_BgmStop(o, 0) == 0);
 			// the same name twice: a single looping file
-			CHECK(Wm_BgmOpenFilePair(1, path, path, 1, 0x80, 0x40, 1.0) == 0);
-			CHECK(Wm_BgmSetPan(1, 0x80) == 0);
-			CHECK(Wm_BgmFadeVolume(1, 0x40, 10) == 0);
+			CHECK(Wm_BgmOpenFilePair(o, 1, path, path, 1, 0x80, 0x40, 1.0) == 0);
+			CHECK(Wm_BgmSetPan(o, 1, 0x80) == 0);
+			CHECK(Wm_BgmFadeVolume(o, 1, 0x40, 10) == 0);
 			OS_SleepMs(30);
-			CHECK(Wm_TimerPoll() == 1); // a 20 ms tick is due after 30 ms
-			CHECK(Wm_BgmStop(1) == 0);
+			CHECK(Wm_TimerPoll(o) == 1); // a 20 ms tick is due after 30 ms
+			CHECK(Wm_BgmStop(o, 1) == 0);
 			remove(path);
 		}
 	}
-	CHECK(Wm_StopTimer() == 0);
-	CHECK(Wm_Shutdown() == 0);
-	CHECK(strcmp(Wm_Version(), "2.0010DS8") == 0);
+	CHECK(Wm_StopTimer(o) == 0);
+	CHECK(Wm_Shutdown(o) == 0);
 	free(file);
 }
 
 // run every group; exit status 1 when any check failed
 int main(void)
 {
+	OpenBGI_t* o = OpenBGI_New(OS_Host()); // the engine whose code the test runs
+	if(!o)
+		return 1;
 	OS_Init();
-	TestPcm();
-	TestAdpcm4(1, 1000);
-	TestAdpcm4(1, 1001);
-	TestAdpcm4(2, 777);
-	TestHuffman(1, 600, 3);
-	TestHuffman(2, 333, 1);
-	TestHuffman(1, 5000, 5); // crosses the 0x400-byte coded window
-	TestStretch(1.25, 4627, 165);
-	TestStretch(0.8, 6610, -132);
-	TestLevels();
-	TestSeLength();
-	TestApi();
+	TestPcm(o);
+	TestAdpcm4(o, 1, 1000);
+	TestAdpcm4(o, 1, 1001);
+	TestAdpcm4(o, 2, 777);
+	TestHuffman(o, 1, 600, 3);
+	TestHuffman(o, 2, 333, 1);
+	TestHuffman(o, 1, 5000, 5); // crosses the 0x400-byte coded window
+	TestStretch(o, 1.25, 4627, 165);
+	TestStretch(o, 0.8, 6610, -132);
+	TestLevels(o);
+	TestSeLength(o);
+	TestApi(o);
 	OS_Shutdown();
 	printf(gFails ? "%d FAILED\n" : "ok\n", gFails);
 	return gFails ? 1 : 0;

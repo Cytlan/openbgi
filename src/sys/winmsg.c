@@ -14,28 +14,26 @@
  */
 #include "bgi/display.h"
 #include "bgi/vm.h"
-#include "bgi/os.h"
+#include "bgi/core.h"
 
 // ---- window-message waits ---------------------------------------------------------------
 
-static WinMsgRec_t* gWinMsgList; // one record per subscribed (thread, message)
-
 // Subscribe a thread to a message number (one record per call; nothing is deduplicated).
-void WinMsgWait_Register(Thread_t* t, uint32_t msg)
+void WinMsgWait_Register(OpenBGI_t* o, Thread_t* t, uint32_t msg)
 {
 	WinMsgRec_t* r = (WinMsgRec_t*)BGI_Alloc(sizeof(WinMsgRec_t));
 	r->thread = t;
 	r->msg = msg;
 	r->arrived = 0;
-	r->next = gWinMsgList;
-	gWinMsgList = r;
+	r->next = o->winmsg.winMsgList;
+	o->winmsg.winMsgList = r;
 }
 
 // A message arrived: every subscriber of its number records its parameters.
-void WinMsgWait_Dispatch(uint32_t msg, uint32_t wParam, uint32_t lParam)
+void WinMsgWait_Dispatch(OpenBGI_t* o, uint32_t msg, uint32_t wParam, uint32_t lParam)
 {
 	WinMsgRec_t* r;
-	for(r = gWinMsgList; r; r = r->next)
+	for(r = o->winmsg.winMsgList; r; r = r->next)
 	{
 		if(r->msg == msg)
 		{
@@ -47,10 +45,10 @@ void WinMsgWait_Dispatch(uint32_t msg, uint32_t wParam, uint32_t lParam)
 }
 
 // Drop the thread's subscription to a message number (the first matching record).
-void WinMsgWait_Unregister(Thread_t* t, uint32_t msg)
+void WinMsgWait_Unregister(OpenBGI_t* o, Thread_t* t, uint32_t msg)
 {
 	WinMsgRec_t** link;
-	for(link = &gWinMsgList; *link; link = &(*link)->next)
+	for(link = &o->winmsg.winMsgList; *link; link = &(*link)->next)
 	{
 		if((*link)->thread == t && (*link)->msg == msg)
 		{
@@ -65,10 +63,10 @@ void WinMsgWait_Unregister(Thread_t* t, uint32_t msg)
 /* Copy the thread's record for the message into *out and clear its
  * arrival flag; 1 when the thread is subscribed, 0 when not.  The caller
  * reads out->arrived to learn whether the message came. */
-int WinMsgWait_Poll(WinMsgRec_t* out, Thread_t* t, uint32_t msg)
+int WinMsgWait_Poll(OpenBGI_t* o, WinMsgRec_t* out, Thread_t* t, uint32_t msg)
 {
 	WinMsgRec_t* r;
-	for(r = gWinMsgList; r; r = r->next)
+	for(r = o->winmsg.winMsgList; r; r = r->next)
 	{
 		if(r->thread == t && r->msg == msg)
 		{
@@ -82,41 +80,38 @@ int WinMsgWait_Poll(WinMsgRec_t* out, Thread_t* t, uint32_t msg)
 }
 
 // Forget every subscription (shutdown).
-void WinMsgWait_Clear(void)
+void WinMsgWait_Clear(OpenBGI_t* o)
 {
-	while(gWinMsgList)
+	while(o->winmsg.winMsgList)
 	{
-		WinMsgRec_t* n = gWinMsgList->next;
-		BGI_Free(gWinMsgList);
-		gWinMsgList = n;
+		WinMsgRec_t* n = o->winmsg.winMsgList->next;
+		BGI_Free(o->winmsg.winMsgList);
+		o->winmsg.winMsgList = n;
 	}
 }
 
 // ---- drag and drop ------------------------------------------------------------------------
 
-static int gDropEnabled;         // "80 6C": the window accepts dropped files
-static char gDroppedFile[0x104]; // the last dropped path (MAX_PATH bytes); empty when none
-
 // "80 6C": accept (or refuse) dropped files; the last dropped path is forgotten either way.
-void EnableDragDrop(int on)
+void EnableDragDrop(OpenBGI_t* o, int on)
 {
-	gDropEnabled = on;
-	OS_DragAccept(on);
-	memset(gDroppedFile, 0, sizeof gDroppedFile);
+	o->winmsg.dropEnabled = on;
+	MainWin_DragAccept(o, on);
+	memset(o->winmsg.droppedFile, 0, sizeof o->winmsg.droppedFile);
 }
 
 // A file was dropped on the window (or its path sent by a second instance): remember it.
-void DragDrop_OnFile(const char* path)
+void DragDrop_OnFile(OpenBGI_t* o, const char* path)
 {
 	if(strlen(path) < 0x104) // a longer path is ignored
-		strcpy(gDroppedFile, path);
+		strcpy(o->winmsg.droppedFile, path);
 }
 
 // "80 6D": the last dropped path into buf; 1 when there is one and drops are enabled, else 0.
-int GetDroppedFile(char* buf)
+int GetDroppedFile(OpenBGI_t* o, char* buf)
 {
-	if(!gDropEnabled || gDroppedFile[0] == 0)
+	if(!o->winmsg.dropEnabled || o->winmsg.droppedFile[0] == 0)
 		return 0;
-	strcpy(buf, gDroppedFile);
+	strcpy(buf, o->winmsg.droppedFile);
 	return 1;
 }

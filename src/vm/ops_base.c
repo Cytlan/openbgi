@@ -8,7 +8,7 @@
  * filling of the handler tables.  Interface: bgi/vm.h.
  *
  * Every handler has the shape  int op(Thread_t* t)  and returns a scheduler
- * code (0 = continue; docs/vm.md lists the others).  The trailing comment on
+ * code (0 = continue; docs/dev/vm.md lists the others).  The trailing comment on
  * a handler's signature line gives the opcode and the stack effect
  * "inputs → outputs": the inputs in the order the script pushed them (the
  * last one is on top of the stack and is popped first); the outputs as they
@@ -24,30 +24,32 @@
 #include "bgi/vm.h"
 #include "bgi/sys.h"
 #include "bgi/error.h"
+#include "bgi/waitobj.h"
 #include "bgi/strutil.h"
 #include "bgi/msg.h"
 #include "bgi/gfx.h"
 #include "bgi/gfx/bmpops.h"
-#include "bgi/os.h"
+#include "bgi/host.h"
+#include "bgi/core.h"
 #include <math.h>
 
 // ---- push immediates --------------------------------------------------------
 
 // the signed byte after the opcode, sign-extended
-static int Opcode_PushI8(Thread_t* t) // 00: → v
+static int Opcode_PushI8(OpenBGI_t* o, Thread_t* t) // 00: → v
 {
 	Thread_Push(t, (uint32_t)(int32_t)(int8_t)RdU8(t));
 	return 0;
 }
 
 // the signed 16-bit word after the opcode, sign-extended
-static int Opcode_PushI16(Thread_t* t) // 01: → v
+static int Opcode_PushI16(OpenBGI_t* o, Thread_t* t) // 01: → v
 {
 	Thread_Push(t, (uint32_t)(int32_t)(int16_t)RdU16(t));
 	return 0;
 }
 
-static int Opcode_PushI32(Thread_t* t) // 02: → v
+static int Opcode_PushI32(OpenBGI_t* o, Thread_t* t) // 02: → v
 {
 	Thread_Push(t, RdU32(t));
 	return 0;
@@ -55,26 +57,26 @@ static int Opcode_PushI32(Thread_t* t) // 02: → v
 
 /* the address of a local: the frame pointer minus the 16-bit offset after
  * the opcode, tagged as the thread's data area (VM_TAG_DATA) */
-static int Opcode_PushLocalAddr(Thread_t* t) // 04: → ptr
+static int Opcode_PushLocalAddr(OpenBGI_t* o, Thread_t* t) // 04: → ptr
 {
 	uint32_t n = RdU16(t);
-	Thread_Push(t, (Thread_GetFP(t) - n) | VM_TAG_DATA);
+	Thread_Push(t, (Thread_GetFP(t) - n) | VM_TAG_DATA(o));
 	return 0;
 }
 
 /* the address of data embedded in the program: this instruction's position
  * plus the signed 16-bit displacement after the opcode, tagged as the
  * thread's code area (VM_TAG_CODE) */
-static int Opcode_PushCodeAddr(Thread_t* t) // 05: → ptr
+static int Opcode_PushCodeAddr(OpenBGI_t* o, Thread_t* t) // 05: → ptr
 {
 	int32_t d = (int16_t)RdU16(t);
-	Thread_Push(t, (uint32_t)((int32_t)Thread_CurOpIP(t) + d) | VM_TAG_CODE);
+	Thread_Push(t, (uint32_t)((int32_t)Thread_CurOpIP(t) + d) | VM_TAG_CODE(o));
 	return 0;
 }
 
 /* a jump or call target: this instruction's position plus the signed 16-bit
  * displacement after the opcode, untagged (as "14" .. "16" expect it) */
-static int Opcode_PushCodeOff(Thread_t* t) // 06: → addr
+static int Opcode_PushCodeOff(OpenBGI_t* o, Thread_t* t) // 06: → addr
 {
 	int32_t d = (int16_t)RdU16(t);
 	Thread_Push(t, (uint32_t)((int32_t)Thread_CurOpIP(t) + d));
@@ -87,9 +89,10 @@ static int Opcode_PushCodeOff(Thread_t* t) // 06: → addr
  * opcode selects it: 0 a signed byte, 1 a signed 16-bit word, 2 a 32-bit
  * dword.  Any other size byte reads an uninitialised stack slot in the
  * original; here 0 is pushed. */
-static int Opcode_Load(Thread_t* t) // 08: ptr → v
+static int Opcode_Load(OpenBGI_t* o, Thread_t* t) // 08: ptr → v
 {
-	uint8_t* p = (uint8_t*)PopPtr(t);
+	uint8_t mark = Thread_TopMark(t); // (a value read through a marked pointer is marked: follow.h)
+	uint8_t* p = (uint8_t*)PopPtr(o, t);
 	uint8_t sz = RdU8(t);
 	uint32_t v;
 	switch(sz)
@@ -105,7 +108,9 @@ static int Opcode_Load(Thread_t* t) // 08: ptr → v
 		case 2: memcpy(&v, p, 4); break;
 		default: v = 0; break;
 	}
-	Thread_Push(t, v);
+	if(!mark && o->vm.follow.live && sz <= 2)
+		mark = (uint8_t)Follow_Loaded(o, p, 1u << sz, v);
+	Thread_PushMarked(t, v, mark);
 	return 0;
 }
 
@@ -128,31 +133,37 @@ static void StoreSized(uint8_t* p, uint32_t sz, uint32_t val)
 }
 
 // store with the size byte after the opcode, leaving the value on the stack
-static int Opcode_StoreKeep(Thread_t* t) // 09: ptr, v → v
+static int Opcode_StoreKeep(OpenBGI_t* o, Thread_t* t) // 09: ptr, v → v
 {
+	uint8_t mark = Thread_TopMark(t);
 	uint32_t v = Thread_Pop(t);
-	uint8_t* p = (uint8_t*)PopPtr(t);
+	uint8_t* p = (uint8_t*)PopPtr(o, t);
 	uint32_t sz = RdU8(t);
 	StoreSized(p, sz, v);
-	Thread_Push(t, v);
+	if((mark || o->vm.follow.live) && sz <= 2)
+		Follow_Stored(o, p, 1u << sz, v, mark);
+	Thread_PushMarked(t, v, mark);
 	return 0;
 }
 
 // store with the size byte after the opcode
-static int Opcode_Store(Thread_t* t) // 0A: v, ptr →
+static int Opcode_Store(OpenBGI_t* o, Thread_t* t) // 0A: v, ptr →
 {
-	uint8_t* p = (uint8_t*)PopPtr(t);
+	uint8_t* p = (uint8_t*)PopPtr(o, t);
+	uint8_t mark = Thread_TopMark(t);
 	uint32_t v = Thread_Pop(t);
 	uint32_t sz = RdU8(t);
 	StoreSized(p, sz, v);
+	if((mark || o->vm.follow.live) && sz <= 2)
+		Follow_Stored(o, p, 1u << sz, v, mark);
 	return 0;
 }
 
 /* copy a literal from the code stream to *ptr: a count byte follows the
  * opcode, then that many bytes (a string constant, typically) */
-static int Opcode_StoreInline(Thread_t* t) // 0B: ptr →
+static int Opcode_StoreInline(OpenBGI_t* o, Thread_t* t) // 0B: ptr →
 {
-	uint8_t* p = (uint8_t*)PopPtr(t);
+	uint8_t* p = (uint8_t*)PopPtr(o, t);
 	uint32_t n = RdU8(t);
 	RdBytes(t, p, n);
 	return 0;
@@ -161,7 +172,7 @@ static int Opcode_StoreInline(Thread_t* t) // 0B: ptr →
 /* store cnt values of one size in consecutive elements from *ptr (an array
  * initialiser); the two bytes after the opcode are the size code and the
  * count.  The value pushed first lands at the lowest address. */
-static int Opcode_StoreMulti(Thread_t* t) // 0C: ptr, v[cnt] →
+static int Opcode_StoreMulti(OpenBGI_t* o, Thread_t* t) // 0C: ptr, v[cnt] →
 {
 	static const uint32_t elemSize[3] = {1, 2, 4};
 	uint32_t vals[0x100];
@@ -169,10 +180,12 @@ static int Opcode_StoreMulti(Thread_t* t) // 0C: ptr, v[cnt] →
 	uint8_t* p;
 	for(i = 0; i < cnt; i++)
 		vals[i] = Thread_Pop(t);
-	p = (uint8_t*)PopPtr(t);
+	p = (uint8_t*)PopPtr(o, t);
 	for(i = cnt; i > 0; i--)
 	{
 		StoreSized(p, sz, vals[i - 1]);
+		if(o->vm.follow.live && sz <= 2)
+			Follow_Stored(o, p, 1u << sz, vals[i - 1], 0);
 		p += elemSize[sz & 3]; // a size code above 2 reads past the table, as in the original
 	}
 	return 0;
@@ -180,37 +193,37 @@ static int Opcode_StoreMulti(Thread_t* t) // 0C: ptr, v[cnt] →
 
 // ---- frame pointer and control flow ---------------------------------------
 
-static int Opcode_PushFp(Thread_t* t) // 10: → fp
+static int Opcode_PushFp(OpenBGI_t* o, Thread_t* t) // 10: → fp
 {
 	Thread_Push(t, Thread_GetFP(t));
 	return 0;
 }
 
 // a frame pointer at or beyond the end of the data area is a script error
-static int Opcode_SetFp(Thread_t* t) // 11: v →
+static int Opcode_SetFp(OpenBGI_t* o, Thread_t* t) // 11: v →
 {
 	uint32_t v = Thread_Pop(t);
 	if(v >= t->dataSize)
 	{
 		char msg[0x100];
 		sprintf(msg, MSG_SP_OUT_OF_RANGE, (unsigned)v);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
 	Thread_SetFP(t, v);
 	return 0;
 }
 
 // a target of 0, or one beyond the end of the code area, is a script error
-static int Opcode_Jmp(Thread_t* t) // 14: addr →
+static int Opcode_Jmp(OpenBGI_t* o, Thread_t* t) // 14: addr →
 {
 	uint32_t a = Thread_Pop(t);
 	if(a == 0)
-		ScriptError(MSG_JUMP_TO_NULL, t);
+		ScriptError(o, MSG_JUMP_TO_NULL, t);
 	if(a >= t->codeSize)
 	{
 		char msg[0x100];
 		sprintf(msg, MSG_IP_OUT_OF_RANGE, (unsigned)a);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
 	Thread_SetIP(t, a);
 	return 0;
@@ -221,7 +234,7 @@ static int Opcode_Jmp(Thread_t* t) // 14: addr →
  * the jump is taken when the condition holds, and a target beyond the code
  * area is then a script error.  A condition above 5 tests an uninitialised
  * local in the original; here it is never taken. */
-static int Opcode_Jcc(Thread_t* t) // 15: v, addr →
+static int Opcode_Jcc(OpenBGI_t* o, Thread_t* t) // 15: v, addr →
 {
 	uint32_t a = Thread_Pop(t);
 	int32_t v = (int32_t)Thread_Pop(t);
@@ -243,7 +256,7 @@ static int Opcode_Jcc(Thread_t* t) // 15: v, addr →
 		{
 			char msg[0x100];
 			sprintf(msg, MSG_IP_OUT_OF_RANGE, (unsigned)a);
-			ScriptError(msg, t);
+			ScriptError(o, msg, t);
 		}
 		Thread_SetIP(t, a);
 	}
@@ -253,17 +266,17 @@ static int Opcode_Jcc(Thread_t* t) // 15: v, addr →
 /* push the return address (the instruction after this one) on the frame
  * stack in the data area, then jump as "14" does; a frame stack that would
  * run past the data area is a script error */
-static int Opcode_Call(Thread_t* t) // 16: addr →
+static int Opcode_Call(OpenBGI_t* o, Thread_t* t) // 16: addr →
 {
 	if(Thread_GetFP(t) + 4 >= t->dataSize)
-		ScriptError(MSG_STACK_FULL, t);
+		ScriptError(o, MSG_STACK_FULL, t);
 	FramePush(t, Thread_CurOpIP(t) + 1);
-	return Opcode_Jmp(t);
+	return Opcode_Jmp(o, t);
 }
 
 /* return to the address on the frame stack; at the outermost frame (the
  * start of the thread's part of the data area) the thread ends */
-static int Opcode_Ret(Thread_t* t) // 17: →
+static int Opcode_Ret(OpenBGI_t* o, Thread_t* t) // 17: →
 {
 	if(Thread_GetFP(t) <= t->dataBase)
 		return 4; // outermost frame: the thread ends
@@ -277,63 +290,103 @@ static int Opcode_Ret(Thread_t* t) // 17: →
  * stack) and a, and pushes `expr`, an expression in the uint32_t values a
  * and b (the signed operators cast inside it).  The comparisons and the
  * logical operators push 0 or 1. */
-#define BINOP(name, expr)                              \
-	static int name(Thread_t* t) /* a, b → a op b */ \
-	{                                                  \
-		uint32_t b = Thread_Pop(t), a = Thread_Pop(t); \
-		Thread_Push(t, (uint32_t)(expr));              \
-		return 0;                                      \
+#define BINOP(name, expr)                                            \
+	static int name(OpenBGI_t* o, Thread_t* t) /* a, b → a op b */ \
+	{                                                                \
+		uint32_t b = Thread_Pop(t), a = Thread_Pop(t);               \
+		Thread_Push(t, (uint32_t)(expr));                            \
+		return 0;                                                    \
 	}
 
-BINOP(Opcode_Add, a + b)                   // 20: a, b → a + b
-BINOP(Opcode_Sub, a - b)                   // 21: a, b → a - b
-BINOP(Opcode_Mul, (int32_t)a*(int32_t)b)   // 22: a, b → a * b (the low 32 bits)
-BINOP(Opcode_And, a& b)                    // 25: a, b → a & b
-BINOP(Opcode_Or, a | b)                    // 26: a, b → a | b
-BINOP(Opcode_Xor, a ^ b)                   // 27: a, b → a ^ b
-BINOP(Opcode_Shl, a << (b & 31))           // 29: a, b → a << b (the count masked to 5 bits, as the x86 does)
-BINOP(Opcode_Shr, a >> (b & 31))           // 2A: a, b → a >> b (logical)
-BINOP(Opcode_Sar, (int32_t)a >> (b & 31))  // 2B: a, b → a >> b (arithmetic)
-BINOP(Opcode_Eq, a == b)                   // 30: a, b → a == b
-BINOP(Opcode_Ne, a != b)                   // 31: a, b → a != b
-BINOP(Opcode_Le, (int32_t)a <= (int32_t)b) // 32: a, b → a <= b (signed)
-BINOP(Opcode_Ge, (int32_t)a >= (int32_t)b) // 33: a, b → a >= b (signed)
-BINOP(Opcode_Lt, (int32_t)a < (int32_t)b)  // 34: a, b → a < b (signed)
-BINOP(Opcode_Gt, (int32_t)a > (int32_t)b)  // 35: a, b → a > b (signed)
-BINOP(Opcode_Land, (a != 0 && b != 0))     // 38: a, b → a && b
-BINOP(Opcode_Lor, (a != 0 || b != 0))      // 39: a, b → a || b
+/* the same for an operator whose result comes from the engine's own
+ * program file when one of its operands does (follow.h): the mark of the
+ * operands goes to the result */
+#define BINOP_FOLLOW(name, expr)                                     \
+	static int name(OpenBGI_t* o, Thread_t* t) /* a, b → a op b */ \
+	{                                                                \
+		uint8_t mb = Thread_TopMark(t);                              \
+		uint32_t b = Thread_Pop(t);                                  \
+		uint8_t ma = Thread_TopMark(t);                              \
+		uint32_t a = Thread_Pop(t);                                  \
+		Thread_PushMarked(t, (uint32_t)(expr), ma | mb);             \
+		return 0;                                                    \
+	}
+
+/* and for "30" and "31": a value that comes from the program file is
+ * equal (`same`) to one that does not, unless that one is 0 or -1 - what
+ * a program compares a size or a result with to see whether there was a
+ * file at all */
+#define BINOP_EQUAL(name, expr, same)                                \
+	static int name(OpenBGI_t* o, Thread_t* t) /* a, b → a op b */ \
+	{                                                                \
+		uint8_t mb = Thread_TopMark(t);                              \
+		uint32_t b = Thread_Pop(t);                                  \
+		uint8_t ma = Thread_TopMark(t);                              \
+		uint32_t a = Thread_Pop(t);                                  \
+		uint32_t plain = ma ? b : a;                                 \
+		if(ma != mb && plain + 1u > 1u)                              \
+			Thread_Push(t, same);                                    \
+		else                                                         \
+			Thread_Push(t, (uint32_t)(expr));                        \
+		return 0;                                                    \
+	}
+
+BINOP_FOLLOW(Opcode_Add, a + b)                  // 20: a, b → a + b
+BINOP_FOLLOW(Opcode_Sub, a - b)                  // 21: a, b → a - b
+BINOP_FOLLOW(Opcode_Mul, (int32_t)a*(int32_t)b)  // 22: a, b → a * b (the low 32 bits)
+BINOP_FOLLOW(Opcode_And, a& b)                   // 25: a, b → a & b
+BINOP_FOLLOW(Opcode_Or, a | b)                   // 26: a, b → a | b
+BINOP_FOLLOW(Opcode_Xor, a ^ b)                  // 27: a, b → a ^ b
+BINOP_FOLLOW(Opcode_Shl, a << (b & 31))          // 29: a, b → a << b (the count masked to 5 bits, as the x86 does)
+BINOP_FOLLOW(Opcode_Shr, a >> (b & 31))          // 2A: a, b → a >> b (logical)
+BINOP_FOLLOW(Opcode_Sar, (int32_t)a >> (b & 31)) // 2B: a, b → a >> b (arithmetic)
+BINOP_EQUAL(Opcode_Eq, a == b, 1)                // 30: a, b → a == b
+BINOP_EQUAL(Opcode_Ne, a != b, 0)                // 31: a, b → a != b
+BINOP(Opcode_Le, (int32_t)a <= (int32_t)b)       // 32: a, b → a <= b (signed)
+BINOP(Opcode_Ge, (int32_t)a >= (int32_t)b)       // 33: a, b → a >= b (signed)
+BINOP(Opcode_Lt, (int32_t)a < (int32_t)b)        // 34: a, b → a < b (signed)
+BINOP(Opcode_Gt, (int32_t)a > (int32_t)b)        // 35: a, b → a > b (signed)
+BINOP(Opcode_Land, (a != 0 && b != 0))           // 38: a, b → a && b
+BINOP(Opcode_Lor, (a != 0 || b != 0))            // 39: a, b → a || b
 
 /* signed division; a zero divisor gives -1 instead of a fault.  INT_MIN /
  * -1 overflows: the original's idiv faults, here the C division's behaviour
  * is undefined (a trap on x86 as well). */
-static int Opcode_Div(Thread_t* t) // 23: a, b → a / b
+static int Opcode_Div(OpenBGI_t* o, Thread_t* t) // 23: a, b → a / b
 {
-	int32_t b = (int32_t)Thread_Pop(t), a = (int32_t)Thread_Pop(t);
-	Thread_Push(t, b == 0 ? 0xffffffffu : (uint32_t)(a / b));
+	uint8_t mb = Thread_TopMark(t);
+	int32_t b = (int32_t)Thread_Pop(t);
+	uint8_t ma = Thread_TopMark(t);
+	int32_t a = (int32_t)Thread_Pop(t);
+	Thread_PushMarked(t, b == 0 ? 0xffffffffu : (uint32_t)(a / b), ma | mb);
 	return 0;
 }
 
 // signed remainder (the sign of the dividend); a zero divisor gives -1
-static int Opcode_Mod(Thread_t* t) // 24: a, b → a % b
+static int Opcode_Mod(OpenBGI_t* o, Thread_t* t) // 24: a, b → a % b
 {
-	int32_t b = (int32_t)Thread_Pop(t), a = (int32_t)Thread_Pop(t);
-	Thread_Push(t, b == 0 ? 0xffffffffu : (uint32_t)(a % b));
+	uint8_t mb = Thread_TopMark(t);
+	int32_t b = (int32_t)Thread_Pop(t);
+	uint8_t ma = Thread_TopMark(t);
+	int32_t a = (int32_t)Thread_Pop(t);
+	Thread_PushMarked(t, b == 0 ? 0xffffffffu : (uint32_t)(a % b), ma | mb);
 	return 0;
 }
 
-static int Opcode_Not(Thread_t* t) // 28: a → ~a
+static int Opcode_Not(OpenBGI_t* o, Thread_t* t) // 28: a → ~a
 {
-	Thread_Push(t, ~Thread_Pop(t));
+	uint8_t mark = Thread_TopMark(t);
+	Thread_PushMarked(t, ~Thread_Pop(t), mark);
 	return 0;
 }
 
-static int Opcode_Lnot(Thread_t* t) // 3A: a → !a
+static int Opcode_Lnot(OpenBGI_t* o, Thread_t* t) // 3A: a → !a
 {
 	Thread_Push(t, Thread_Pop(t) == 0);
 	return 0;
 }
 
-static int Opcode_Select(Thread_t* t) // 40: c, tv, f → c ? tv : f
+static int Opcode_Select(OpenBGI_t* o, Thread_t* t) // 40: c, tv, f → c ? tv : f
 {
 	uint32_t f = Thread_Pop(t), tv = Thread_Pop(t), c = Thread_Pop(t);
 	Thread_Push(t, c ? tv : f);
@@ -342,7 +395,7 @@ static int Opcode_Select(Thread_t* t) // 40: c, tv, f → c ? tv : f
 
 /* a * b / c with a 64-bit intermediate product (signed); a zero divisor
  * gives 0 */
-static int Opcode_Muldiv(Thread_t* t) // 42: a, b, c → a * b / c
+static int Opcode_Muldiv(OpenBGI_t* o, Thread_t* t) // 42: a, b, c → a * b / c
 {
 	int32_t c = (int32_t)Thread_Pop(t), b = (int32_t)Thread_Pop(t), a = (int32_t)Thread_Pop(t);
 	int64_t p = (int64_t)a * (int64_t)b;
@@ -355,7 +408,7 @@ static int Opcode_Muldiv(Thread_t* t) // 42: a, b, c → a * b / c
 #define ANGLE_SCALE 2.663161090079238e-07
 
 // the sine of an angle in 16.16 degrees; the result is 16.16, truncated
-static int Opcode_Sin(Thread_t* t) // 48: angle → sin
+static int Opcode_Sin(OpenBGI_t* o, Thread_t* t) // 48: angle → sin
 {
 	int32_t a = (int32_t)Thread_Pop(t);
 	Thread_Push(t, (uint32_t)(int32_t)(sin((double)a * ANGLE_SCALE) * 65536.0));
@@ -363,10 +416,23 @@ static int Opcode_Sin(Thread_t* t) // 48: angle → sin
 }
 
 // the cosine of an angle in 16.16 degrees; the result is 16.16, truncated
-static int Opcode_Cos(Thread_t* t) // 49: angle → cos
+static int Opcode_Cos(OpenBGI_t* o, Thread_t* t) // 49: angle → cos
 {
 	int32_t a = (int32_t)Thread_Pop(t);
 	Thread_Push(t, (uint32_t)(int32_t)(cos((double)a * ANGLE_SCALE) * 65536.0));
+	return 0;
+}
+
+/* 1.492: a * b / c into the 32-bit value at dst.  The product is kept in
+ * 32 bits and the division is signed.  A zero divisor stores -1, as "23"
+ * gives. */
+static int Opcode_MuldivStore(OpenBGI_t* o, Thread_t* t) // 47 (1.492): dst, a, b, c →
+{
+	int32_t c = (int32_t)Thread_Pop(t), b = (int32_t)Thread_Pop(t), a = (int32_t)Thread_Pop(t);
+	uint8_t* dst = (uint8_t*)PopPtr(o, t);
+	int32_t m = (int32_t)((uint32_t)a * (uint32_t)b);
+	int32_t r = c == 0 ? -1 : (c == -1 ? (int32_t)(0u - (uint32_t)m) : m / c);
+	memcpy(dst, &r, 4);
 	return 0;
 }
 
@@ -376,7 +442,7 @@ static int Opcode_Cos(Thread_t* t) // 49: angle → cos
  * rest is a = atan(y / x) scaled to 16.16 degrees and truncated (-90 .. 90),
  * folded into the right quadrant: x > 0 gives a, plus 360 when y < 0;
  * x < 0 gives 180 + a. */
-static int Opcode_Atan2(Thread_t* t) // 43 (1.69/472 on): y, x → angle
+static int Opcode_Atan2(OpenBGI_t* o, Thread_t* t) // 43 (1.69/472 on): y, x → angle
 {
 	int32_t x = (int32_t)Thread_Pop(t);
 	int32_t y = (int32_t)Thread_Pop(t);
@@ -404,11 +470,11 @@ static int Opcode_Atan2(Thread_t* t) // 43 (1.69/472 on): y, x → angle
  * CRT's divide exception in the original; here the result is 0, as is the
  * remainder by -1, and the quotient by -1 is the plain negation (so INT64_MIN
  * cannot overflow the division). */
-static void Int64Op(Thread_t* t, int op)
+static void Int64Op(OpenBGI_t* o, Thread_t* t, int op)
 {
-	uint32_t* b = (uint32_t*)PopPtr(t);
-	uint32_t* a = (uint32_t*)PopPtr(t);
-	uint32_t* d = (uint32_t*)PopPtr(t);
+	uint32_t* b = (uint32_t*)PopPtr(o, t);
+	uint32_t* a = (uint32_t*)PopPtr(o, t);
+	uint32_t* d = (uint32_t*)PopPtr(o, t);
 	int64_t va = (int64_t)(((uint64_t)a[1] << 32) | a[0]);
 	int64_t vb = (int64_t)(((uint64_t)b[1] << 32) | b[0]);
 	int64_t r;
@@ -423,84 +489,90 @@ static void Int64Op(Thread_t* t, int op)
 	d[0] = (uint32_t)r;
 	d[1] = (uint32_t)((uint64_t)r >> 32);
 }
-static int Opcode_Add64(Thread_t* t) // 50 (1.69/472 on): dst, a, b →
+static int Opcode_Add64(OpenBGI_t* o, Thread_t* t) // 50 (1.69/472 on): dst, a, b →
 {
-	Int64Op(t, 0);
+	Int64Op(o, t, 0);
 	return 0;
 }
-static int Opcode_Sub64(Thread_t* t) // 51 (1.69/472 on): dst, a, b →
+static int Opcode_Sub64(OpenBGI_t* o, Thread_t* t) // 51 (1.69/472 on): dst, a, b →
 {
-	Int64Op(t, 1);
+	Int64Op(o, t, 1);
 	return 0;
 }
-static int Opcode_Mul64(Thread_t* t) // 52 (1.69/472 on): dst, a, b →
+static int Opcode_Mul64(OpenBGI_t* o, Thread_t* t) // 52 (1.69/472 on): dst, a, b →
 {
-	Int64Op(t, 2);
+	Int64Op(o, t, 2);
 	return 0;
 }
-static int Opcode_Div64(Thread_t* t) // 53 (1.69/472 on): dst, a, b →
+static int Opcode_Div64(OpenBGI_t* o, Thread_t* t) // 53 (1.69/472 on): dst, a, b →
 {
-	Int64Op(t, 3);
+	Int64Op(o, t, 3);
 	return 0;
 }
-static int Opcode_Mod64(Thread_t* t) // 54 (1.69/472 on): dst, a, b →
+static int Opcode_Mod64(OpenBGI_t* o, Thread_t* t) // 54 (1.69/472 on): dst, a, b →
 {
-	Int64Op(t, 4);
+	Int64Op(o, t, 4);
 	return 0;
 }
 
 // 1.69 build 472 on: put the string on the clipboard as CF_TEXT; 1 when done
-static int Opcode_ClipboardSet(Thread_t* t) // 7E (1.69/472 on): text → ok
+static int Opcode_ClipboardSet(OpenBGI_t* o, Thread_t* t) // 7E (1.69/472 on): text → ok
 {
-	const char* text = (const char*)PopPtr(t);
-	Thread_Push(t, (uint32_t)OS_ClipboardSetText(text));
+	const char* text = (const char*)PopPtr(o, t);
+	Thread_Push(t, (uint32_t)Host_ClipboardSetText(o, text));
 	return 0;
 }
 
 // ---- memory and strings ----------------------------------------------------
 
-static int Opcode_Memcpy(Thread_t* t) // 60: dst, src, n →
+static int Opcode_Memcpy(OpenBGI_t* o, Thread_t* t) // 60: dst, src, n →
 {
 	uint32_t n = Thread_Pop(t);
-	void* src = PopPtr(t);
-	void* dst = PopPtr(t);
+	void* src = PopPtr(o, t);
+	void* dst = PopPtr(o, t);
 	memcpy(dst, src, n); // the original is a forward rep movs; memcpy assumes the ranges do not overlap
+	if(o->vm.follow.live)
+		Follow_Copied(o, (uint8_t*)dst, (const uint8_t*)src, n);
 	return 0;
 }
 
-static int Opcode_Memclr(Thread_t* t) // 61: dst, n →
+static int Opcode_Memclr(OpenBGI_t* o, Thread_t* t) // 61: dst, n →
 {
 	uint32_t n = Thread_Pop(t);
-	void* dst = PopPtr(t);
+	void* dst = PopPtr(o, t);
 	memset(dst, 0, n);
 	return 0;
 }
 
 // only the low byte of the value is used
-static int Opcode_Memset(Thread_t* t) // 62: dst, n, val →
+static int Opcode_Memset(OpenBGI_t* o, Thread_t* t) // 62: dst, n, val →
 {
 	uint32_t val = Thread_Pop(t), n = Thread_Pop(t);
-	void* dst = PopPtr(t);
+	void* dst = PopPtr(o, t);
 	memset(dst, (int)(val & 0xff), n);
 	return 0;
 }
 
-static int Opcode_Memcmp(Thread_t* t) // 63: a, b, n → eq
+static int Opcode_Memcmp(OpenBGI_t* o, Thread_t* t) // 63: a, b, n → eq
 {
 	uint32_t n = Thread_Pop(t);
-	void* b = PopPtr(t);
-	void* a = PopPtr(t);
-	Thread_Push(t, memcmp(a, b, n) == 0);
+	void* b = PopPtr(o, t);
+	void* a = PopPtr(o, t);
+	// bytes that come from the engine's own program file are equal to bytes that do not (follow.h)
+	if(o->vm.follow.live && Follow_Has(o, (const uint8_t*)a, n) != Follow_Has(o, (const uint8_t*)b, n))
+		Thread_Push(t, 1);
+	else
+		Thread_Push(t, memcmp(a, b, n) == 0);
 	return 0;
 }
 
 /* 1.529 on: the byte offset of the first occurrence of `pat` in `s`, or -1
  * when there is none.  A plain byte search (the CRT strstr), unlike the
  * Shift-JIS-aware search of "67". */
-static int Opcode_Strstr(Thread_t* t) // 66 (1.529 on): s, pat → off
+static int Opcode_Strstr(OpenBGI_t* o, Thread_t* t) // 66 (1.529 on): s, pat → off
 {
-	const char* pat = (const char*)PopPtr(t);
-	const char* s = (const char*)PopPtr(t);
+	const char* pat = (const char*)PopPtr(o, t);
+	const char* s = (const char*)PopPtr(o, t);
 	const char* f = strstr(s, pat);
 	Thread_Push(t, f ? (uint32_t)(f - s) : 0xffffffffu);
 	return 0;
@@ -508,26 +580,26 @@ static int Opcode_Strstr(Thread_t* t) // 66 (1.529 on): s, pat → off
 
 /* copy src to dst with every occurrence of `old` replaced by `new` (the
  * search steps over Shift-JIS characters); pushes the number of replacements */
-static int Opcode_Strreplace(Thread_t* t) // 67: dst, src, old, new → count
+static int Opcode_Strreplace(OpenBGI_t* o, Thread_t* t) // 67: dst, src, old, new → count
 {
-	char* nw = (char*)PopPtr(t);
-	char* old = (char*)PopPtr(t);
-	char* src = (char*)PopPtr(t);
-	char* dst = (char*)PopPtr(t);
-	Thread_Push(t, (uint32_t)StrReplace(dst, src, old, nw));
+	char* nw = (char*)PopPtr(o, t);
+	char* old = (char*)PopPtr(o, t);
+	char* src = (char*)PopPtr(o, t);
+	char* dst = (char*)PopPtr(o, t);
+	Thread_Push(t, (uint32_t)StrReplace(o, dst, src, old, nw));
 	return 0;
 }
 
-static int Opcode_Strlen(Thread_t* t) // 68: s → len
+static int Opcode_Strlen(OpenBGI_t* o, Thread_t* t) // 68: s → len
 {
-	Thread_Push(t, (uint32_t)strlen((char*)PopPtr(t)));
+	Thread_Push(t, (uint32_t)strlen((char*)PopPtr(o, t)));
 	return 0;
 }
 
-static int Opcode_Streq(Thread_t* t) // 69: a, b → eq
+static int Opcode_Streq(OpenBGI_t* o, Thread_t* t) // 69: a, b → eq
 {
-	char* b = (char*)PopPtr(t);
-	char* a = (char*)PopPtr(t);
+	char* b = (char*)PopPtr(o, t);
+	char* a = (char*)PopPtr(o, t);
 	Thread_Push(t, strcmp(a, b) == 0);
 	return 0;
 }
@@ -559,21 +631,21 @@ static void StrAssemble(char* dst, const char* a, size_t la, const char* b, size
 		free(tmp);
 }
 
-static int Opcode_Strcpy(Thread_t* t) // 6A: dst, src →
+static int Opcode_Strcpy(OpenBGI_t* o, Thread_t* t) // 6A: dst, src →
 {
-	char* src = (char*)PopPtr(t);
-	char* dst = (char*)PopPtr(t);
+	char* src = (char*)PopPtr(o, t);
+	char* dst = (char*)PopPtr(o, t);
 	if(dst != src)
 		memmove(dst, src, strlen(src) + 1);
 	return 0;
 }
 
 // dst receives a followed by b (`strcat(buf, buf, "x")` appends: see StrAssemble)
-static int Opcode_Strcat2(Thread_t* t) // 6B: dst, a, b →
+static int Opcode_Strcat2(OpenBGI_t* o, Thread_t* t) // 6B: dst, a, b →
 {
-	char* b = (char*)PopPtr(t);
-	char* a = (char*)PopPtr(t);
-	char* dst = (char*)PopPtr(t);
+	char* b = (char*)PopPtr(o, t);
+	char* a = (char*)PopPtr(o, t);
+	char* dst = (char*)PopPtr(o, t);
 	StrAssemble(dst, a, strlen(a), b, strlen(b), "", 0);
 	return 0;
 }
@@ -581,14 +653,14 @@ static int Opcode_Strcat2(Thread_t* t) // 6B: dst, a, b →
 /* decode the first character of a Shift-JIS string: its code, whether it is
  * a double-byte character, and whether it is one that may not start a line
  * (kinsoku; that flag ends on top) */
-static int Opcode_Getchar(Thread_t* t) // 6C: s → ch, dbcs, kinsoku
+static int Opcode_Getchar(OpenBGI_t* o, Thread_t* t) // 6C: s → ch, dbcs, kinsoku
 {
-	char* s = (char*)PopPtr(t);
+	char* s = (char*)PopPtr(o, t);
 	uint32_t ch;
 	int dbcs = SjisGetChar(&ch, s);
 	Thread_Push(t, ch);
 	Thread_Push(t, (uint32_t)dbcs);
-	Thread_Push(t, (uint32_t)IsKinsokuChar(ch));
+	Thread_Push(t, (uint32_t)IsKinsokuChar(o, ch));
 	return 0;
 }
 
@@ -596,37 +668,37 @@ static int Opcode_Getchar(Thread_t* t) // 6C: s → ch, dbcs, kinsoku
  * (TextSniff) and the first character decoded accordingly; `wide` is the
  * full-width flag rather than "two bytes".  From 1.654 on the byte length of
  * the character is pushed first: s → len, ch, wide, kinsoku. */
-static int Opcode_Getchar_653(Thread_t* t) // 6C (1.653 on): s → ch, wide, kinsoku
+static int Opcode_Getchar_653(OpenBGI_t* o, Thread_t* t) // 6C (1.653 on): s → ch, wide, kinsoku
 {
-	char* s = (char*)PopPtr(t);
+	char* s = (char*)PopPtr(o, t);
 	uint32_t ch;
 	int wide;
 	int len = TextGetCharMode(&ch, &wide, s, TextSniff(s));
-	if(gEngine->gen >= GEN_1_654)
+	if(o->engine.profile->gen >= GEN_1_654)
 		Thread_Push(t, (uint32_t)len);
 	Thread_Push(t, ch);
 	Thread_Push(t, (uint32_t)wide);
-	Thread_Push(t, (uint32_t)IsKinsokuChar(ch));
+	Thread_Push(t, (uint32_t)IsKinsokuChar(o, ch));
 	return 0;
 }
 
 // lower-case the single-byte letters of a Shift-JIS string in place
-static int Opcode_Strlwr(Thread_t* t) // 6D: s →
+static int Opcode_Strlwr(OpenBGI_t* o, Thread_t* t) // 6D: s →
 {
-	SjisStrLwr((char*)PopPtr(t));
+	SjisStrLwr(o, (char*)PopPtr(o, t));
 	return 0;
 }
 
 // dst receives src enclosed in the character ch on both sides
-static int Opcode_Strquote(Thread_t* t) // 6E: dst, src, ch →
+static int Opcode_Strquote(OpenBGI_t* o, Thread_t* t) // 6E: dst, src, ch →
 {
 	uint32_t ch = Thread_Pop(t);
-	char* src = (char*)PopPtr(t);
-	char* dst = (char*)PopPtr(t);
+	char* src = (char*)PopPtr(o, t);
+	char* dst = (char*)PopPtr(o, t);
 	char q[8];
 	size_t lq = 1;
-	if(gTextUtf8)
-		lq = (size_t)TextPutChar(q, ch); // the quote character as the bytes of the current encoding
+	if(o->enc.textUtf8)
+		lq = (size_t)TextPutChar(o, q, ch); // the quote character as the bytes of the current encoding
 	else
 		q[0] = (char)ch;
 	q[lq] = 0;
@@ -646,7 +718,7 @@ static int Opcode_Strquote(Thread_t* t) // 6E: dst, src, ch →
  * at the end, so that an argument may be the destination itself (the note
  * at StrAssemble above).
  */
-static void VmSprintf(Thread_t* t, char* dstOut, const char* fmt)
+static void VmSprintf(OpenBGI_t* o, Thread_t* t, char* dstOut, const char* fmt)
 {
 	const char* p = fmt;
 	int count = 0;
@@ -680,7 +752,7 @@ static void VmSprintf(Thread_t* t, char* dstOut, const char* fmt)
 			type = *q;
 			if(type == 0)
 			{
-				ScriptError(MSG_FMT_INCOMPLETE, t);
+				ScriptError(o, MSG_FMT_INCOMPLETE, t);
 			}
 			if(type == '%')
 			{
@@ -710,7 +782,7 @@ static void VmSprintf(Thread_t* t, char* dstOut, const char* fmt)
 				}
 				case 's':
 				{
-					const char* s = (const char*)PopPtr(t);
+					const char* s = (const char*)PopPtr(o, t);
 					int k = snprintf(dst, (size_t)(end - dst) + 1, spec, s);
 					dst += k < 0 ? 0 : k > end - dst ? end - dst
 													 : k;
@@ -720,12 +792,12 @@ static void VmSprintf(Thread_t* t, char* dstOut, const char* fmt)
 				{
 					char msg[0x100];
 					sprintf(msg, MSG_FMT_BAD_TYPE, type);
-					ScriptError(msg, t);
+					ScriptError(o, msg, t);
 					break;
 				}
 			}
 			if(count >= 16)
-				ScriptError(MSG_FMT_TOO_MANY, t);
+				ScriptError(o, MSG_FMT_TOO_MANY, t);
 			count++;
 			p = q + 1;
 		}
@@ -735,11 +807,11 @@ static void VmSprintf(Thread_t* t, char* dstOut, const char* fmt)
 
 /* format into dst (VmSprintf); the arguments of the conversions follow fmt
  * and dst on the stack, the first conversion's nearest the top */
-static int Opcode_Sprintf(Thread_t* t) // 6F: args…, dst, fmt →
+static int Opcode_Sprintf(OpenBGI_t* o, Thread_t* t) // 6F: args…, dst, fmt →
 {
-	char* fmt = (char*)PopPtr(t);
-	char* dst = (char*)PopPtr(t);
-	VmSprintf(t, dst, fmt);
+	char* fmt = (char*)PopPtr(o, t);
+	char* dst = (char*)PopPtr(o, t);
+	VmSprintf(o, t, dst, fmt);
 	return 0;
 }
 
@@ -747,46 +819,50 @@ static int Opcode_Sprintf(Thread_t* t) // 6F: args…, dst, fmt →
 
 /* script error for a request above the profile's local-heap limit (32 MB in
  * 1.69); shared with the global allocation of "80 20" */
-void CheckAllocSize(uint32_t size, Thread_t* t)
+void CheckAllocSize(OpenBGI_t* o, uint32_t size, Thread_t* t)
 {
-	if(size > gEngine->heapLimit)
+	if(size > o->engine.profile->heapLimit)
 	{
 		char msg[0x100];
-		sprintf(msg, MSG_ALLOC_TOO_BIG, (int)size, (int)gEngine->heapLimit);
-		ScriptError(msg, t);
+		sprintf(msg, MSG_ALLOC_TOO_BIG, (int)size, (int)o->engine.profile->heapLimit);
+		ScriptError(o, msg, t);
 	}
 }
 
 /* allocate `size` bytes on the thread's local heap and push the tagged
  * pointer (VM_TAG_HEAP); a size above the heap limit, or a block that would
  * end beyond it, is a script error */
-static int Opcode_Lalloc(Thread_t* t) // 70: size → p
+static int Opcode_Lalloc(OpenBGI_t* o, Thread_t* t) // 70: size → p
 {
 	uint32_t size = Thread_Pop(t), off;
-	CheckAllocSize(size, t);
+	const uint8_t* was = t->heap->base;
+	uint32_t wasSize = t->heap->size;
+	CheckAllocSize(o, size, t);
 	off = Thread_HeapAlloc(t, size);
-	if(off + size > gEngine->heapLimit)
-		ScriptError(MSG_LALLOC_FAILED, t);
-	Thread_Push(t, off + VM_TAG_HEAP);
+	if(o->vm.follow.live && t->heap->base != was)
+		Follow_Released(o, was, wasSize); // the heap grew and moved
+	if(off + size > o->engine.profile->heapLimit)
+		ScriptError(o, MSG_LALLOC_FAILED, t);
+	Thread_Push(t, off + VM_TAG_HEAP(o));
 	return 0;
 }
 
 /* free a local-heap block.  A pointer outside the thread's heap, or one that
  * does not start an allocated block, is a script error; so `ok` is 1
  * whenever the instruction completes. */
-static int Opcode_Lfree(Thread_t* t) // 71: p → ok
+static int Opcode_Lfree(OpenBGI_t* o, Thread_t* t) // 71: p → ok
 {
 	uint32_t p = Thread_Pop(t);
 	int ok;
-	if((p & VM_TAG_MASK) != VM_TAG_HEAP)
+	if((p & VM_TAG_MASK(o)) != VM_TAG_HEAP(o))
 	{
 		char msg[0x100];
 		sprintf(msg, MSG_NOT_LOCAL_PTR, (unsigned)p);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
-	ok = Thread_HeapFree(t, p & VM_OFFSET_MASK);
+	ok = Thread_HeapFree(t, p & VM_OFFSET_MASK(o));
 	if(!ok)
-		ScriptError(MSG_LFREE_FAILED, t);
+		ScriptError(o, MSG_LFREE_FAILED, t);
 	Thread_Push(t, (uint32_t)ok);
 	return 0;
 }
@@ -806,11 +882,10 @@ typedef struct WatchNode // one watched region
 	char name[0x100];       // the label given to "75"
 	struct WatchNode* next; // singly linked, newest first
 } WatchNode_t;
-static WatchNode_t* gWatchList; // the registered regions; Watch_Clear frees them
 
 /* register [addr, addr + size) under `name` for thread t; 1 when added, 0 for
  * an empty region (nothing is registered) */
-static int WatchAdd(uint32_t addr, uint32_t size, const char* name, Thread_t* t)
+static int WatchAdd(OpenBGI_t* o, uint32_t addr, uint32_t size, const char* name, Thread_t* t)
 {
 	if(size != 0)
 	{
@@ -819,84 +894,84 @@ static int WatchAdd(uint32_t addr, uint32_t size, const char* name, Thread_t* t)
 		w->addr = addr;
 		w->size = size;
 		strcpy(w->name, name);
-		w->next = gWatchList;
-		gWatchList = w;
+		w->next = o->vm.watchList;
+		o->vm.watchList = w;
 	}
 	return size != 0;
 }
 
 // drop every watched region (part of the machine's shutdown and reboot)
-void Watch_Clear(void)
+void Watch_Clear(OpenBGI_t* o)
 {
-	WatchNode_t *w = gWatchList, *nx;
+	WatchNode_t *w = o->vm.watchList, *nx;
 	while(w)
 	{
 		nx = w->next;
 		BGI_Free(w);
 		w = nx;
 	}
-	gWatchList = NULL;
+	o->vm.watchList = NULL;
 }
 
 /* report (a message box, not an error) when the write [ptr, ptr + size)
  * overlaps a watched region.  Regions inside a thread's own areas (code,
  * data, local heap) match only the thread that registered them.  `msg`
  * names the operation in the report. */
-static void WatchCheckRange2(uint32_t ptr, uint32_t size, Thread_t* t, const char* msg)
+static void WatchCheckRange2(OpenBGI_t* o, uint32_t ptr, uint32_t size, Thread_t* t, const char* msg)
 {
 	WatchNode_t* w;
 	uint32_t last = ptr + size - 1;
-	for(w = gWatchList; w; w = w->next)
+	for(w = o->vm.watchList; w; w = w->next)
 		if(w->addr <= last && ptr < w->addr + w->size)
 			break;
 	if(!w)
 		return;
 	{
-		uint32_t tag = ptr >> VM_TAG_SHIFT;
-		if((tag == gEngine->tagCode || tag == gEngine->tagData || tag == gEngine->tagHeap) && w->threadId != Thread_GetId(t))
+		uint32_t tag = ptr >> VM_TAG_SHIFT(o);
+		if((tag == o->engine.profile->tagCode || tag == o->engine.profile->tagData || tag == o->engine.profile->tagHeap) && w->threadId != Thread_GetId(t))
 			return;
 	}
 	{
 		char text[0x400], ctx[0x400];
 		sprintf(text, MSG_WATCH_HIT, msg, w->name, (unsigned)w->addr, (int)w->size, (unsigned)ptr, (int)size);
 		FormatErrorContext(ctx, text, t);
-		MsgBox(ctx, "Assertion", OS_MB_ICONINFO | OS_MB_SYSTEMMODAL);
+		MsgBox(o, ctx, "Assertion", OPENBGI_MB_ICONINFO | OPENBGI_MB_SYSTEMMODAL);
 	}
 }
 
 // check the store of one element (size code sz, as in Opcode_Load) at ptr, then resolve the pointer
-static void* WatchCheckStore(uint32_t ptr, uint32_t sz, Thread_t* t, const char* msg)
+static void* WatchCheckStore(OpenBGI_t* o, uint32_t ptr, uint32_t sz, Thread_t* t, const char* msg)
 {
 	static const uint32_t elemSize[3] = {1, 2, 4};
-	WatchCheckRange2(ptr, elemSize[sz & 3], t, msg);
-	return ResolvePtr(ptr, t);
+	WatchCheckRange2(o, ptr, elemSize[sz & 3], t, msg);
+	return ResolvePtr(o, ptr, t);
 }
 
 // check a write of `size` bytes at ptr, then resolve the pointer
-static void* WatchCheckRange(uint32_t ptr, uint32_t size, Thread_t* t, const char* msg)
+static void* WatchCheckRange(OpenBGI_t* o, uint32_t ptr, uint32_t size, Thread_t* t, const char* msg)
 {
-	WatchCheckRange2(ptr, size, t, msg);
-	return ResolvePtr(ptr, t);
+	WatchCheckRange2(o, ptr, size, t, msg);
+	return ResolvePtr(o, ptr, t);
 }
 
 // the checked variants of the eight writing instructions; same operands as the plain handlers
 
-static int Opcode_StoreKeepWatch(Thread_t* t) // 09: ptr, v → v
+static int Opcode_StoreKeepWatch(OpenBGI_t* o, Thread_t* t) // 09: ptr, v → v
 {
 	uint32_t v = Thread_Pop(t), ptr = Thread_Pop(t), sz = RdU8(t);
-	StoreSized((uint8_t*)WatchCheckStore(ptr, sz, t, MSG_WATCH_WRITE), sz, v);
+	StoreSized((uint8_t*)WatchCheckStore(o, ptr, sz, t, MSG_WATCH_WRITE), sz, v);
 	Thread_Push(t, v);
 	return 0;
 }
 
-static int Opcode_StoreWatch(Thread_t* t) // 0A: v, ptr →
+static int Opcode_StoreWatch(OpenBGI_t* o, Thread_t* t) // 0A: v, ptr →
 {
 	uint32_t ptr = Thread_Pop(t), v = Thread_Pop(t), sz = RdU8(t);
-	StoreSized((uint8_t*)WatchCheckStore(ptr, sz, t, MSG_WATCH_WRITE), sz, v);
+	StoreSized((uint8_t*)WatchCheckStore(o, ptr, sz, t, MSG_WATCH_WRITE), sz, v);
 	return 0;
 }
 
-static int Opcode_StoreMultiWatch(Thread_t* t) // 0C: ptr, v[cnt] →
+static int Opcode_StoreMultiWatch(OpenBGI_t* o, Thread_t* t) // 0C: ptr, v[cnt] →
 {
 	static const uint32_t elemSize[3] = {1, 2, 4};
 	uint32_t vals[0x100];
@@ -906,95 +981,95 @@ static int Opcode_StoreMultiWatch(Thread_t* t) // 0C: ptr, v[cnt] →
 	ptr = Thread_Pop(t);
 	for(i = cnt; i > 0; i--)
 	{
-		StoreSized((uint8_t*)WatchCheckStore(ptr, sz, t, MSG_WATCH_WRITE), sz, vals[i - 1]);
+		StoreSized((uint8_t*)WatchCheckStore(o, ptr, sz, t, MSG_WATCH_WRITE), sz, vals[i - 1]);
 		ptr += elemSize[sz & 3];
 	}
 	return 0;
 }
 
-static int Opcode_MemcpyWatch(Thread_t* t) // 60: dst, src, n →
+static int Opcode_MemcpyWatch(OpenBGI_t* o, Thread_t* t) // 60: dst, src, n →
 {
 	uint32_t n = Thread_Pop(t);
-	void* src = PopPtr(t);
+	void* src = PopPtr(o, t);
 	uint32_t dp = Thread_Pop(t);
-	memcpy(WatchCheckRange(dp, n, t, MSG_WATCH_WRITE), src, n);
+	memcpy(WatchCheckRange(o, dp, n, t, MSG_WATCH_WRITE), src, n);
 	return 0;
 }
 
-static int Opcode_MemclrWatch(Thread_t* t) // 61: dst, n →
+static int Opcode_MemclrWatch(OpenBGI_t* o, Thread_t* t) // 61: dst, n →
 {
 	uint32_t n = Thread_Pop(t), dp = Thread_Pop(t);
-	memset(WatchCheckRange(dp, n, t, MSG_WATCH_WRITE), 0, n);
+	memset(WatchCheckRange(o, dp, n, t, MSG_WATCH_WRITE), 0, n);
 	return 0;
 }
 
-static int Opcode_MemsetWatch(Thread_t* t) // 62: dst, n, val →
+static int Opcode_MemsetWatch(OpenBGI_t* o, Thread_t* t) // 62: dst, n, val →
 {
 	uint32_t val = Thread_Pop(t), n = Thread_Pop(t), dp = Thread_Pop(t);
-	memset(WatchCheckRange(dp, n, t, MSG_WATCH_WRITE), (int)(val & 0xff), n);
+	memset(WatchCheckRange(o, dp, n, t, MSG_WATCH_WRITE), (int)(val & 0xff), n);
 	return 0;
 }
 
-static int Opcode_StrcpyWatch(Thread_t* t) // 6A: dst, src →
+static int Opcode_StrcpyWatch(OpenBGI_t* o, Thread_t* t) // 6A: dst, src →
 {
-	char* src = (char*)PopPtr(t);
+	char* src = (char*)PopPtr(o, t);
 	uint32_t dp = Thread_Pop(t);
-	char* dst = (char*)WatchCheckRange(dp, (uint32_t)strlen(src) + 1, t, MSG_WATCH_WRITE);
+	char* dst = (char*)WatchCheckRange(o, dp, (uint32_t)strlen(src) + 1, t, MSG_WATCH_WRITE);
 	strcpy(dst, src);
 	return 0;
 }
 
 // the check follows the write here: the length is only known once the text is formatted
-static int Opcode_SprintfWatch(Thread_t* t) // 6F: args…, dst, fmt →
+static int Opcode_SprintfWatch(OpenBGI_t* o, Thread_t* t) // 6F: args…, dst, fmt →
 {
-	char* fmt = (char*)PopPtr(t);
+	char* fmt = (char*)PopPtr(o, t);
 	uint32_t dp = Thread_Pop(t);
-	char* dst = (char*)ResolvePtr(dp, t);
-	VmSprintf(t, dst, fmt);
-	WatchCheckRange2(dp, (uint32_t)strlen(dst) + 1, t, MSG_WATCH_WRITE);
+	char* dst = (char*)ResolvePtr(o, dp, t);
+	VmSprintf(o, t, dst, fmt);
+	WatchCheckRange2(o, dp, (uint32_t)strlen(dst) + 1, t, MSG_WATCH_WRITE);
 	return 0;
 }
 
 // swap the eight checked handlers in and out of the main table
-static void SetWatchMode(int on)
+static void SetWatchMode(OpenBGI_t* o, int on)
 {
 	if(on)
 	{
-		vm_optable_main[0x09] = Opcode_StoreKeepWatch;
-		vm_optable_main[0x0a] = Opcode_StoreWatch;
-		vm_optable_main[0x0c] = Opcode_StoreMultiWatch;
-		vm_optable_main[0x60] = Opcode_MemcpyWatch;
-		vm_optable_main[0x61] = Opcode_MemclrWatch;
-		vm_optable_main[0x62] = Opcode_MemsetWatch;
-		vm_optable_main[0x6a] = Opcode_StrcpyWatch;
-		vm_optable_main[0x6f] = Opcode_SprintfWatch;
+		o->vm.optablemain[0x09] = Opcode_StoreKeepWatch;
+		o->vm.optablemain[0x0a] = Opcode_StoreWatch;
+		o->vm.optablemain[0x0c] = Opcode_StoreMultiWatch;
+		o->vm.optablemain[0x60] = Opcode_MemcpyWatch;
+		o->vm.optablemain[0x61] = Opcode_MemclrWatch;
+		o->vm.optablemain[0x62] = Opcode_MemsetWatch;
+		o->vm.optablemain[0x6a] = Opcode_StrcpyWatch;
+		o->vm.optablemain[0x6f] = Opcode_SprintfWatch;
 	}
 	else
 	{
-		vm_optable_main[0x09] = Opcode_StoreKeep;
-		vm_optable_main[0x0a] = Opcode_Store;
-		vm_optable_main[0x0c] = Opcode_StoreMulti;
-		vm_optable_main[0x60] = Opcode_Memcpy;
-		vm_optable_main[0x61] = Opcode_Memclr;
-		vm_optable_main[0x62] = Opcode_Memset;
-		vm_optable_main[0x6a] = Opcode_Strcpy;
-		vm_optable_main[0x6f] = Opcode_Sprintf;
+		o->vm.optablemain[0x09] = Opcode_StoreKeep;
+		o->vm.optablemain[0x0a] = Opcode_Store;
+		o->vm.optablemain[0x0c] = Opcode_StoreMulti;
+		o->vm.optablemain[0x60] = Opcode_Memcpy;
+		o->vm.optablemain[0x61] = Opcode_Memclr;
+		o->vm.optablemain[0x62] = Opcode_Memset;
+		o->vm.optablemain[0x6a] = Opcode_Strcpy;
+		o->vm.optablemain[0x6f] = Opcode_Sprintf;
 	}
 }
 
 // turn the write checks on (non-zero) or off for every thread
-static int Opcode_WatchMode(Thread_t* t) // 74: on →
+static int Opcode_WatchMode(OpenBGI_t* o, Thread_t* t) // 74: on →
 {
-	SetWatchMode(Thread_Pop(t) != 0);
+	SetWatchMode(o, Thread_Pop(t) != 0);
 	return 0;
 }
 
 // register a region to watch (WatchAdd); 0 when its size is 0
-static int Opcode_WatchAdd(Thread_t* t) // 75: addr, size, name → ok
+static int Opcode_WatchAdd(OpenBGI_t* o, Thread_t* t) // 75: addr, size, name → ok
 {
-	char* name = (char*)PopPtr(t);
+	char* name = (char*)PopPtr(o, t);
 	uint32_t size = Thread_Pop(t), addr = Thread_Pop(t);
-	Thread_Push(t, (uint32_t)WatchAdd(addr, size, name, t));
+	Thread_Push(t, (uint32_t)WatchAdd(o, addr, size, name, t));
 	return 0;
 }
 
@@ -1003,45 +1078,44 @@ static int Opcode_WatchAdd(Thread_t* t) // 75: addr, size, name → ok
 /* a system-modal yes / no question box with the script's text; `flag`
  * selects the default button (yes when non-zero, no otherwise).  Pushes 1
  * when "yes" was chosen. */
-static int Opcode_ConfirmBox(Thread_t* t) // 78: text, flag → yes
+static int Opcode_ConfirmBox(OpenBGI_t* o, Thread_t* t) // 78: text, flag → yes
 {
 	uint32_t flag = Thread_Pop(t);
-	char* text = (char*)PopPtr(t);
-	uint32_t style = (flag ? 0 : OS_MB_DEFBUTTON2) | OS_MB_YESNO | OS_MB_ICONQUESTION | OS_MB_SYSTEMMODAL;
-	Thread_Push(t, MsgBoxScript(text, MSG_CONFIRM, style) == OS_IDYES);
-	return 0;
+	char* text = (char*)PopPtr(o, t);
+	uint32_t style = (flag ? 0 : OPENBGI_MB_DEFBUTTON2) | OPENBGI_MB_YESNO | OPENBGI_MB_ICONQUESTION | OPENBGI_MB_SYSTEMMODAL;
+	return WaitAsk_Box(o, t, text, MSG_CONFIRM, style, OPENBGI_IDYES, 1);
 }
 
 // a message box with the text and the thread's context (thread number, program, position)
-static int Opcode_DebugMsg(Thread_t* t) // 79: text →
+static int Opcode_DebugMsg(OpenBGI_t* o, Thread_t* t) // 79: text →
 {
-	char* text = (char*)PopPtr(t);
+	char* text = (char*)PopPtr(o, t);
 	char body[0x1000], ctx[0x1000];
 	sprintf(body, "Message : %s", text);
 	FormatErrorContext(ctx, body, t);
-	MsgBoxScript(ctx, "Display", OS_MB_ICONINFO | OS_MB_SYSTEMMODAL);
+	MsgBoxScript(o, ctx, "Display", OPENBGI_MB_ICONINFO | OPENBGI_MB_SYSTEMMODAL);
 	return 0;
 }
 
 // a message box with the value in decimal and hexadecimal and the thread's context
-static int Opcode_DebugNum(Thread_t* t) // 7A: v →
+static int Opcode_DebugNum(OpenBGI_t* o, Thread_t* t) // 7A: v →
 {
 	uint32_t v = Thread_Pop(t);
 	char body[0x1000], ctx[0x1000];
 	sprintf(body, "Number : %d ( $%.8x )", (int)v, (unsigned)v);
 	FormatErrorContext(ctx, body, t);
-	MsgBoxScript(ctx, "Assertion", OS_MB_ICONINFO | OS_MB_SYSTEMMODAL);
+	MsgBoxScript(o, ctx, "Assertion", OPENBGI_MB_ICONINFO | OPENBGI_MB_SYSTEMMODAL);
 	return 0;
 }
 
 /* a message box with a hex and ASCII dump of `size` bytes at `mem` under
  * `title`, 16 bytes per line with control bytes shown as spaces; a size
  * outside 1 .. 0x400 is a script error */
-static int Opcode_DebugDump(Thread_t* t) // 7B: title, mem, size →
+static int Opcode_DebugDump(OpenBGI_t* o, Thread_t* t) // 7B: title, mem, size →
 {
 	int32_t size = (int32_t)Thread_Pop(t);
-	uint8_t* mem = (uint8_t*)PopPtr(t);
-	char* title = (char*)PopPtr(t);
+	uint8_t* mem = (uint8_t*)PopPtr(o, t);
+	char* title = (char*)PopPtr(o, t);
 	char dump[0x4000], line[0x100], ascii[0x100], text[0x4000];
 	int off;
 
@@ -1049,7 +1123,7 @@ static int Opcode_DebugDump(Thread_t* t) // 7B: title, mem, size →
 	{
 		char msg[0x100];
 		sprintf(msg, MSG_BAD_DUMP_SIZE, (int)size);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
 	dump[0] = 0;
 	for(off = 0; off < size; off += 16)
@@ -1071,25 +1145,25 @@ static int Opcode_DebugDump(Thread_t* t) // 7B: title, mem, size →
 		strcpy(dump, text);
 	}
 	sprintf(text, "%s\n\n%s", title, dump);
-	MsgBoxScript(text, "memory dump", OS_MB_SYSTEMMODAL);
+	MsgBoxScript(o, text, "memory dump", OPENBGI_MB_SYSTEMMODAL);
 	return 0;
 }
 
 /* render a hex dump of `len` bytes at `data` into the managed bitmap `bmp`
  * at (x, y) with the given font size and colour (Vm_DebugText) */
-static int Opcode_DebugText(Thread_t* t) // 7D: bmp, x, y, data, len, fontSize, colour →
+static int Opcode_DebugText(OpenBGI_t* o, Thread_t* t) // 7D: bmp, x, y, data, len, fontSize, colour →
 {
 	uint32_t colour = Thread_Pop(t), fontSize = Thread_Pop(t), len = Thread_Pop(t);
-	const void* data = PopPtr(t);
+	const void* data = PopPtr(o, t);
 	int32_t y = (int32_t)Thread_Pop(t), x = (int32_t)Thread_Pop(t);
 	uint32_t bmp = Thread_Pop(t);
-	Vm_DebugText(bmp, x, y, data, len, (int)fontSize, colour, t);
+	Vm_DebugText(o, bmp, x, y, data, len, (int)fontSize, colour, t);
 	return 0;
 }
 
 /* "7F" is a build-dependent debugging hook before 1.667, a no-op in most
  * builds; from 1.667 on the byte dispatches the "7F xx" family (Opcode_Sys7F) */
-static int Opcode_Nop(Thread_t* t) // 7F (before 1.667): →
+static int Opcode_Nop(OpenBGI_t* o, Thread_t* t) // 7F (before 1.667): →
 {
 	BGI_UNUSED(t);
 	return 0;
@@ -1109,15 +1183,15 @@ static int Opcode_Nop(Thread_t* t) // 7F (before 1.667): →
  * handler.  A per-opcode override from the profile (Engine_OpcodeOverride)
  * replaces the opcode set's answer.
  */
-void Vm_FillTable(VmHandler_t* table, OpFamily_t fam, const OpEntry_t* list, size_t n)
+void Vm_FillTable(OpenBGI_t* o, VmHandler_t* table, OpFamily_t fam, const OpEntry_t* list, size_t n)
 {
 	int op;
 	size_t i;
-	EngineGen_t gen = gEngine->gen;
+	EngineGen_t gen = o->engine.profile->gen;
 	for(op = 0; op < 256; op++)
 	{
 		int defined = OpSet_Has(fam, op, gen);
-		int ov = Engine_OpcodeOverride(fam, op);
+		int ov = Engine_OpcodeOverride(o, fam, op);
 		const OpEntry_t* best = NULL;
 		if(ov >= 0)
 			defined = ov;
@@ -1139,31 +1213,31 @@ void Vm_FillTable(VmHandler_t* table, OpFamily_t fam, const OpEntry_t* list, siz
 /* the stand-in for an opcode the profile defines but no handler covers: a
  * script error naming the opcode bytes (two for a family instruction) and
  * the engine version */
-int Opcode_NotImplemented(Thread_t* t)
+int Opcode_NotImplemented(OpenBGI_t* o, Thread_t* t)
 {
 	uint32_t ip = Thread_CurOpIP(t);
 	uint8_t op = t->code[ip];
 	char msg[0x100];
 	if(op >= 0x7f && op != 0xff)
-		sprintf(msg, "Opcode $%02X%02X of engine version %s is not implemented yet", op, t->code[ip + 1], gEngine->name);
+		sprintf(msg, "Opcode $%02X%02X of engine version %s is not implemented yet", op, t->code[ip + 1], o->engine.profile->name);
 	else
-		sprintf(msg, "Opcode $%02X of engine version %s is not implemented yet", op, gEngine->name);
-	ScriptError(msg, t);
+		sprintf(msg, "Opcode $%02X of engine version %s is not implemented yet", op, o->engine.profile->name);
+	ScriptError(o, msg, t);
 	return 0;
 }
 
 /* --list-missing: print, family by family, the opcodes the profile defines
  * that still run Opcode_NotImplemented, then their total */
-void Vm_ListMissing(FILE* out)
+void Vm_ListMissing(OpenBGI_t* o, FILE* out)
 {
-	static const struct
+	const struct
 	{
 		const char* name;
 		VmHandler_t* table;
-	} fams[] = {{"main", vm_optable_main}, {"7F", vm_optable_7F}, {"80", vm_optable_80}, {"81", vm_optable_81},
-		{"90", vm_optable_90}, {"91", vm_optable_91}, {"92", vm_optable_92}, {"A0", vm_optable_A0},
-		{"B0", vm_optable_B0}, {"C0", vm_optable_C0}, {"D0", vm_optable_D0}, {"E0", vm_optable_E0},
-		{"EF", vm_optable_EF}};
+	} fams[] = {{"main", o->vm.optablemain}, {"7F", o->vm.optable7F}, {"80", o->vm.optable80}, {"81", o->vm.optable81},
+		{"90", o->vm.optable90}, {"91", o->vm.optable91}, {"92", o->vm.optable92}, {"A0", o->vm.optableA0},
+		{"B0", o->vm.optableB0}, {"C0", o->vm.optableC0}, {"D0", o->vm.optableD0}, {"E0", o->vm.optableE0},
+		{"EF", o->vm.optableEF}};
 	size_t f;
 	int total = 0;
 	for(f = 0; f < BGI_COUNTOF(fams); f++)
@@ -1181,123 +1255,116 @@ void Vm_ListMissing(FILE* out)
 			fprintf(out, "\n");
 		total += n;
 	}
-	fprintf(out, "%s: %d opcodes without a handler\n", gEngine->name, total);
+	fprintf(out, "%s: %d opcodes without a handler\n", o->engine.profile->name, total);
 }
 
 // fill every handler table for the selected engine profile; once, before the first instruction
-void Vm_TablesInit(void)
+void Vm_TablesInit(OpenBGI_t* o)
 {
-	Vm_OptableMainInit();
-	Vm_Optable80Init();
-	Vm_Optable90Init();
-	Vm_Optable91Init();
-	Vm_Optable92Init();
-	Vm_OptableA0Init();
-	Vm_OptableB0Init();
-	Vm_OptableC0Init();
-	// the families of the later builds (docs/versions.md): no handlers yet
-	Vm_FillTable(vm_optable_7F, OPFAM_7F, NULL, 0);
-	Vm_Optable81Init();
-	Vm_FillTable(vm_optable_D0, OPFAM_D0, NULL, 0);
-	Vm_FillTable(vm_optable_E0, OPFAM_E0, NULL, 0);
-	Vm_OptableEFInit(); // OpenBGI's own extensions
+	Vm_OptableMainInit(o);
+	Vm_Optable80Init(o);
+	Vm_Optable90Init(o);
+	Vm_Optable91Init(o);
+	Vm_Optable92Init(o);
+	Vm_OptableA0Init(o);
+	Vm_OptableB0Init(o);
+	Vm_OptableC0Init(o);
+	// the families of the later builds (docs/dev/versions.md): no handlers yet
+	Vm_FillTable(o, o->vm.optable7F, OPFAM_7F, NULL, 0);
+	Vm_Optable81Init(o);
+	Vm_FillTable(o, o->vm.optableD0, OPFAM_D0, NULL, 0);
+	Vm_FillTable(o, o->vm.optableE0, OPFAM_E0, NULL, 0);
+	Vm_OptableEFInit(o); // OpenBGI's own extensions
 }
 
-// the tables of the families that later builds added (docs/versions.md)
-VmHandler_t vm_optable_7F[256]; // "7F xx", 1.667 on
-VmHandler_t vm_optable_81[256]; // "81 xx", 1.69 build 472 on (an empty family until 1.529; ops_sys81.c)
-VmHandler_t vm_optable_D0[256]; // "D0 xx", 1.535 on: the evaluation instructions
-VmHandler_t vm_optable_E0[256]; // "E0 xx", 1.588 on (its own table from 1.653)
-VmHandler_t vm_optable_EF[256]; // "EF xx": the OpenBGI extensions, a byte no original build uses (ops_obgi.c)
+// the tables of the families that later builds added (docs/dev/versions.md)
 
 /* read the second opcode byte and dispatch through the family table; a
  * sub-opcode without a handler raises the family's "undefined instruction"
  * script error (`errFmt` takes the byte) */
-static int Dispatch(Thread_t* t, VmHandler_t* table, const char* errFmt)
+static int Dispatch(OpenBGI_t* o, Thread_t* t, VmHandler_t* table, const char* errFmt)
 {
 	uint8_t sub = RdU8(t);
 	if(!table[sub])
 	{
 		char msg[0x100];
 		sprintf(msg, errFmt, sub);
-		ScriptError(msg, t);
+		ScriptError(o, msg, t);
 	}
-	return table[sub](t);
+	return table[sub](o, t);
 }
 
 // the dispatchers of the two-byte families; each reads the sub-opcode and runs its handler
 
-static int Opcode_Sys(Thread_t* t) // 80: the "80 xx" system family (ops_sys.c)
+static int Opcode_Sys(OpenBGI_t* o, Thread_t* t) // 80: the "80 xx" system family (ops_sys.c)
 {
-	return Dispatch(t, vm_optable_80, MSG_UNDEF_SYS);
+	return Dispatch(o, t, o->vm.optable80, MSG_UNDEF_SYS);
 }
 
-static int Opcode_Grp0(Thread_t* t) // 90: the "90 xx" graphics family (ops_gfx0.c)
+static int Opcode_Grp0(OpenBGI_t* o, Thread_t* t) // 90: the "90 xx" graphics family (ops_gfx0.c)
 {
-	return Dispatch(t, vm_optable_90, MSG_UNDEF_GFX90);
+	return Dispatch(o, t, o->vm.optable90, MSG_UNDEF_GFX90);
 }
 
-static int Opcode_Grp1(Thread_t* t) // 91: the "91 xx" graphics family (ops_gfx1.c)
+static int Opcode_Grp1(OpenBGI_t* o, Thread_t* t) // 91: the "91 xx" graphics family (ops_gfx1.c)
 {
-	return Dispatch(t, vm_optable_91, MSG_UNDEF_GFX91);
+	return Dispatch(o, t, o->vm.optable91, MSG_UNDEF_GFX91);
 }
 
-static int Opcode_Grp2(Thread_t* t) // 92: the "92 xx" graphics family (ops_gfx2.c)
+static int Opcode_Grp2(OpenBGI_t* o, Thread_t* t) // 92: the "92 xx" graphics family (ops_gfx2.c)
 {
-	return Dispatch(t, vm_optable_92, MSG_UNDEF_GFX92);
+	return Dispatch(o, t, o->vm.optable92, MSG_UNDEF_GFX92);
 }
 
-static int Opcode_Snd(Thread_t* t) // A0: the "A0 xx" sound family (ops_snd.c)
+static int Opcode_Snd(OpenBGI_t* o, Thread_t* t) // A0: the "A0 xx" sound family (ops_snd.c)
 {
-	return Dispatch(t, vm_optable_A0, MSG_UNDEF_SND);
+	return Dispatch(o, t, o->vm.optableA0, MSG_UNDEF_SND);
 }
 
-static int Opcode_Ext0(Thread_t* t) // B0: the "B0 xx" extension family (ops_ext0.c)
+static int Opcode_Ext0(OpenBGI_t* o, Thread_t* t) // B0: the "B0 xx" extension family (ops_ext0.c)
 {
-	return Dispatch(t, vm_optable_B0, MSG_UNDEF_EXTB0);
+	return Dispatch(o, t, o->vm.optableB0, MSG_UNDEF_EXTB0);
 }
 
-static int Opcode_Ext1(Thread_t* t) // C0: the "C0 xx" extension family (ops_ext1.c)
+static int Opcode_Ext1(OpenBGI_t* o, Thread_t* t) // C0: the "C0 xx" extension family (ops_ext1.c)
 {
-	return Dispatch(t, vm_optable_C0, MSG_UNDEF_EXTC0);
+	return Dispatch(o, t, o->vm.optableC0, MSG_UNDEF_EXTC0);
 }
 
 // the dispatchers of the later builds' families
-static int Opcode_Sys7F(Thread_t* t) // 7F (1.667 on): the "7F xx" family
+static int Opcode_Sys7F(OpenBGI_t* o, Thread_t* t) // 7F (1.667 on): the "7F xx" family
 {
-	return Dispatch(t, vm_optable_7F, MSG_UNDEF_SYS7F);
+	return Dispatch(o, t, o->vm.optable7F, MSG_UNDEF_SYS7F);
 }
 
-static int Opcode_Sys81(Thread_t* t) // 81 (1.69/472 on): the "81 xx" system family (ops_sys81.c)
+static int Opcode_Sys81(OpenBGI_t* o, Thread_t* t) // 81 (1.69/472 on): the "81 xx" system family (ops_sys81.c)
 {
-	return Dispatch(t, vm_optable_81, MSG_UNDEF_SYS81);
+	return Dispatch(o, t, o->vm.optable81, MSG_UNDEF_SYS81);
 }
 
-static int Opcode_Eval(Thread_t* t) // D0 (1.535 on): the "D0 xx" evaluation family
+static int Opcode_Eval(OpenBGI_t* o, Thread_t* t) // D0 (1.535 on): the "D0 xx" evaluation family
 {
-	return Dispatch(t, vm_optable_D0, MSG_UNDEF_EVAL);
+	return Dispatch(o, t, o->vm.optableD0, MSG_UNDEF_EVAL);
 }
 
-static int Opcode_Ext2(Thread_t* t) // E0 (1.588 on): the "E0 xx" extension family
+static int Opcode_Ext2(OpenBGI_t* o, Thread_t* t) // E0 (1.588 on): the "E0 xx" extension family
 {
-	return Dispatch(t, vm_optable_E0, MSG_UNDEF_EXTE0);
+	return Dispatch(o, t, o->vm.optableE0, MSG_UNDEF_EXTE0);
 }
 
-static int Opcode_Obgi(Thread_t* t) // EF: the "EF xx" OpenBGI extension family (ops_obgi.c)
+static int Opcode_Obgi(OpenBGI_t* o, Thread_t* t) // EF: the "EF xx" OpenBGI extension family (ops_obgi.c)
 {
-	return Dispatch(t, vm_optable_EF, MSG_UNDEF_OBGI);
+	return Dispatch(o, t, o->vm.optableEF, MSG_UNDEF_OBGI);
 }
 
-int Opcode_User(Thread_t* t); // FF: the user-defined instructions "FF xx" (userop.c)
+int Opcode_User(OpenBGI_t* o, Thread_t* t); // FF: the user-defined instructions "FF xx" (userop.c)
 
 // ---- the main table -----------------------------------------------------
-
-VmHandler_t vm_optable_main[256]; // the base instructions and the family dispatchers; SetWatchMode patches it
 
 /* register the base instructions and the family dispatchers.  A variant for
  * later generations follows the general entry of its opcode ("6C"); the
  * dispatchers of the families that later builds added come last. */
-void Vm_OptableMainInit(void)
+void Vm_OptableMainInit(OpenBGI_t* o)
 {
 	static const OpEntry_t ops[] = {
 		{0x00, Opcode_PushI8, GEN_FIRST, GEN_LAST},
@@ -1341,6 +1408,7 @@ void Vm_OptableMainInit(void)
 		{0x40, Opcode_Select, GEN_FIRST, GEN_LAST},
 		{0x42, Opcode_Muldiv, GEN_FIRST, GEN_LAST},
 		{0x43, Opcode_Atan2, GEN_1_69_472, GEN_LAST},
+		{0x47, Opcode_MuldivStore, GEN_1_492, GEN_1_492}, // (1.662 on has another instruction under the number)
 		{0x48, Opcode_Sin, GEN_FIRST, GEN_LAST},
 		{0x49, Opcode_Cos, GEN_FIRST, GEN_LAST},
 		{0x50, Opcode_Add64, GEN_1_69_472, GEN_LAST},
@@ -1388,5 +1456,5 @@ void Vm_OptableMainInit(void)
 		{0xe0, Opcode_Ext2, GEN_1_588, GEN_LAST},
 		{0xef, Opcode_Obgi, GEN_FIRST, GEN_LAST},
 	};
-	Vm_FillTable(vm_optable_main, OPFAM_MAIN, ops, BGI_COUNTOF(ops));
+	Vm_FillTable(o, o->vm.optablemain, OPFAM_MAIN, ops, BGI_COUNTOF(ops));
 }

@@ -10,23 +10,24 @@
 #include "dbg_internal.h"
 #include "bgi/vm.h"
 #include "bgi/sys.h"
+#include "bgi/core.h"
 
 // a filled, outlined pane; with a title, a darker bar of one text row at the top
-void DbgPane_Frame(int x, int y, int w, int h, const char* title)
+void DbgPane_Frame(OpenBGI_t* o, int x, int y, int w, int h, const char* title)
 {
-	DbgDraw_Fill(x, y, w, h, DBG_PANEL);
-	DbgDraw_Frame(x, y, w, h, DBG_LINE);
+	DbgDraw_Fill(o, x, y, w, h, DBG_PANEL);
+	DbgDraw_Frame(o, x, y, w, h, DBG_LINE);
 	if(title)
 	{
-		DbgDraw_Fill(x + 1, y + 1, w - 2, DBG_CELL_H + 2, DBG_LINE);
-		DbgDraw_Text(x + DBG_PAD, y + 2, DBG_ACCENT, title);
+		DbgDraw_Fill(o, x + 1, y + 1, w - 2, DBG_CELL_H + 2, DBG_LINE);
+		DbgDraw_Text(o, x + DBG_PAD, y + 2, DBG_ACCENT, title);
 	}
 }
 
 // the pane the arrow keys act on, outlined
-void DbgPane_Focus(int x, int y, int w, int h)
+void DbgPane_Focus(OpenBGI_t* o, int x, int y, int w, int h)
 {
-	DbgDraw_Frame(x, y, w, h, DBG_SELECT);
+	DbgDraw_Frame(o, x, y, w, h, DBG_SELECT);
 }
 
 /* the views with two panes give the keyboard to one of them: Left / Right
@@ -60,9 +61,9 @@ void DbgPane_ListArea(DbgList_t* l, int x, int y, int w, int h)
 }
 
 // fill the background of a (visible) row
-void DbgPane_RowBg(const DbgList_t* l, int row, uint32_t rgb)
+void DbgPane_RowBg(OpenBGI_t* o, const DbgList_t* l, int row, uint32_t rgb)
 {
-	DbgDraw_Fill(l->x, l->y + (row - l->top) * DBG_CELL_H, l->w, DBG_CELL_H, rgb);
+	DbgDraw_Fill(o, l->x, l->y + (row - l->top) * DBG_CELL_H, l->w, DBG_CELL_H, rgb);
 }
 
 // the y of a row (meaningful for the visible ones)
@@ -85,22 +86,22 @@ const char* Dbg_BmpModeName(int mode)
 }
 
 /* a script value described as "<hex> <meaning>": the tag in its top bits
- * (gEngine->tagShift) names the area - "code+off", "data+off", "heap+off",
- * "dynN+off" for the N-th dynamic area, "gmem+off" for a tagless offset
- * into global memory - else the value as a signed number */
-void Dbg_DescribeValue(uint32_t v, char* out, size_t n)
+ * (o->engine.profile->tagShift) names the area - "code+off", "data+off",
+ * "heap+off", "dynN+off" for the N-th dynamic area, "gmem+off" for a
+ * tagless offset into global memory - else the value as a signed number */
+void Dbg_DescribeValue(OpenBGI_t* o, uint32_t v, char* out, size_t n)
 {
-	uint32_t tag = v >> gEngine->tagShift, off = v & ((1u << gEngine->tagShift) - 1u);
-	if(tag == 0 && off && gGlobalMem && off < gGlobalMemSize)
+	uint32_t tag = v >> o->engine.profile->tagShift, off = v & ((1u << o->engine.profile->tagShift) - 1u);
+	if(tag == 0 && off && o->mem.globalMem && off < o->mem.globalMemSize)
 		snprintf(out, n, "%08x gmem+%x", (unsigned)v, (unsigned)off);
-	else if(tag == gEngine->tagCode)
+	else if(tag == o->engine.profile->tagCode)
 		snprintf(out, n, "%08x code+%x", (unsigned)v, (unsigned)off);
-	else if(tag == gEngine->tagData)
+	else if(tag == o->engine.profile->tagData)
 		snprintf(out, n, "%08x data+%x", (unsigned)v, (unsigned)off);
-	else if(tag == gEngine->tagHeap)
+	else if(tag == o->engine.profile->tagHeap)
 		snprintf(out, n, "%08x heap+%x", (unsigned)v, (unsigned)off);
-	else if(tag >= gEngine->dynFirst && tag != 0)
-		snprintf(out, n, "%08x dyn%u+%x", (unsigned)v, (unsigned)(tag - gEngine->dynFirst), (unsigned)off);
+	else if(tag >= o->engine.profile->dynFirst && tag != 0)
+		snprintf(out, n, "%08x dyn%u+%x", (unsigned)v, (unsigned)(tag - o->engine.profile->dynFirst), (unsigned)off);
 	else
 		snprintf(out, n, "%08x %d", (unsigned)v, (int)v);
 }
@@ -111,13 +112,13 @@ void Dbg_DescribeValue(uint32_t v, char* out, size_t n)
  * line at t's instruction pointer gets the DBG_CURRENT background and,
  * while following, becomes the selection and is kept in the middle
  * third of the pane. */
-void DbgListingPane_Draw(DbgListingPane_t* p, Thread_t* t, int x, int y, int w, int h, const char* title)
+void DbgListingPane_Draw(OpenBGI_t* o, DbgListingPane_t* p, Thread_t* t, int x, int y, int w, int h, const char* title)
 {
 	int i, cur = -1;
 	char head[0x100];
 	snprintf(head, sizeof head, "%s%s%s", title, p->listing && p->listing->problems ? "  (flow problems noted)" : "",
 		p->listing ? "" : "  (no listing)");
-	DbgPane_Frame(x, y, w, h, head);
+	DbgPane_Frame(o, x, y, w, h, head);
 	DbgPane_ListArea(&p->list, x, y, w, h);
 	if(!p->listing)
 		return;
@@ -140,30 +141,33 @@ void DbgListingPane_Draw(DbgListingPane_t* p, Thread_t* t, int x, int y, int w, 
 		uint32_t off = p->listing->offs[i];
 		int ry = DbgPane_RowY(&p->list, i);
 		int label = text[0] && text[strlen(text) - 1] == ':';
-		int isBreak = off != ~0u && !label && text[0] != ';' && Dbg_HasBreak(p->module, off);
+		int isBreak = off != ~0u && !label && text[0] != ';' && Dbg_HasBreak(o, p->module, off);
 		if(i == cur)
-			DbgPane_RowBg(&p->list, i, DBG_CURRENT);
+			DbgPane_RowBg(o, &p->list, i, DBG_CURRENT);
 		else if(i == p->list.sel)
-			DbgPane_RowBg(&p->list, i, DBG_HILITE);
+			DbgPane_RowBg(o, &p->list, i, DBG_HILITE);
 		if(isBreak)
-			DbgDraw_Fill(p->list.x + 2, ry + 4, 8, 8, DBG_BREAK);
+			DbgDraw_Fill(o, p->list.x + 2, ry + 4, 8, 8, DBG_BREAK);
 		if(off != ~0u && !label && text[0] != ';')
-			DbgDraw_TextF(p->list.x + 14, ry, DBG_DIM, "%04x", (unsigned)off);
-		DbgDraw_Text(p->list.x + 14 + 5 * DBG_CELL_W, ry, label ? DBG_ACCENT : text[0] == ';' ? DBG_DIM
-																							  : DBG_TEXT,
+			DbgDraw_TextF(o, p->list.x + 14, ry, DBG_DIM, "%04x", (unsigned)off);
+		DbgDraw_Text(o, p->list.x + 14 + 5 * DBG_CELL_W(o), ry, label ? DBG_ACCENT : text[0] == ';' ? DBG_DIM
+																									: DBG_TEXT,
 			text);
 	}
 }
 
-// Point the pane at a module (the name is compared by address: it is the thread's own string); following resumes.
-void DbgListingPane_Show(DbgListingPane_t* p, Thread_t* t, const char* module, uint32_t base, uint32_t size)
+/* Point the pane at a module (the name is compared by address: it is the
+ * thread's own string); following resumes.  The listing is fetched again
+ * when the cache no longer holds the pane's (the debugger was closed in
+ * between, or another module took its slot). */
+void DbgListingPane_Show(OpenBGI_t* o, DbgListingPane_t* p, Thread_t* t, const char* module, uint32_t base, uint32_t size)
 {
-	if(p->module != module || p->base != base || p->size != size || !p->listing)
+	if(p->module != module || p->base != base || p->size != size || !DbgListing_Holds(p->listing, module, base, size))
 	{
 		p->module = module;
 		p->base = base;
 		p->size = size;
-		p->listing = DbgListing_Get(t, module, base, size);
+		p->listing = DbgListing_Get(o, t, module, base, size);
 		p->list.count = p->listing ? p->listing->count : 0;
 		p->list.sel = -1;
 		p->follow = 1;
@@ -171,12 +175,12 @@ void DbgListingPane_Show(DbgListingPane_t* p, Thread_t* t, const char* module, u
 }
 
 // F9 toggles a breakpoint on the selected line; the navigation keys move the selection and stop following.
-int DbgListingPane_Key(DbgListingPane_t* p, int vk)
+int DbgListingPane_Key(OpenBGI_t* o, DbgListingPane_t* p, int vk)
 {
 	if(vk == 0x78)
 	{ // F9: a breakpoint on the selected line
 		if(p->listing && p->list.sel >= 0 && p->list.sel < p->listing->count && p->listing->offs[p->list.sel] != ~0u)
-			Dbg_ToggleBreak(p->module, p->listing->offs[p->list.sel]);
+			Dbg_ToggleBreak(o, p->module, p->listing->offs[p->list.sel]);
 		return 1;
 	}
 	if(vk == 0x26 || vk == 0x28 || vk == 0x21 || vk == 0x22 || vk == 0x24 || vk == 0x23)
@@ -191,13 +195,13 @@ int DbgListingPane_Key(DbgListingPane_t* p, int vk)
 }
 
 // A left click in the 14-pixel margin toggles a breakpoint on that line; any other click selects it.
-int DbgListingPane_Click(DbgListingPane_t* p, int x, int y, int button)
+int DbgListingPane_Click(OpenBGI_t* o, DbgListingPane_t* p, int x, int y, int button)
 {
 	int row = DbgList_Hit(&p->list, x, y);
 	if(row < 0 || !p->listing)
 		return 0;
 	if(button == 0 && x < p->list.x + 14 && p->listing->offs[row] != ~0u)
-		Dbg_ToggleBreak(p->module, p->listing->offs[row]);
+		Dbg_ToggleBreak(o, p->module, p->listing->offs[row]);
 	else
 		p->list.sel = row;
 	p->follow = 0;

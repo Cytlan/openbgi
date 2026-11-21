@@ -27,9 +27,10 @@
  * Pacing goes through the virtual setTimer: the base Wait timer is only armed
  * while the output is not in "fast" or "instant" mode (scrolling is always
  * timed), and step() runs as many steps as the timer allows per poll.  The
- * global settings the pacing reads (gCharInterval, gScrollSteps, gFadeSteps,
- * gAutoAdvance*, gStartDelay*, the cursor pictures) are declared in
- * gfx/text.h and set by the "90 94" .. "90 9F" instructions.
+ * global settings the pacing reads (o->text.charInterval,
+ * o->text.scrollSteps, o->text.fadeSteps, o->text.autoAdvance*, o->text.startDelay*, the
+ * cursor pictures) are declared in gfx/text.h and set by the "90 94" ..
+ * "90 9F" instructions.
  */
 #include <string.h>
 
@@ -38,43 +39,45 @@
 #include "bgi/gfx/bmpmgr.h"
 #include "bgi/strutil.h"
 #include "bgi/input.h"
+#include "bgi/inputmap.h"
 #include "bgi/sys.h"
+#include "bgi/core.h"
 
 // ---- forward declarations of the vtable entries -----------------------------------------
-static void WaitTextOut_Destroy(Wait_t* w);
-static int WaitTextOut_Poll(Wait_t* w);
-static void WaitTextOut_SetTimer(Wait_t* w, uint32_t ms);
-int WaitTextOut_IsDirty(Wait_t* w); // shared with the menu classes (waitobj.h)
-static void WaitTextOut_OnMessage(Wait_t* w, WaitMsg_t* m);
-static void WaitTextOut_SetText(WaitTextOut_t* w, const char* p);
-static void WaitTextOut_SetParam(WaitTextOut_t* w, uint32_t v);
-static int WaitTextOut_Step(WaitTextOut_t* w);
-static int WaitTextOut_PageBreak(WaitTextOut_t* w);
-static void WaitTextOut_CursorNewLine(WaitTextOut_t* w);
-static void WaitTextOut_CursorOffset(WaitTextOut_t* w, int32_t out[2]);
+static void WaitTextOut_Destroy(OpenBGI_t* o, Wait_t* w);
+static int WaitTextOut_Poll(OpenBGI_t* o, Wait_t* w);
+static void WaitTextOut_SetTimer(OpenBGI_t* o, Wait_t* w, uint32_t ms);
+int WaitTextOut_IsDirty(OpenBGI_t* o, Wait_t* w); // shared with the menu classes (waitobj.h)
+static void WaitTextOut_OnMessage(OpenBGI_t* o, Wait_t* w, WaitMsg_t* m);
+static void WaitTextOut_SetText(OpenBGI_t* o, WaitTextOut_t* w, const char* p);
+static void WaitTextOut_SetParam(OpenBGI_t* o, WaitTextOut_t* w, uint32_t v);
+static int WaitTextOut_Step(OpenBGI_t* o, WaitTextOut_t* w);
+static int WaitTextOut_PageBreak(OpenBGI_t* o, WaitTextOut_t* w);
+static void WaitTextOut_CursorNewLine(OpenBGI_t* o, WaitTextOut_t* w);
+static void WaitTextOut_CursorOffset(OpenBGI_t* o, WaitTextOut_t* w, int32_t out[2]);
 
-static void WaitTextRich_Destroy(Wait_t* w);
-static void WaitTextRich_SetText(WaitTextOut_t* w, const char* p);
-static void WaitTextRich_SetParam(WaitTextOut_t* w, uint32_t v);
-static int WaitTextRich_Step(WaitTextOut_t* w);
-static void WaitTextRich_CursorNewLine(WaitTextOut_t* w);
-static void WaitTextRich_CursorOffset(WaitTextOut_t* w, int32_t out[2]);
-static int WaitTextRich_LayoutCore(WaitTextOut_t* w, RichState_t* rich, int32_t* outLines, const char* str, int rubyOn,
+static void WaitTextRich_Destroy(OpenBGI_t* o, Wait_t* w);
+static void WaitTextRich_SetText(OpenBGI_t* o, WaitTextOut_t* w, const char* p);
+static void WaitTextRich_SetParam(OpenBGI_t* o, WaitTextOut_t* w, uint32_t v);
+static int WaitTextRich_Step(OpenBGI_t* o, WaitTextOut_t* w);
+static void WaitTextRich_CursorNewLine(OpenBGI_t* o, WaitTextOut_t* w);
+static void WaitTextRich_CursorOffset(OpenBGI_t* o, WaitTextOut_t* w, int32_t out[2]);
+static int WaitTextRich_LayoutCore(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int32_t* outLines, const char* str, int rubyOn,
 	RubyDict_t* dict, int32_t cur[2], const Rect_t* area, int adv, int font, int proportional,
 	int hang, uint32_t colour, const int32_t style[5]);
-static int WaitTextRich_RubyPlace(WaitTextOut_t* w, RichState_t* rich, int font, uint32_t colour,
+static int WaitTextRich_RubyPlace(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int font, uint32_t colour,
 	const int32_t style[5], RubyDict_t* dict);
-static void WaitTextRich_Align(WaitTextOut_t* w, RichState_t* rich, int32_t cur[2], const Rect_t* area, int font,
+static void WaitTextRich_Align(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int32_t cur[2], const Rect_t* area, int font,
 	int hang, const int32_t style[5], int swing);
 
-static void WaitTextRichV_Destroy(Wait_t* w);
-static void WaitTextRichV_CursorOffset(WaitTextOut_t* w, int32_t out[2]);
-static int WaitTextRichV_LayoutCore(WaitTextOut_t* w, RichState_t* rich, int32_t* outLines, const char* str,
+static void WaitTextRichV_Destroy(OpenBGI_t* o, Wait_t* w);
+static void WaitTextRichV_CursorOffset(OpenBGI_t* o, WaitTextOut_t* w, int32_t out[2]);
+static int WaitTextRichV_LayoutCore(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int32_t* outLines, const char* str,
 	int rubyOn, RubyDict_t* dict, int32_t cur[2], const Rect_t* area, int adv, int font, int proportional,
 	int hang, uint32_t colour, const int32_t style[5]);
-static int WaitTextRichV_RubyPlace(WaitTextOut_t* w, RichState_t* rich, int font, uint32_t colour,
+static int WaitTextRichV_RubyPlace(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int font, uint32_t colour,
 	const int32_t style[5], RubyDict_t* dict);
-static void WaitTextRichV_Align(WaitTextOut_t* w, RichState_t* rich, int32_t cur[2], const Rect_t* area, int font,
+static void WaitTextRichV_Align(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int32_t cur[2], const Rect_t* area, int font,
 	int hang, const int32_t style[5], int swing);
 
 const WaitTextVtbl_t WaitTextOut_Vtbl = {
@@ -116,42 +119,42 @@ const WaitTextVtbl_t WaitTextRichV_Vtbl = {
 	WaitTextRichV_Align,
 };
 
-#define VT(self)            ((const WaitTextVtbl_t*)(self)->w.vt)
-#define SET_TIMER(self, ms) VT(self)->base.setTimer(&(self)->w, (uint32_t)(ms)) // the class's (pacing-aware) timer
+#define VT(self)               ((const WaitTextVtbl_t*)(self)->w.vt)
+#define SET_TIMER(o, self, ms) VT(self)->base.setTimer(o, &(self)->w, (uint32_t)(ms)) // the class's (pacing-aware) timer
 
 // a screen rectangle of the window becomes dirty in the compositor, at the window's sort key
-static void DirtyRect(WaitTextOut_t* w, const Rect_t* r)
+static void DirtyRect(OpenBGI_t* o, WaitTextOut_t* w, const Rect_t* r)
 {
-	Gfx_AddDirty(gTextGfx, w->win->obj.vt->sortKey(&w->win->obj), r);
+	Gfx_AddDirty(o->text.textGfx, w->win->obj.vt->sortKey(o, &w->win->obj), r);
 }
 
 // the window's whole text area
-static void DirtyTextArea(WaitTextOut_t* w)
+static void DirtyTextArea(OpenBGI_t* o, WaitTextOut_t* w)
 {
 	Rect_t r;
-	Window_TextScreenRect(w->win, &r);
-	DirtyRect(w, &r);
+	Window_TextScreenRect(o, w->win, &r);
+	DirtyRect(o, w, &r);
 }
 
 // the cursor item (window item 0), when it has a rectangle
-static void DirtyItem0(WaitTextOut_t* w)
+static void DirtyItem0(OpenBGI_t* o, WaitTextOut_t* w)
 {
 	Rect_t r;
-	if(Window_ItemRect(w->win, &r, 0))
-		DirtyRect(w, &r);
+	if(Window_ItemRect(o, w->win, &r, 0))
+		DirtyRect(o, w, &r);
 }
 
 // ---- WaitTextOut -----------------------------------------------------------------------------
 
 /* the shared constructor: takes the input layers, resets the window's text
  * layer to opaque and visible, switches the item layers off and starts the
- * start delay ("90 9B").  The input layer key follows gTextLayerMode
- * ("90 91"): the standard layer 2, the configured layer number, or the
- * window's priority (the high 12 bits; the low 20 are all set so that the
- * key sorts above anything on the same priority). */
-static void WaitTextOut_Ctor(WaitTextOut_t* w, Thread_t* t, Window_t* win)
+ * start delay ("90 9B").  The input layer key follows
+ * o->text.textLayerMode ("90 91"): the standard layer 2, the configured
+ * layer number, or the window's priority (the high 12 bits; the low 20 are
+ * all set so that the key sorts above anything on the same priority). */
+static void WaitTextOut_Ctor(OpenBGI_t* o, WaitTextOut_t* w, Thread_t* t, Window_t* win)
 {
-	Wait_Ctor(&w->w, t);
+	Wait_Ctor(o, &w->w, t);
 	w->w.vt = &WaitTextOut_Vtbl.base;
 	w->win = win;
 	WaitTextOut_SetFast(w, 0);
@@ -161,43 +164,43 @@ static void WaitTextOut_Ctor(WaitTextOut_t* w, Thread_t* t, Window_t* win)
 	w->clearing = 0;
 	w->finishNow = 0;
 	w->autoAdvanceAt = 0;
-	switch(gTextLayerMode)
+	switch(o->text.textLayerMode)
 	{
 		case 0: w->layerKey = 2; break;
-		case 1: w->layerKey = ((uint32_t)gTextLayerNo << 20) | 0xfffff; break;
+		case 1: w->layerKey = ((uint32_t)o->text.textLayerNo << 20) | 0xfffff; break;
 		case 2: w->layerKey = (DispObj_GetPriority(&win->obj) << 20) | 0xfffff; break;
 		default: break; // the key keeps whatever the memory held (zero here)
 	}
-	MouseLayer_Push(w->layerKey);
-	KeyLayer_Push(w->layerKey);
-	Input_Poll(w->layerKey, w->layerKey); // swallow the input that started us
+	MouseLayer_Push(o, w->layerKey);
+	KeyLayer_Push(o, w->layerKey);
+	Input_Poll(o, w->layerKey, w->layerKey); // swallow the input that started us
 	Window_SetTextLevel(win, 0);
 	Window_ShowText(win, 1);
-	Window_RecompositeAll(win);
-	Window_ItemsDisableAll(win);
-	w->startDelayOn = gStartDelayOn;
-	w->startDelayUntil = GetTicks() + (uint32_t)gStartDelayMs;
+	Window_RecompositeAll(o, win);
+	Window_ItemsDisableAll(o, win);
+	w->startDelayOn = o->text.startDelayOn;
+	w->startDelayUntil = GetTicks(o) + (uint32_t)o->text.startDelayMs;
 }
 
 // pops the input layers; the window keeps what was drawn
-static void WaitTextOut_Dtor(WaitTextOut_t* w)
+static void WaitTextOut_Dtor(OpenBGI_t* o, WaitTextOut_t* w)
 {
 	w->w.vt = &WaitTextOut_Vtbl.base;
-	MouseLayer_Pop(w->layerKey);
-	KeyLayer_Pop(w->layerKey);
-	Wait_Dtor(&w->w);
+	MouseLayer_Pop(o, w->layerKey);
+	KeyLayer_Pop(o, w->layerKey);
+	Wait_Dtor(o, &w->w);
 }
 
-WaitTextOut_t* WaitTextOut_New(Thread_t* t, Window_t* win)
+WaitTextOut_t* WaitTextOut_New(OpenBGI_t* o, Thread_t* t, Window_t* win)
 {
 	WaitTextOut_t* w = (WaitTextOut_t*)BGI_Calloc(sizeof(WaitTextOut_t));
-	WaitTextOut_Ctor(w, t, win);
+	WaitTextOut_Ctor(o, w, t, win);
 	return w;
 }
 
-static void WaitTextOut_Destroy(Wait_t* w)
+static void WaitTextOut_Destroy(OpenBGI_t* o, Wait_t* w)
 {
-	WaitTextOut_Dtor((WaitTextOut_t*)w);
+	WaitTextOut_Dtor(o, (WaitTextOut_t*)w);
 	BGI_Free(w);
 }
 
@@ -233,14 +236,14 @@ void WaitTextOut_FinishNow(WaitTextOut_t* w)
 }
 
 // the string to output (not copied: it has to outlive the wait); the first step runs at once
-static void WaitTextOut_SetText(WaitTextOut_t* w, const char* p)
+static void WaitTextOut_SetText(OpenBGI_t* o, WaitTextOut_t* w, const char* p)
 {
 	w->text = p;
-	SET_TIMER(w, 0);
+	SET_TIMER(o, w, 0);
 }
 
 // the parameter word of the plain output: the glyph colour
-static void WaitTextOut_SetParam(WaitTextOut_t* w, uint32_t v)
+static void WaitTextOut_SetParam(OpenBGI_t* o, WaitTextOut_t* w, uint32_t v)
 {
 	w->param = v;
 }
@@ -249,16 +252,16 @@ static void WaitTextOut_SetParam(WaitTextOut_t* w, uint32_t v)
  * 0), wheel down (0x80), decide (0x100) and the down key (0x2000);
  * allowSkip strips the skip bit, allowKeys the down key and wheel down
  * (decide and the button always count).  Any input switches to fast mode
- * (and finishes at once when gTextInputFinishes, "90 9F", is set).  The
- * class's step then runs; the wait ends when it reports completion or
+ * (and finishes at once when o->text.textInputFinishes, "90 9F", is set).
+ * The class's step then runs; the wait ends when it reports completion or
  * waits stopped blocking, pushing the `fast` flag. */
-static int WaitTextOut_Poll(Wait_t* base)
+static int WaitTextOut_Poll(OpenBGI_t* o, Wait_t* base)
 {
 	WaitTextOut_t* w = (WaitTextOut_t*)base;
 	int done, scrolling;
 
-	Wait_Tick(base);
-	w->rawInput = Input_Poll(w->layerKey, w->layerKey);
+	Wait_Tick(o, base);
+	w->rawInput = Input_Poll(o, w->layerKey, w->layerKey);
 	w->input = w->rawInput & 0x80002181u;
 	if(!w->allowSkip)
 		w->input &= 0x7fffffffu;
@@ -266,17 +269,17 @@ static int WaitTextOut_Poll(Wait_t* base)
 		w->input &= ~0x2080u;
 	scrolling = WaitTextScroll_Active(w); // OpenBGI "EF 08": a long message scrolls
 	if(scrolling)
-		WaitTextScroll_Input(w); // the wheel, the up / down keys and the arrows move the view
+		WaitTextScroll_Input(o, w); // the wheel, the up / down keys and the arrows move the view
 	if(w->input)
 	{
 		WaitTextOut_SetFast(w, 1);
 		// (with text still below the view, input turns the page instead of finishing)
-		if(gTextInputFinishes && !(scrolling && WaitTextScroll_HasMore(w)))
+		if(o->text.textInputFinishes && !(scrolling && WaitTextScroll_HasMore(w)))
 			WaitTextOut_FinishNow(w);
 	}
-	done = VT(w)->step(w);
-	Wait_Flush(base);
-	if(done || !Wait_IsBlocking(base))
+	done = VT(w)->step(o, w);
+	Wait_Flush(o, base);
+	if(done || !Wait_IsBlocking(o, base))
 	{
 		Thread_Push(base->thread, (uint32_t)w->fast);
 		return 1;
@@ -294,32 +297,32 @@ static void ScrollLine(WaitTextOut_t* w)
  * is one scroll increment, one control byte, or one character (two calls
  * per character: the preview on the cursor item, then the real draw).  1
  * when the end of the text finished the wait. */
-static int WaitTextOut_Step(WaitTextOut_t* w)
+static int WaitTextOut_Step(OpenBGI_t* o, WaitTextOut_t* w)
 {
 	int result = 0;
 
-	if(!(Wait_TimerExpired(&w->w) || w->fast || w->finishNow || w->autoAdvanceAt != 0))
+	if(!(Wait_TimerExpired(o, &w->w) || w->fast || w->finishNow || w->autoAdvanceAt != 0))
 		return 0;
 	for(;;)
 	{
 		int more = 1;
 		if(w->scrolling)
-			WaitTextOut_ScrollStep(w);
+			WaitTextOut_ScrollStep(o, w);
 		else
 		{
 			switch((uint8_t)*w->text)
 			{
 				case 0:
-					result = WaitTextOut_EndOfText(w);
+					result = WaitTextOut_EndOfText(o, w);
 					more = 0;
 					break;
 				case 1: w->text += WaitTextOut_CtlClear(w); break;
 				case 0xa: w->text += WaitTextOut_CtlNewLine(w); break;
-				case 0xc: w->text += VT(w)->pageBreak(w); break;
-				default: w->text += WaitTextOut_DrawChar(w, w->text); break;
+				case 0xc: w->text += VT(w)->pageBreak(o, w); break;
+				default: w->text += WaitTextOut_DrawChar(o, w, w->text); break;
 			}
 		}
-		if(!(Wait_TimerExpired(&w->w) || w->fast || w->instant) || !more)
+		if(!(Wait_TimerExpired(o, &w->w) || w->fast || w->instant) || !more)
 			break;
 	}
 	return result;
@@ -329,13 +332,13 @@ static int WaitTextOut_Step(WaitTextOut_t* w)
  * steps catches up), except that pacing is suspended in fast mode and
  * (except while scrolling) in instant mode, where the timer is left
  * expired */
-static void WaitTextOut_SetTimer(Wait_t* base, uint32_t ms)
+static void WaitTextOut_SetTimer(OpenBGI_t* o, Wait_t* base, uint32_t ms)
 {
 	WaitTextOut_t* w = (WaitTextOut_t*)base;
 	if(ms && !w->fast && (!w->instant || w->scrolling))
 		Wait_TimerAdd(base, ms);
 	else
-		Wait_SetTimer(base, 0);
+		Wait_SetTimer(o, base, 0);
 }
 
 /* control byte 1 "clear": scroll the text out line by line (one line per
@@ -368,37 +371,38 @@ int WaitTextOut_CtlClear(WaitTextOut_t* w)
 	return 1;
 }
 
-/* control byte 0x0C "page break": fade the text layer out over gFadeSteps
- * steps of gFadeInterval ms ("90 96"), then clear it and reset the cursor.
- * Returns the bytes consumed: 0 while fading, 1 when done. */
-static int WaitTextOut_PageBreak(WaitTextOut_t* w)
+/* control byte 0x0C "page break": fade the text layer out over
+ * o->text.fadeSteps steps of o->text.fadeInterval ms ("90 96"), then
+ * clear it and reset the cursor.  Returns the bytes consumed: 0 while
+ * fading, 1 when done. */
+static int WaitTextOut_PageBreak(OpenBGI_t* o, WaitTextOut_t* w)
 {
 	int result;
 
 	if(w->phase == 0)
 	{
-		w->fadeSteps = gFadeSteps;
-		w->fadeInterval = gFadeInterval;
+		w->fadeSteps = o->text.fadeSteps;
+		w->fadeInterval = o->text.fadeInterval;
 	}
-	SET_TIMER(w, w->fadeInterval);
+	SET_TIMER(o, w, w->fadeInterval);
 	if(w->phase < w->fadeSteps - 1)
 	{
 		w->phase++;
 		Window_SetTextLevel(w->win, (w->phase << 8) / w->fadeSteps);
-		Window_RecompositeAll(w->win);
+		Window_RecompositeAll(o, w->win);
 		result = 0;
 	}
 	else
 	{
 		w->phase = 0;
-		Window_ClearText(w->win);
+		Window_ClearText(o, w->win);
 		Window_SetTextLevel(w->win, 0);
-		Window_RecompositeAll(w->win);
+		Window_RecompositeAll(o, w->win);
 		Window_ResetCursor(w->win);
 		w->overhang = 0;
 		result = 1;
 	}
-	DirtyTextArea(w);
+	DirtyTextArea(o, w);
 	Wait_MarkDirty(&w->w);
 	return result;
 }
@@ -413,30 +417,30 @@ int WaitTextOut_CtlNewLine(WaitTextOut_t* w)
 }
 
 /* one increment of a line scroll: the line advance is spread over
- * gScrollSteps steps of gScrollInterval ms ("90 95"; all remaining ones at
- * once in fast mode) */
-void WaitTextOut_ScrollStep(WaitTextOut_t* w)
+ * o->text.scrollSteps steps of o->text.scrollInterval ms ("90 95"; all
+ * remaining ones at once in fast mode) */
+void WaitTextOut_ScrollStep(OpenBGI_t* o, WaitTextOut_t* w)
 {
 	int step, adv, before, after;
 
 	if(w->phase == 0)
 	{
-		w->scrollSteps = gScrollSteps;
-		w->scrollInterval = gScrollInterval;
+		w->scrollSteps = o->text.scrollSteps;
+		w->scrollInterval = o->text.scrollInterval;
 	}
-	SET_TIMER(w, w->scrollInterval);
+	SET_TIMER(o, w, w->scrollInterval);
 	step = w->fast ? w->scrollSteps - w->phase : 1;
 	adv = Window_LineAdvance(w->win);
 	after = (w->phase + step) * adv / w->scrollSteps;
 	before = w->phase * adv / w->scrollSteps;
-	Window_Scroll(w->win, after - before);
+	Window_Scroll(o, w->win, after - before);
 	w->phase += step;
 	if(w->phase >= w->scrollSteps)
 	{
 		w->scrolling = 0;
 		w->phase = 0;
 	}
-	DirtyTextArea(w);
+	DirtyTextArea(o, w);
 	Wait_MarkDirty(&w->w);
 }
 
@@ -445,10 +449,11 @@ void WaitTextOut_ScrollStep(WaitTextOut_t* w)
  * that it fits (a closing character may overhang into the ruby reserve
  * once; otherwise a new line is started, or a scroll when there is none -
  * the original throws and catches an int there and returns 0 bytes).  The
- * second call draws the glyph (with the global shadow style, gTextStyle)
- * into the text layer and advances the cursor.  Returns the bytes consumed
- * (0 until the second call, or when the window has no font). */
-int WaitTextOut_DrawChar(WaitTextOut_t* w, const char* p)
+ * second call draws the glyph (with the global shadow style,
+ * o->text.textStyle) into the text layer and advances the cursor.  Returns
+ * the bytes consumed (0 until the second call, or when the window has no
+ * font). */
+int WaitTextOut_DrawChar(OpenBGI_t* o, WaitTextOut_t* w, const char* p)
 {
 	FontInfo_t fi;
 	Bmp_t cell, view;
@@ -458,16 +463,16 @@ int WaitTextOut_DrawChar(WaitTextOut_t* w, const char* p)
 	uint32_t code;
 	int len, dbcs, size, glyphW, proportional, gap, advance, consumed = 0;
 
-	len = TextGetChar(&code, p);
-	dbcs = TextIsWide(code, len);
-	SET_TIMER(w, gCharInterval); // "90 94"
-	if(!BmpMgr_FontInfo(gTextBmpMgr, &fi, Window_GetFont(w->win)))
+	len = TextGetChar(o, &code, p);
+	dbcs = TextIsWide(o, code, len);
+	SET_TIMER(o, w, o->text.charInterval); // "90 94"
+	if(!BmpMgr_FontInfo(o->text.textBmpMgr, &fi, Window_GetFont(w->win)))
 		return 0;
 	size = fi.size;
 	glyphW = size * fi.widthPct / 100;
 	proportional = Window_GetProportional(w->win);
-	Bmp_AllocScreen(&cell, 2 * size, size, 1); // room for a full-width glyph
-	Font_PaintGlyph(&cell, &g, (int)code, fi.font, w->param);
+	Bmp_AllocScreen(o, &cell, 2 * size, size, 1); // room for a full-width glyph
+	Font_PaintGlyph(o, &cell, &g, (int)code, fi.font, w->param);
 	view = cell;
 	if(proportional)
 	{ // the ink's bounding box plus a gap each side
@@ -485,7 +490,7 @@ int WaitTextOut_DrawChar(WaitTextOut_t* w, const char* p)
 	{
 		if(!Window_CursorFits(w->win, advance))
 		{
-			if(Window_GetRubyReserve(w->win) && IsKinsokuChar(code) && !w->overhang)
+			if(Window_GetRubyReserve(w->win) && IsKinsokuChar(o, code) && !w->overhang)
 				w->overhang = 1;
 			else
 			{
@@ -499,37 +504,37 @@ int WaitTextOut_DrawChar(WaitTextOut_t* w, const char* p)
 			}
 		}
 		Window_GetCursor(w->win, cur);
-		Window_ItemSetBitmap(w->win, 0, &view);
-		Window_ItemSet(w->win, 0, cur[0] + gap, cur[1], 0xaa);
-		Window_ItemEnable(w->win, 0, 1);
-		Window_ItemRect(w->win, &r, 0);
-		DirtyRect(w, &r);
+		Window_ItemSetBitmap(o, w->win, 0, &view);
+		Window_ItemSet(o, w->win, 0, cur[0] + gap, cur[1], 0xaa);
+		Window_ItemEnable(o, w->win, 0, 1);
+		Window_ItemRect(o, w->win, &r, 0);
+		DirtyRect(o, w, &r);
 		w->phase++;
 		Wait_MarkDirty(&w->w);
 	}
 	else
 	{
-		int sdx = gTextStyle[1] * size / 100; // the shadow offset is a percentage of the font size
-		int sdy = gTextStyle[2] * size / 100;
+		int sdx = o->text.textStyle[1] * size / 100; // the shadow offset is a percentage of the font size
+		int sdy = o->text.textStyle[2] * size / 100;
 		Window_GetCursor(w->win, cur);
 		cur[0] += gap;
-		if(gTextStyle[0])
+		if(o->text.textStyle[0])
 		{ // the shadow: the glyph recoloured (effect 5) and blended at the style's level
 			Bmp_t tmp;
-			Bmp_AllocScreen(&tmp, view.w, view.h, 1);
+			Bmp_AllocScreen(o, &tmp, view.w, view.h, 1);
 			Bmp_Fill(&tmp, NULL, 0);
 			Bmp_BlitEffect(&tmp, &view, 5, 0x100);
-			Window_DrawBmpToText(w->win, &r, cur[0] + sdx, cur[1] + sdy, &tmp, 1, 0x100 - gTextStyle[4]);
+			Window_DrawBmpToText(o, w->win, &r, cur[0] + sdx, cur[1] + sdy, &tmp, 1, 0x100 - o->text.textStyle[4]);
 			BGI_Free(tmp.pixels);
 		}
-		Window_DrawBmpToText(w->win, &r, cur[0], cur[1], &view, 0, 0);
-		Window_ItemEnable(w->win, 0, 0);
-		if(gTextStyle[0])
+		Window_DrawBmpToText(o, w->win, &r, cur[0], cur[1], &view, 0, 0);
+		Window_ItemEnable(o, w->win, 0, 0);
+		if(o->text.textStyle[0])
 		{
 			r.r += sdx; // the dirty rectangle has to cover the shadow too
 			r.b += sdy;
 		}
-		DirtyRect(w, &r);
+		DirtyRect(o, w, &r);
 		Window_CursorAdvance(w->win, advance);
 		w->phase--;
 		consumed = len;
@@ -540,12 +545,12 @@ int WaitTextOut_DrawChar(WaitTextOut_t* w, const char* p)
 }
 
 /* the "waiting for input" cursor: cycles through the pictures of "90 98"
- * at gCursorInterval ms ("90 99") on window item 0, at the text cursor
- * (plus the class's offset) or at the fixed position of "90 9A".  The
- * first call makes room for the widest picture (a new line, or a scroll
- * first) and drops the fast / instant mode.  Returns 1 once input arrived
- * (the item is hidden then). */
-int WaitTextOut_CursorAnim(WaitTextOut_t* w)
+ * at o->text.cursorInterval ms ("90 99") on window item 0, at the text
+ * cursor (plus the class's offset) or at the fixed position of "90 9A".
+ * The first call makes room for the widest picture (a new line, or a
+ * scroll first) and drops the fast / instant mode.  Returns 1 once input
+ * arrived (the item is hidden then). */
+int WaitTextOut_CursorAnim(OpenBGI_t* o, WaitTextOut_t* w)
 {
 	int gotInput;
 
@@ -553,9 +558,9 @@ int WaitTextOut_CursorAnim(WaitTextOut_t* w)
 	{
 		uint32_t maxW = 0;
 		int i;
-		for(i = 0; i < gTextItemCount; i++)
-			if(maxW < (uint32_t)gTextItems[i].w)
-				maxW = (uint32_t)gTextItems[i].w;
+		for(i = 0; i < o->text.textItemCount; i++)
+			if(maxW < (uint32_t)o->text.textItems[i].w)
+				maxW = (uint32_t)o->text.textItems[i].w;
 		if(!Window_CursorFits(w->win, (int)maxW))
 		{
 			if(!Window_NewLine(w->win))
@@ -563,54 +568,54 @@ int WaitTextOut_CursorAnim(WaitTextOut_t* w)
 				ScrollLine(w);
 				return 0;
 			}
-			VT(w)->cursorNewLine(w);
+			VT(w)->cursorNewLine(o, w);
 		}
 		w->input &= 0x80000000u; // only the skip bit survives into the wait
 		if(!w->input)
 			WaitTextOut_SetFast(w, 0);
 		WaitTextOut_SetInstant(w, 0);
-		SET_TIMER(w, 0);
+		SET_TIMER(o, w, 0);
 		w->phase++;
 	}
-	DirtyItem0(w);
+	DirtyItem0(o, w);
 	gotInput = w->input != 0;
 	if(!gotInput)
 	{
-		SET_TIMER(w, gCursorInterval);
-		if(gTextItemCount > 0)
+		SET_TIMER(o, w, o->text.cursorInterval);
+		if(o->text.textItemCount > 0)
 		{
-			Bmp_t* item = &gTextItems[w->phase - 1];
-			w->phase += w->phase < gTextItemCount ? 1 : 1 - gTextItemCount;
+			Bmp_t* item = &o->text.textItems[w->phase - 1];
+			w->phase += w->phase < o->text.textItemCount ? 1 : 1 - o->text.textItemCount;
 			if(item->pixels)
 			{
 				int x, y;
-				if(gCursorPosMode == 1)
+				if(o->text.cursorPosMode == 1)
 				{
-					x = gCursorX;
-					y = gCursorY;
+					x = o->text.cursorX;
+					y = o->text.cursorY;
 				}
 				else
 				{
 					int32_t cur[2], off[2];
 					Window_GetCursor(w->win, cur);
-					VT(w)->cursorOffset(w, off);
+					VT(w)->cursorOffset(o, w, off);
 					x = cur[0] + off[0];
 					y = cur[1] + off[1];
 				}
-				Window_ItemSet(w->win, 0, x, y, 0);
-				Window_ItemSetBitmap(w->win, 0, item);
-				Window_ItemEnable(w->win, 0, 1);
+				Window_ItemSet(o, w->win, 0, x, y, 0);
+				Window_ItemSetBitmap(o, w->win, 0, item);
+				Window_ItemEnable(o, w->win, 0, 1);
 			}
 			else
-				Window_ItemEnable(w->win, 0, 0);
+				Window_ItemEnable(o, w->win, 0, 0);
 		}
 	}
 	else
 	{
-		Window_ItemEnable(w->win, 0, 0);
+		Window_ItemEnable(o, w->win, 0, 0);
 		w->phase = 0;
 	}
-	DirtyItem0(w);
+	DirtyItem0(o, w);
 	Wait_MarkDirty(&w->w);
 	return gotInput;
 }
@@ -620,43 +625,43 @@ int WaitTextOut_CursorAnim(WaitTextOut_t* w)
  * auto-advance timer ("90 97"), honour the start delay, run the cursor
  * animation, and finish on input or when the auto-advance time is up.
  * Returns 1 when the wait is over. */
-int WaitTextOut_EndOfText(WaitTextOut_t* w)
+int WaitTextOut_EndOfText(OpenBGI_t* o, WaitTextOut_t* w)
 {
 	int r;
 
 	if(!w->waitAtEnd || w->finishNow)
 	{
 		Rect_t rc;
-		if(Window_ItemRect(w->win, &rc, 0))
+		if(Window_ItemRect(o, w->win, &rc, 0))
 		{
-			DirtyRect(w, &rc);
-			Window_ItemEnable(w->win, 0, 0);
+			DirtyRect(o, w, &rc);
+			Window_ItemEnable(o, w->win, 0, 0);
 		}
 		Wait_MarkDirty(&w->w);
 		return 1;
 	}
-	if(gAutoAdvanceOn && w->phase == 0)
-		w->autoAdvanceAt = GetTicks() + (uint32_t)gAutoAdvanceMs;
+	if(o->text.autoAdvanceOn && w->phase == 0)
+		w->autoAdvanceAt = GetTicks(o) + (uint32_t)o->text.autoAdvanceMs;
 	if(w->startDelayOn)
 	{
-		if(w->startDelayUntil > GetTicks() && !w->fast)
+		if(w->startDelayUntil > GetTicks(o) && !w->fast)
 			return 0;
 		w->startDelayOn = 0;
 	}
-	r = (Wait_TimerExpired(&w->w) || w->fast) ? WaitTextOut_CursorAnim(w) : 0;
-	if(gAutoAdvanceOn && !r && w->autoAdvanceAt <= GetTicks())
+	r = (Wait_TimerExpired(o, &w->w) || w->fast) ? WaitTextOut_CursorAnim(o, w) : 0;
+	if(o->text.autoAdvanceOn && !r && w->autoAdvanceAt <= GetTicks(o))
 		WaitTextOut_FinishNow(w);
 	return r;
 }
 
 // the plain output starts the cursor's new line at the margin
-static void WaitTextOut_CursorNewLine(WaitTextOut_t* w)
+static void WaitTextOut_CursorNewLine(OpenBGI_t* o, WaitTextOut_t* w)
 {
 	(void)w;
 }
 
 // the plain output puts the cursor picture at the text cursor
-static void WaitTextOut_CursorOffset(WaitTextOut_t* w, int32_t out[2])
+static void WaitTextOut_CursorOffset(OpenBGI_t* o, WaitTextOut_t* w, int32_t out[2])
 {
 	(void)w;
 	out[0] = 0;
@@ -666,7 +671,7 @@ static void WaitTextOut_CursorOffset(WaitTextOut_t* w, int32_t out[2])
 /* notifications ("80 4C", by their a): 1 and 0x102 finish instantly,
  * 0x100 finishes at the next step (the remaining text is paced out),
  * 0x101 sets allowSkip to b */
-static void WaitTextOut_OnMessage(Wait_t* base, WaitMsg_t* m)
+static void WaitTextOut_OnMessage(OpenBGI_t* o, Wait_t* base, WaitMsg_t* m)
 {
 	WaitTextOut_t* w = (WaitTextOut_t*)base;
 	switch(m->a)
@@ -683,45 +688,45 @@ static void WaitTextOut_OnMessage(Wait_t* base, WaitMsg_t* m)
 }
 
 // the dirty flag, except that there is nothing to present while the window sits below the draw limit of "90 09" (it is not drawn then)
-int WaitTextOut_IsDirty(Wait_t* base)
+int WaitTextOut_IsDirty(OpenBGI_t* o, Wait_t* base)
 {
 	WaitTextOut_t* w = (WaitTextOut_t*)base;
-	uint32_t key = w->win->obj.vt->sortKey(&w->win->obj);
-	if(Gfx_GetDrawLimit(gTextGfx) > key)
+	uint32_t key = w->win->obj.vt->sortKey(o, &w->win->obj);
+	if(Gfx_GetDrawLimit(o->text.textGfx) > key)
 		return 0;
 	return base->dirty;
 }
 
 // ---- WaitTextRich ----------------------------------------------------------------------------
 
-// the shadow style starts as the global one (gTextStyle); SetStyle replaces it
-static void WaitTextRich_Ctor(WaitTextRich_t* w, Thread_t* t, Window_t* win)
+// the shadow style starts as the global one (o->text.textStyle); SetStyle replaces it
+static void WaitTextRich_Ctor(OpenBGI_t* o, WaitTextRich_t* w, Thread_t* t, Window_t* win)
 {
-	WaitTextOut_Ctor(&w->t, t, win);
+	WaitTextOut_Ctor(o, &w->t, t, win);
 	w->t.w.vt = &WaitTextRich_Vtbl.base;
 	memset(&w->rich, 0, sizeof w->rich);
-	memcpy(w->style, gTextStyle, sizeof w->style);
+	memcpy(w->style, o->text.textStyle, sizeof w->style);
 }
 
-static void WaitTextRich_Dtor(WaitTextRich_t* w)
+static void WaitTextRich_Dtor(OpenBGI_t* o, WaitTextRich_t* w)
 {
 	w->t.w.vt = &WaitTextRich_Vtbl.base;
 	if(w->scrollOn)
-		WaitTextScroll_End(&w->t); // (OpenBGI) the nodes stay in the window's text document
+		WaitTextScroll_End(o, &w->t); // (OpenBGI) the nodes stay in the window's text document
 	RichState_Free(&w->rich);
-	WaitTextOut_Dtor(&w->t);
+	WaitTextOut_Dtor(o, &w->t);
 }
 
-WaitTextRich_t* WaitTextRich_New(Thread_t* t, Window_t* win)
+WaitTextRich_t* WaitTextRich_New(OpenBGI_t* o, Thread_t* t, Window_t* win)
 {
 	WaitTextRich_t* w = (WaitTextRich_t*)BGI_Calloc(sizeof(WaitTextRich_t));
-	WaitTextRich_Ctor(w, t, win);
+	WaitTextRich_Ctor(o, w, t, win);
 	return w;
 }
 
-static void WaitTextRich_Destroy(Wait_t* w)
+static void WaitTextRich_Destroy(OpenBGI_t* o, Wait_t* w)
 {
-	WaitTextRich_Dtor((WaitTextRich_t*)w);
+	WaitTextRich_Dtor(o, (WaitTextRich_t*)w);
 	BGI_Free(w);
 }
 
@@ -732,7 +737,7 @@ static void WaitTextRich_Destroy(Wait_t* w)
  * kinsoku handling (a margin at the line end that closing punctuation may
  * hang into).  The cursor ends up behind the text and the timer is
  * restarted.  1 ok, 0 when the layout failed. */
-int WaitTextRich_Prepare(WaitTextRich_t* w, const char* str, int rubyOn, int hang, int plainStyle)
+int WaitTextRich_Prepare(OpenBGI_t* o, WaitTextRich_t* w, const char* str, int rubyOn, int hang, int plainStyle)
 {
 	Window_t* win = w->t.win;
 	int32_t cur[2], style[5], lines;
@@ -741,7 +746,7 @@ int WaitTextRich_Prepare(WaitTextRich_t* w, const char* str, int rubyOn, int han
 	/* OpenBGI "EF 08": with scrolling on, a horizontal output lays its text
 	 * out in the coordinates of the window's text document and hands the
 	 * nodes to it (window.h); wait_text_scroll.c then does the stepping */
-	TextDoc_t* doc = (Window_DocActive(win) && w->t.w.vt == &WaitTextRich_Vtbl.base) ? Window_Doc(win) : NULL;
+	TextDoc_t* doc = (Window_DocActive(o, win) && w->t.w.vt == &WaitTextRich_Vtbl.base) ? Window_Doc(o, win) : NULL;
 
 	Window_GetCursor(win, cur);
 	if(doc)
@@ -751,32 +756,32 @@ int WaitTextRich_Prepare(WaitTextRich_t* w, const char* str, int rubyOn, int han
 	font = Window_GetFont(win);
 	proportional = Window_GetProportional(win);
 	if(plainStyle)
-		Text_MakeStyle(style, 0, 0, 0, 0, 0);
+		Text_MakeStyle(o, style, 0, 0, 0, 0, 0);
 	else
 		memcpy(style, w->style, sizeof style);
-	ok = VT(&w->t)->layoutCore(&w->t, &w->rich, &lines, str, rubyOn, &gRubyDict, cur, &area, adv, font,
+	ok = VT(&w->t)->layoutCore(o, &w->t, &w->rich, &lines, str, rubyOn, &o->text.rubyDict, cur, &area, adv, font,
 		proportional, hang, w->t.param, style);
 	if(!ok)
 		return 0;
 	if(rubyOn)
-		VT(&w->t)->rubyPlace(&w->t, &w->rich, font, w->rubyColour, style, &gRubyDict);
-	VT(&w->t)->align(&w->t, &w->rich, cur, &area, font, hang, style, Window_GetSwingStyle(win));
+		VT(&w->t)->rubyPlace(o, &w->t, &w->rich, font, w->rubyColour, style, &o->text.rubyDict);
+	VT(&w->t)->align(o, &w->t, &w->rich, cur, &area, font, hang, style, Window_GetSwingStyle(win));
 	Window_SetCursor(win, cur[0], cur[1] - (doc ? doc->scrollY : 0));
 	if(doc)
 	{
-		w->docLink = Window_DocAppend(win, &w->rich);
+		w->docLink = Window_DocAppend(o, win, &w->rich);
 		w->rich.head = *w->docLink; // this output's part of the document
 		w->docSerial = doc->serial;
 		w->scrollTo = doc->scrollY;
 		w->scrollOn = 1;
 	}
 	w->rubyOn = rubyOn;
-	SET_TIMER(&w->t, 0);
+	SET_TIMER(o, &w->t, 0);
 	return ok;
 }
 
 // replace the text (drops the previous layout first); 1 ok
-int WaitTextRich_SetTextEx(WaitTextRich_t* w, const char* str, int rubyOn, int hang, int plainStyle)
+int WaitTextRich_SetTextEx(OpenBGI_t* o, WaitTextRich_t* w, const char* str, int rubyOn, int hang, int plainStyle)
 {
 	if(w->scrollOn)
 	{ // (OpenBGI) the previous layout is in the window's text document: take it out again
@@ -786,36 +791,31 @@ int WaitTextRich_SetTextEx(WaitTextRich_t* w, const char* str, int rubyOn, int h
 		w->scrollOn = 0;
 	}
 	RichState_Free(&w->rich);
-	return WaitTextRich_Prepare(w, str, rubyOn, hang, plainStyle);
+	return WaitTextRich_Prepare(o, w, str, rubyOn, hang, plainStyle);
 }
 
 // the setText slot: no ruby, hanging punctuation, the object's style
-static void WaitTextRich_SetText(WaitTextOut_t* w, const char* p)
+static void WaitTextRich_SetText(OpenBGI_t* o, WaitTextOut_t* w, const char* p)
 {
-	WaitTextRich_SetTextEx((WaitTextRich_t*)w, p, 0, 1, 0);
+	WaitTextRich_SetTextEx(o, (WaitTextRich_t*)w, p, 0, 1, 0);
 }
 
-void WaitTextRich_SetColours(WaitTextRich_t* w, uint32_t colour, uint32_t rubyColour)
+void WaitTextRich_SetColours(OpenBGI_t* o, WaitTextRich_t* w, uint32_t colour, uint32_t rubyColour)
 {
-	WaitTextOut_SetParam(&w->t, colour);
+	WaitTextOut_SetParam(o, &w->t, colour);
 	w->rubyColour = rubyColour;
 }
 
 // the setParam slot: one colour for the text and the ruby
-static void WaitTextRich_SetParam(WaitTextOut_t* w, uint32_t v)
+static void WaitTextRich_SetParam(OpenBGI_t* o, WaitTextOut_t* w, uint32_t v)
 {
-	WaitTextRich_SetColours((WaitTextRich_t*)w, v, v);
-}
-
-void WaitTextRich_SetRubyColour(WaitTextRich_t* w, uint32_t colour)
-{
-	w->rubyColour = colour;
+	WaitTextRich_SetColours(o, (WaitTextRich_t*)w, v, v);
 }
 
 // the shadow style: on, dx, dy, colour, level (Text_MakeStyle)
-void WaitTextRich_SetStyle(WaitTextRich_t* w, const int32_t s[5])
+void WaitTextRich_SetStyle(OpenBGI_t* o, WaitTextRich_t* w, const int32_t s[5])
 {
-	Text_MakeStyle(w->style, s[0], s[1], s[2], (uint32_t)s[3], s[4]);
+	Text_MakeStyle(o, w->style, s[0], s[1], s[2], (uint32_t)s[3], s[4]);
 }
 
 // every laid-out glyph has been drawn
@@ -830,25 +830,26 @@ static int RichAllShown(WaitTextRich_t* w)
 
 /* reveal the laid-out glyphs.  Every timer tick (1 ms) is one step; a
  * step decrements the delay of every pending glyph, and a glyph whose delay
- * ran out fades in over gRubyFadeSteps steps (drawn only on the last step
- * of the batch, so a backlog of ticks does not draw every intermediate
- * level).  Fast / instant mode, or a zero character delay (gRubyCharDelay),
- * shows everything in one pass.  A glyph is drawn twice: its shape punched
- * out of the layer (effect 0x40), then blended in at the fade's level. */
-static void RichShowStep(WaitTextRich_t* w)
+ * ran out fades in over o->text.rubyFadeSteps steps (drawn only on the last
+ * step of the batch, so a backlog of ticks does not draw every intermediate
+ * level).  Fast / instant mode, or a zero character delay
+ * (o->text.rubyCharDelay), shows everything in one pass.  A glyph is drawn
+ * twice: its shape punched out of the layer (effect 0x40), then blended in
+ * at the fade's level. */
+static void RichShowStep(OpenBGI_t* o, WaitTextRich_t* w)
 {
 	WaitTextOut_t* t = &w->t;
-	int fastMode = t->fast || t->instant || gRubyCharDelay == 0;
+	int fastMode = t->fast || t->instant || o->text.rubyCharDelay == 0;
 	uint32_t steps = 0;
 	Rect_t r;
 
-	if(Wait_TimerExpired(&t->w) && !fastMode)
+	if(Wait_TimerExpired(o, &t->w) && !fastMode)
 	{
 		do
 		{
 			Wait_TimerAdd(&t->w, 1);
 			steps++;
-		} while(Wait_TimerExpired(&t->w));
+		} while(Wait_TimerExpired(o, &t->w));
 	}
 	while(steps > 0 || fastMode)
 	{
@@ -863,7 +864,7 @@ static void RichShowStep(WaitTextRich_t* w)
 				if(--c->delay == 0)
 				{
 					c->fadeStep = 0;
-					c->fadeSteps = gRubyFadeSteps;
+					c->fadeSteps = o->text.rubyFadeSteps;
 				}
 				continue;
 			}
@@ -874,18 +875,18 @@ static void RichShowStep(WaitTextRich_t* w)
 					c->fadeStep++;
 					continue;
 				}
-				Window_DrawBmpToText(t->win, &r, c->x, c->y, &c->glyph, 0x40, 1);
-				Window_DrawBmpToText(t->win, &r, c->x, c->y, &c->glyph, 1,
+				Window_DrawBmpToText(o, t->win, &r, c->x, c->y, &c->glyph, 0x40, 1);
+				Window_DrawBmpToText(o, t->win, &r, c->x, c->y, &c->glyph, 1,
 					0x100 - (int)(((uint32_t)c->fadeStep << 8) / (uint32_t)c->fadeSteps));
-				DirtyRect(t, &r);
+				DirtyRect(o, t, &r);
 				Wait_MarkDirty(&t->w);
 				c->fadeStep++;
 			}
 			else
 			{
-				Window_DrawBmpToText(t->win, &r, c->x, c->y, &c->glyph, 0x40, 1);
-				Window_DrawBmpToText(t->win, &r, c->x, c->y, &c->glyph, 1, 0);
-				DirtyRect(t, &r);
+				Window_DrawBmpToText(o, t->win, &r, c->x, c->y, &c->glyph, 0x40, 1);
+				Window_DrawBmpToText(o, t->win, &r, c->x, c->y, &c->glyph, 1, 0);
+				DirtyRect(o, t, &r);
 				Wait_MarkDirty(&t->w);
 				c->shown = 1;
 			}
@@ -893,113 +894,113 @@ static void RichShowStep(WaitTextRich_t* w)
 		if(fastMode)
 			break;
 	}
-	SET_TIMER(t, 0);
+	SET_TIMER(o, t, 0);
 }
 
 // the rich classes' step: reveal glyphs until all are shown, then the shared end-of-text handling
-static int WaitTextRich_Step(WaitTextOut_t* t)
+static int WaitTextRich_Step(OpenBGI_t* o, WaitTextOut_t* t)
 {
 	WaitTextRich_t* w = (WaitTextRich_t*)t;
 	if(WaitTextScroll_Active(t)) // OpenBGI "EF 08"
-		return WaitTextScroll_Step(t);
-	if(!(Wait_TimerExpired(&t->w) || t->fast || t->finishNow || t->autoAdvanceAt != 0))
+		return WaitTextScroll_Step(o, t);
+	if(!(Wait_TimerExpired(o, &t->w) || t->fast || t->finishNow || t->autoAdvanceAt != 0))
 		return 0;
 	if(RichAllShown(w))
-		return WaitTextOut_EndOfText(t);
-	RichShowStep(w);
+		return WaitTextOut_EndOfText(o, t);
+	RichShowStep(o, w);
 	return 0;
 }
 
 // the rich classes indent the cursor's new line like a text line
-static void WaitTextRich_CursorNewLine(WaitTextOut_t* w)
+static void WaitTextRich_CursorNewLine(OpenBGI_t* o, WaitTextOut_t* w)
 {
-	Window_CursorAdvance(w->win, Text_GetIndent());
+	Window_CursorAdvance(w->win, Text_GetIndent(o));
 }
 
 // the cursor picture goes below the ruby when ruby is on
-static void WaitTextRich_CursorOffset(WaitTextOut_t* t, int32_t out[2])
+static void WaitTextRich_CursorOffset(OpenBGI_t* o, WaitTextOut_t* t, int32_t out[2])
 {
 	WaitTextRich_t* w = (WaitTextRich_t*)t;
 	FontInfo_t fi;
-	int ok = BmpMgr_FontInfo(gTextBmpMgr, &fi, Window_GetFont(t->win));
+	int ok = BmpMgr_FontInfo(o->text.textBmpMgr, &fi, Window_GetFont(t->win));
 	out[0] = 0;
-	out[1] = (w->rubyOn && ok) ? Text_RubySize(fi.size) : 0;
+	out[1] = (w->rubyOn && ok) ? Text_RubySize(o, fi.size) : 0;
 }
 
 // the three layout slots forward to the horizontal layout of gfx/text.h
-static int WaitTextRich_LayoutCore(WaitTextOut_t* w, RichState_t* rich, int32_t* outLines, const char* str, int rubyOn,
+static int WaitTextRich_LayoutCore(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int32_t* outLines, const char* str, int rubyOn,
 	RubyDict_t* dict, int32_t cur[2], const Rect_t* area, int adv, int font, int proportional,
 	int hang, uint32_t colour, const int32_t style[5])
 {
 	(void)w;
-	return Text_LayoutCoreH(rich, outLines, str, rubyOn, dict, cur, area, adv, font, proportional, hang, colour, style);
+	return Text_LayoutCoreH(o, rich, outLines, str, rubyOn, dict, cur, area, adv, font, proportional, hang, colour, style);
 }
 
-static int WaitTextRich_RubyPlace(WaitTextOut_t* w, RichState_t* rich, int font, uint32_t colour,
+static int WaitTextRich_RubyPlace(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int font, uint32_t colour,
 	const int32_t style[5], RubyDict_t* dict)
 {
 	(void)w;
-	return Text_RubyPlaceH(rich, font, colour, style, dict);
+	return Text_RubyPlaceH(o, rich, font, colour, style, dict);
 }
 
-static void WaitTextRich_Align(WaitTextOut_t* w, RichState_t* rich, int32_t cur[2], const Rect_t* area, int font,
+static void WaitTextRich_Align(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int32_t cur[2], const Rect_t* area, int font,
 	int hang, const int32_t style[5], int swing)
 {
 	(void)w;
-	Text_AlignH(rich, cur, area, font, hang, style, swing);
+	Text_AlignH(o, rich, cur, area, font, hang, style, swing);
 }
 
 // ---- WaitTextRichV ---------------------------------------------------------------------------
 
 // the vertical variant: the rich object with the vertical layout slots
-WaitTextRich_t* WaitTextRichV_New(Thread_t* t, Window_t* win)
+WaitTextRich_t* WaitTextRichV_New(OpenBGI_t* o, Thread_t* t, Window_t* win)
 {
-	WaitTextRich_t* w = WaitTextRich_New(t, win);
+	WaitTextRich_t* w = WaitTextRich_New(o, t, win);
 	w->t.w.vt = &WaitTextRichV_Vtbl.base;
 	return w;
 }
 
-static void WaitTextRichV_Destroy(Wait_t* w)
+static void WaitTextRichV_Destroy(OpenBGI_t* o, Wait_t* w)
 {
 	w->vt = &WaitTextRichV_Vtbl.base;
-	WaitTextRich_Dtor((WaitTextRich_t*)w);
+	WaitTextRich_Dtor(o, (WaitTextRich_t*)w);
 	BGI_Free(w);
 }
 
 /* the cursor picture goes left of the column, past the ruby, by the width
- * of the first picture.  The original reads gTextItems[0] without a check;
- * an empty item table counts as width 0 here. */
-static void WaitTextRichV_CursorOffset(WaitTextOut_t* t, int32_t out[2])
+ * of the first picture.  The original reads o->text.textItems[0] without
+ * a check; an empty item table counts as width 0 here. */
+static void WaitTextRichV_CursorOffset(OpenBGI_t* o, WaitTextOut_t* t, int32_t out[2])
 {
 	WaitTextRich_t* w = (WaitTextRich_t*)t;
 	FontInfo_t fi;
-	int ok = BmpMgr_FontInfo(gTextBmpMgr, &fi, Window_GetFont(t->win));
-	int ruby = (w->rubyOn && ok) ? Text_RubySize(fi.size) : 0;
-	out[0] = -((gTextItems ? gTextItems[0].w : 0) + ruby);
+	int ok = BmpMgr_FontInfo(o->text.textBmpMgr, &fi, Window_GetFont(t->win));
+	int ruby = (w->rubyOn && ok) ? Text_RubySize(o, fi.size) : 0;
+	out[0] = -((o->text.textItems ? o->text.textItems[0].w : 0) + ruby);
 	out[1] = 0;
 }
 
 // the three layout slots forward to the vertical layout of gfx/text.h
-static int WaitTextRichV_LayoutCore(WaitTextOut_t* w, RichState_t* rich, int32_t* outLines, const char* str,
+static int WaitTextRichV_LayoutCore(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int32_t* outLines, const char* str,
 	int rubyOn, RubyDict_t* dict, int32_t cur[2], const Rect_t* area, int adv, int font, int proportional,
 	int hang, uint32_t colour, const int32_t style[5])
 {
 	(void)w;
-	return Text_LayoutCoreV(rich, outLines, str, rubyOn, dict, cur, area, adv, font, proportional, hang, colour, style);
+	return Text_LayoutCoreV(o, rich, outLines, str, rubyOn, dict, cur, area, adv, font, proportional, hang, colour, style);
 }
 
-static int WaitTextRichV_RubyPlace(WaitTextOut_t* w, RichState_t* rich, int font, uint32_t colour,
+static int WaitTextRichV_RubyPlace(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int font, uint32_t colour,
 	const int32_t style[5], RubyDict_t* dict)
 {
 	(void)w;
-	return Text_RubyPlaceV(rich, font, colour, style, dict);
+	return Text_RubyPlaceV(o, rich, font, colour, style, dict);
 }
 
-static void WaitTextRichV_Align(WaitTextOut_t* w, RichState_t* rich, int32_t cur[2], const Rect_t* area, int font,
+static void WaitTextRichV_Align(OpenBGI_t* o, WaitTextOut_t* w, RichState_t* rich, int32_t cur[2], const Rect_t* area, int font,
 	int hang, const int32_t style[5], int swing)
 {
 	(void)w;
-	Text_AlignV(rich, cur, area, font, hang, style, swing);
+	Text_AlignV(o, rich, cur, area, font, hang, style, swing);
 }
 
 // ========================================================================
@@ -1013,10 +1014,10 @@ static void WaitTextRichV_Align(WaitTextOut_t* w, RichState_t* rich, int32_t cur
  * window's draw style, with the colours and the `style` given.  instant,
  * waitAtEnd, allowSkip and allowKeys are the output flags (WaitTextOut_Set*).
  * 0 ok, -1 no such window, 0x80000001 no font. */
-int StartTextOut(Thread_t* t, uint32_t h, const char* str, uint32_t colourOrParam, int rubyOn, uint32_t rubyColour,
+int StartTextOut(OpenBGI_t* o, Thread_t* t, uint32_t h, const char* str, uint32_t colourOrParam, int rubyOn, uint32_t rubyColour,
 	int hang, int plainStyle, const int32_t* style, int instant, int waitAtEnd, int allowSkip, int allowKeys, int mode)
 {
-	Window_t* win = (Window_t*)Gfx_FindWindow(gGfx, h);
+	Window_t* win = (Window_t*)Gfx_FindWindow(o->gfx.gfx, h);
 	WaitTextOut_t* w;
 	if(!win)
 		return -1;
@@ -1025,24 +1026,24 @@ int StartTextOut(Thread_t* t, uint32_t h, const char* str, uint32_t colourOrPara
 	switch(mode)
 	{
 		case -1:
-			w = WaitTextOut_New(t, win);
-			VT(w)->setParam(w, colourOrParam);
-			VT(w)->setText(w, str);
+			w = WaitTextOut_New(o, t, win);
+			VT(w)->setParam(o, w, colourOrParam);
+			VT(w)->setText(o, w, str);
 			break;
 		case 1:
 		{
-			WaitTextRich_t* r = Window_GetDrawStyle(win) == 1 ? WaitTextRichV_New(t, win) : WaitTextRich_New(t, win);
-			WaitTextRich_SetColours(r, colourOrParam, rubyColour);
-			WaitTextRich_SetStyle(r, style);
-			WaitTextRich_SetTextEx(r, str, rubyOn, hang, 0);
+			WaitTextRich_t* r = Window_GetDrawStyle(win) == 1 ? WaitTextRichV_New(o, t, win) : WaitTextRich_New(o, t, win);
+			WaitTextRich_SetColours(o, r, colourOrParam, rubyColour);
+			WaitTextRich_SetStyle(o, r, style);
+			WaitTextRich_SetTextEx(o, r, str, rubyOn, hang, 0);
 			w = &r->t;
 			break;
 		}
 		case 0:
 		{
-			WaitTextRich_t* r = WaitTextRich_New(t, win);
-			VT(&r->t)->setParam(&r->t, colourOrParam);
-			WaitTextRich_SetTextEx(r, str, rubyOn, hang, plainStyle);
+			WaitTextRich_t* r = WaitTextRich_New(o, t, win);
+			VT(&r->t)->setParam(o, &r->t, colourOrParam);
+			WaitTextRich_SetTextEx(o, r, str, rubyOn, hang, plainStyle);
 			w = &r->t;
 			break;
 		}
@@ -1054,19 +1055,39 @@ int StartTextOut(Thread_t* t, uint32_t h, const char* str, uint32_t colourOrPara
 	WaitTextOut_SetWaitAtEnd(w, waitAtEnd);
 	WaitTextOut_SetAllowSkip(w, allowSkip);
 	WaitTextOut_SetAllowKeys(w, allowKeys);
-	Thread_SetWait(t, &w->w);
+	Thread_SetWait(o, t, &w->w);
 	return 0;
 }
 
 // the 12-argument form ("90 90" with mode -1, "91 90" / "91 92" with mode 0): no style, the colour doubles as ruby colour
-int StartTextOutW(Thread_t* t, uint32_t h, const char* str, uint32_t colourOrParam, int plainStyle, int instant,
+int StartTextOutW(OpenBGI_t* o, Thread_t* t, uint32_t h, const char* str, uint32_t colourOrParam, int plainStyle, int instant,
 	int waitAtEnd, int allowSkip, int allowKeys, int rubyOn, int hang, int mode)
 {
-	return StartTextOut(t, h, str, colourOrParam, rubyOn, colourOrParam, hang, plainStyle, NULL, instant, waitAtEnd,
+	return StartTextOut(o, t, h, str, colourOrParam, rubyOn, colourOrParam, hang, plainStyle, NULL, instant, waitAtEnd,
 		allowSkip, allowKeys, mode);
 }
 
 // the name of a wait class of this file, for the debugger (NULL: not one of these)
+/* The targets of the text outputs (bgi/inputmap.h): a click anywhere on
+ * the output's layer hurries it, or goes on at its end; a long message
+ * that scrolls has its arrows besides.  1 when `w` is a text output. */
+int WaitText_Targets(OpenBGI_t* o, Wait_t* w, TargetSink_t* s)
+{
+	WaitTextOut_t* t = (WaitTextOut_t*)w;
+	TargetDesc_t d;
+	if(WaitText_ClassName(w->vt) == NULL)
+		return 0;
+	TargetDesc_Init(&d, OPENBGI_TARGET_TEXT, t->layerKey);
+	TargetSink_Claim(s, d.layer);
+	WaitTextScroll_Targets(o, t, s);
+	d.flags = OPENBGI_TARGET_ANYWHERE;
+	d.whole = 1;
+	d.owner = Thread_GetId(w->thread);
+	d.reach = Target_ReachLayer;
+	TargetSink_Add(s, &d);
+	return 1;
+}
+
 const char* WaitText_ClassName(const WaitVtbl_t* vt)
 {
 	if(vt == &WaitTextOut_Vtbl.base)

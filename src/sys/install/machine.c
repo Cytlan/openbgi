@@ -2,27 +2,33 @@
  * This file is part of OpenBGI (https://openbgi.net).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * machine.c - the machine key and the registration check (inc/bgi/install.h)
+ * machine.c - the machine key and the registration check (src/include/bgi/install.h)
  *
  * The games of the time tied their registration to the machine: a 32-bit
  * key from the CPU signature, the Windows version and the first letters
  * of the user and computer names ("80 EE", "80 EF"), checked against the
  * file "comap.dat" that the game's registration program writes ("80 EC",
- * "80 ED").  The platform facts come from the OS layer (OS_Version,
- * OS_CpuSignature, OS_UserName, OS_ComputerName).
+ * "80 ED").  The machine's facts are the host's (Host_Version,
+ * Host_CpuSignature, Host_UserName, Host_ComputerName).
  */
 #include "install_internal.h"
-#include "bgi/engine.h" // gNoDiscCheck
-#include "bgi/os.h"
+#include "bgi/engine.h" // o->engine.noDiscCheck
+#include "bgi/host.h"
+#include "bgi/fs.h"
+#include "bgi/core.h"
 
 /* A code for the Windows version: 0x1f Win32s, 0x5f / 0x62 / 0x63 Windows
  * 95 / 98 / ME, 3 / 4 NT 3 / 4, 0x7d0 / 0x7d1 2000 / XP, 0x1770 Vista and
  * later, 0 unknown.  Only OsKeyBits reads it. */
-static int OsVersionCode(void)
+static int OsVersionCode(OpenBGI_t* o)
 {
+	uint32_t ver[4];
+	char csd[0x80];
 	int platform, major, minor;
-	if(!OS_Version(&platform, &major, &minor))
-		return 0;
+	Host_Version(o, ver, csd, sizeof csd);
+	major = (int)ver[0];
+	minor = (int)ver[1];
+	platform = (int)ver[3];
 	switch(platform)
 	{
 		case 0: // Win32s
@@ -53,15 +59,15 @@ static int OsVersionCode(void)
 }
 
 // the low 12 bits of CPUID.1:EAX: stepping, model and family
-static uint32_t CpuSignature(void)
+static uint32_t CpuSignature(OpenBGI_t* o)
 {
-	return OS_CpuSignature() & 0xfffu;
+	return Host_CpuSignature(o) & 0xfffu;
 }
 
 // the Windows version as bits 12..15 of the key (0xf000 for an unknown version)
-static uint32_t OsKeyBits(void)
+static uint32_t OsKeyBits(OpenBGI_t* o)
 {
-	switch(OsVersionCode())
+	switch(OsVersionCode(o))
 	{
 		case 0x5f: return 0x1000;  // 95
 		case 0x62: return 0x2000;  // 98
@@ -80,47 +86,47 @@ static uint32_t OsKeyBits(void)
  * computer[0]: the CPU signature and the Windows version in the high
  * half, the first byte of the user name and of the computer name in the
  * low one (0 when a name is empty). */
-uint32_t GetMachineKey(void)
+uint32_t GetMachineKey(OpenBGI_t* o)
 {
 	char user[0x100], computer[0x100];
 	uint32_t key;
 	memset(user, 0, sizeof user);
 	memset(computer, 0, sizeof computer);
-	OS_UserName(user, sizeof user);
-	OS_ComputerName(computer, 0x10); // only 16 bytes of the computer name are asked for; the first is all that is used
-	key = CpuSignature() | OsKeyBits();
+	Host_UserName(o, user, sizeof user);
+	Host_ComputerName(o, computer, 0x10); // only 16 bytes of the computer name are asked for; the first is all that is used
+	key = CpuSignature(o) | OsKeyBits(o);
 	key = (key << 8) | (uint8_t)user[0];
 	key = (key << 8) | (uint8_t)computer[0];
 	return key;
 }
 
 // "80 EF": the machine key XOR x
-uint32_t GetMachineKeyXor(uint32_t x)
+uint32_t GetMachineKeyXor(OpenBGI_t* o, uint32_t x)
 {
-	return GetMachineKey() ^ x;
+	return GetMachineKey(o) ^ x;
 }
 
 /* "80 ED": the first 0x404 bytes of "comap.dat" in the current directory
  * into buf; 1 when the file could be opened (a shorter file fills less). */
-int ReadComapDat(void* buf)
+int ReadComapDat(OpenBGI_t* o, void* buf)
 {
-	OsFile_t* f = OS_FileOpenRead("comap.dat");
+	FsFile_t* f = Fs_FileOpenRead(o, "comap.dat");
 	if(!f)
 		return 0;
-	OS_FileRead(f, buf, 0x404);
-	OS_FileClose(f);
+	Fs_FileRead(f, buf, 0x404);
+	Fs_FileClose(f);
 	return 1;
 }
 
 /* comap.dat is valid when its first dword is the magic 0x33d4f19c and the
  * dword it selects, dword[1 + dword[0x128 / 4]], XOR dword[0x74 / 4]
  * equals the machine key.  1 when it is. */
-static int Registration_Verify(void)
+static int Registration_Verify(OpenBGI_t* o)
 {
 	uint8_t buf[0x408];
 	uint32_t magic, idx, key;
 	memset(buf, 0, sizeof buf);
-	if(!ReadComapDat(buf))
+	if(!ReadComapDat(o, buf))
 		return 0;
 	memcpy(&magic, buf, 4);
 	if(magic != 0x33d4f19cu)
@@ -134,7 +140,7 @@ static int Registration_Verify(void)
 		memcpy(&x, buf + 0x74, 4);
 		key ^= x;
 	}
-	return key == GetMachineKey();
+	return key == GetMachineKey(o);
 }
 
 /* "80 EC": whether the game is registered for this machine: 1 when
@@ -143,21 +149,21 @@ static int Registration_Verify(void)
  * missing or wrong and waits about ten seconds for it to write the file;
  * OpenBGI does not start Windows programs, so a missing registration is
  * simply 0, and the boot program then asks for the disc.
- * --no-disc-check (gNoDiscCheck) counts the game as registered without
- * looking at comap.dat.  Either outcome is said once on stderr. */
-int CheckRegistration(void)
+ * --no-disc-check (o->engine.noDiscCheck) counts the game as registered
+ * without looking at comap.dat.  Either outcome is said once on stderr. */
+int CheckRegistration(OpenBGI_t* o)
 {
-	static int said;
-	if(gNoDiscCheck)
+	int* said = &o->install.registrationSaid;
+	if(o->engine.noDiscCheck)
 	{
-		if(!said++)
-			fprintf(stderr, "bgi: the registration check (comap.dat) is skipped (--no-disc-check)\n");
+		if(!(*said)++)
+			fprintf(stderr, "openbgi: the registration check (comap.dat) is skipped (--no-disc-check)\n");
 		return 1;
 	}
-	if(Registration_Verify() == 1)
+	if(Registration_Verify(o) == 1)
 		return 1;
-	if(!said++)
-		fprintf(stderr, "bgi: the game is not registered for this machine (comap.dat), so it asks for its disc; "
+	if(!(*said)++)
+		fprintf(stderr, "openbgi: the game is not registered for this machine (comap.dat), so it asks for its disc; "
 						"--no-disc-check skips the check\n");
 	return 0;
 }

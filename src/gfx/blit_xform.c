@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * blit_xform.c - masks, wipes and the geometric blitters of the sprite
- * object (inc/bgi/gfx/bitmap.h):
+ * object (src/include/bgi/gfx/bitmap.h):
  *
  *   Blit_ApplyMask    copy a gray bitmap into the alpha channel
  *   Blit_GrayWipe     reveal through a gray pattern (sprite mode 3)
@@ -25,14 +25,7 @@
  * identical shifts and saturation.
  */
 #include <math.h>
-#include "bgi/gfx/bitmap.h"
-
-// pack a lane to a byte with unsigned saturation (packuswb)
-static inline uint8_t Sat8(int v)
-{
-	return (uint8_t)(v < 0 ? 0 : v > 255 ? 255
-										 : v);
-}
+#include "blit_internal.h"
 
 // pmullw + psraw 7 (products stay within 16 bits here)
 static inline int Mul7(int a, int w)
@@ -40,7 +33,6 @@ static inline int Mul7(int a, int w)
 	return (a * w) >> 7;
 }
 
-#define ROW(b, y)      ((b)->pixels + (size_t)(y) * (size_t)(b)->pitch)
 #define PIX32(b, x, y) (*(const uint32_t*)(ROW(b, y) + (size_t)(x) * 4))
 
 // ========================================================================
@@ -383,6 +375,50 @@ static void Xform_Sample(const Bmp_t* src, XformPos_t p, int lanes[4])
 	}
 }
 
+/* The same sample as one pixel (B, G, R, A from the lowest byte).  A
+ * position whose four pixels all lie inside the picture - nearly every
+ * one - is worked out several lanes to a word: each step of Xform_Sample is
+ * b + (((a - b) * (16 - f)) >> 4), which is (a * (16 - f) + b * f) >> 4
+ * (blit_internal.h), 4080 at most.  The others go through Xform_Sample;
+ * its lanes are bytes too, each lying between the pixels it mixes. */
+#if UINTPTR_MAX > 0xffffffffu
+#define LANES_4 0x00ff00ff00ff00ffull
+// the four bytes of a pixel 16 bits apart: blue and red in the low half of a 64-bit word, green and alpha in the high one
+static inline uint64_t Spread4(uint32_t x)
+{
+	return (x & LANES_RB) | ((uint64_t)((x >> 8) & LANES_RB) << 32);
+}
+#endif
+
+static inline uint32_t Xform_SamplePixel(const Bmp_t* src, XformPos_t p)
+{
+	int x = p.x >> 16, y = p.y >> 16;
+	if(x >= 0 && y >= 0 && x + 1 < src->w && y + 1 < src->h)
+	{
+		const uint32_t* top = (const uint32_t*)ROW(src, y) + x;
+		const uint32_t* low = (const uint32_t*)ROW(src, y + 1) + x;
+		uint32_t fx = (uint32_t)((p.x >> 12) & 15), gx = 16 - fx, fy = (uint32_t)((p.y >> 12) & 15), gy = 16 - fy;
+#if UINTPTR_MAX > 0xffffffffu
+		uint64_t t = ((Spread4(top[0]) * gx + Spread4(top[1]) * fx) >> 4) & LANES_4;
+		uint64_t l = ((Spread4(low[0]) * gx + Spread4(low[1]) * fx) >> 4) & LANES_4;
+		uint64_t v = ((t * gy + l * fy) >> 4) & LANES_4;
+		return (uint32_t)v | (uint32_t)(v >> 32) << 8;
+#else
+		uint32_t trb = (((top[0] & LANES_RB) * gx + (top[1] & LANES_RB) * fx) >> 4) & LANES_RB;
+		uint32_t tag = ((((top[0] >> 8) & LANES_RB) * gx + ((top[1] >> 8) & LANES_RB) * fx) >> 4) & LANES_RB;
+		uint32_t lrb = (((low[0] & LANES_RB) * gx + (low[1] & LANES_RB) * fx) >> 4) & LANES_RB;
+		uint32_t lag = ((((low[0] >> 8) & LANES_RB) * gx + ((low[1] >> 8) & LANES_RB) * fx) >> 4) & LANES_RB;
+		return (((trb * gy + lrb * fy) >> 4) & LANES_RB) | ((((tag * gy + lag * fy) >> 4) & LANES_RB) << 8);
+#endif
+	}
+	else
+	{
+		int s[4];
+		Xform_Sample(src, p, s);
+		return (uint32_t)s[0] | (uint32_t)s[1] << 8 | (uint32_t)s[2] << 16 | (uint32_t)s[3] << 24;
+	}
+}
+
 // nearest sample; 0 when outside (unsigned compare, so negatives fall out)
 static inline int Xform_Nearest(const Bmp_t* src, XformPos_t p, uint32_t* out)
 {
@@ -403,43 +439,23 @@ static inline int Xform_Nearest(const Bmp_t* src, XformPos_t p, uint32_t* out)
 #define XFORM_COLS(m, dst) \
 	for(p = rowStart, i = 0; i < (dst)->w; i++, p.x += (m).colX, p.y += (m).colY)
 
-// the blend step of Xform_Blend1: d + ((s - d) * inv) >> 8 on B, G, R; the top byte keeps d's
-static inline uint32_t BlendInv(uint32_t dv, const int s[4], int inv)
-{
-	uint32_t out = dv & 0xff000000u;
-	int i;
-	for(i = 0; i < 3; i++)
-	{
-		int dc = (int)((dv >> (8 * i)) & 0xff);
-		out |= (uint32_t)Sat8(dc + (((s[i] - dc) * inv) >> 8)) << (8 * i);
-	}
-	return out;
-}
-
-// RGB32 <- RGB32, blended by level with smooth (bilinear) or nearest sampling
+// RGB32 <- RGB32, blended by level with smooth (bilinear) or nearest sampling: d + ((s - d) * inv) >> 8 on B, G, R; the top byte keeps d's
 static void Xform_Blend1(Bmp_t* dst, const XformMap_t* m, const Bmp_t* src, int level, int smooth)
 {
-	int inv = 0x100 - level, i, j;
+	uint32_t inv = (uint32_t)(0x100 - level);
+	int i, j;
 	XformPos_t rowStart, p;
 	XFORM_ROWS(*m, dst)
 	{
 		uint32_t* d = (uint32_t*)ROW(dst, j);
 		XFORM_COLS(*m, dst)
 		{
-			int s[4];
+			uint32_t sv;
 			if(smooth)
-			{
-				Xform_Sample(src, p, s);
-			}
+				sv = Xform_SamplePixel(src, p);
 			else
-			{
-				uint32_t sv;
 				Xform_Nearest(src, p, &sv);
-				s[0] = (int)(sv & 0xff);
-				s[1] = (int)((sv >> 8) & 0xff);
-				s[2] = (int)((sv >> 16) & 0xff);
-			}
-			d[i] = BlendInv(d[i], s, inv);
+			d[i] = (d[i] & 0xff000000u) | Lerp8(d[i], sv, inv);
 		}
 	}
 }
@@ -449,41 +465,23 @@ static void Xform_Blend1(Bmp_t* dst, const XformMap_t* m, const Bmp_t* src, int 
  * are left alone */
 static void Xform_Blend2(Bmp_t* dst, const XformMap_t* m, const Bmp_t* src, int level, int smooth)
 {
-	int inv = 0x100 - level, i, j, k;
+	uint32_t inv = (uint32_t)(0x100 - level);
+	int i, j;
 	XformPos_t rowStart, p;
 	XFORM_ROWS(*m, dst)
 	{
 		uint32_t* d = (uint32_t*)ROW(dst, j);
 		XFORM_COLS(*m, dst)
 		{
-			int s[4], a7, w;
-			uint32_t dv, out;
+			uint32_t sv, a7;
 			if(smooth)
-			{
-				Xform_Sample(src, p, s);
-				a7 = Sat8(s[3]) >> 1; // packuswb, then alpha >> 1
-			}
-			else
-			{
-				uint32_t sv;
-				if(!Xform_Nearest(src, p, &sv))
-					continue;
-				s[0] = (int)(sv & 0xff);
-				s[1] = (int)((sv >> 8) & 0xff);
-				s[2] = (int)((sv >> 16) & 0xff);
-				a7 = (int)(sv >> 25);
-			}
+				sv = Xform_SamplePixel(src, p);
+			else if(!Xform_Nearest(src, p, &sv))
+				continue;
+			a7 = sv >> 25;
 			if(!a7)
 				continue;
-			w = (a7 * inv) >> 8;
-			dv = d[i];
-			out = dv & 0xff000000u;
-			for(k = 0; k < 3; k++)
-			{
-				int dc = (int)((dv >> (8 * k)) & 0xff);
-				out |= (uint32_t)Sat8(dc + Mul7(s[k] - dc, w)) << (8 * k);
-			}
-			d[i] = out;
+			d[i] = (d[i] & 0xff000000u) | Lerp7(d[i], sv, (a7 * inv) >> 8);
 		}
 	}
 }
@@ -525,15 +523,9 @@ int Blit_Xform(Bmp_t* dst, int32_t x16, int32_t y16, const Bmp_t* src, int32_t c
 				XFORM_COLS(m, dst)
 				{
 					if(smooth)
-					{
-						int s[4];
-						Xform_Sample(src, p, s);
-						d[i] = (uint32_t)Sat8(s[0]) | (uint32_t)Sat8(s[1]) << 8 | (uint32_t)Sat8(s[2]) << 16 | (uint32_t)Sat8(s[3]) << 24;
-					}
+						d[i] = Xform_SamplePixel(src, p);
 					else
-					{
 						Xform_Nearest(src, p, &d[i]);
-					}
 				}
 			}
 		}
@@ -614,27 +606,14 @@ int Blit_XformCopy(Bmp_t* dst, int32_t x16, int32_t y16, const Bmp_t* src, int32
 		uint32_t* d = (uint32_t*)ROW(dst, j);
 		XFORM_COLS(m, dst)
 		{
-			int s[4];
+			uint32_t sv;
 			if(smooth)
-			{
-				Xform_Sample(src, p, s);
-			}
+				sv = Xform_SamplePixel(src, p);
 			else
-			{
-				uint32_t sv;
 				Xform_Nearest(src, p, &sv);
-				s[0] = (int)(sv & 0xff);
-				s[1] = (int)((sv >> 8) & 0xff);
-				s[2] = (int)((sv >> 16) & 0xff);
-				s[3] = (int)(sv >> 24);
-			}
-			if(level)
-			{ // colour * inv >> 8, alpha unchanged
-				s[0] = (s[0] * inv) >> 8;
-				s[1] = (s[1] * inv) >> 8;
-				s[2] = (s[2] * inv) >> 8;
-			}
-			d[i] = (uint32_t)Sat8(s[0]) | (uint32_t)Sat8(s[1]) << 8 | (uint32_t)Sat8(s[2]) << 16 | (uint32_t)Sat8(s[3]) << 24;
+			if(level) // colour * inv >> 8, alpha unchanged
+				sv = (sv & 0xff000000u) | Scale3(sv, (uint32_t)inv, 8);
+			d[i] = sv;
 		}
 	}
 	return 0;
