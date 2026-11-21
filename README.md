@@ -137,6 +137,10 @@ To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md) and
 * minirop
 * Galladite
 * txt231
+* Wenni
+* 56se
+* makoroviz
+* Funix
 
 ### Honourable Mentions
 
