@@ -62,7 +62,7 @@ The games we have been working on, with the engine build each one needs
 | Itsuka, Todoku, Ano Sora ni. | `ItsukaTodokuAnoSorani` | 1.66 | Very playable |
 | Tayutama -Kiss on my Deity- (trial; the reference build) | `Tayutama` | 1.69 build 444 | Very playable |
 | Tayutama -Kiss on my Deity- | `Tayutama` | 1.69 build 451 | Very playable |
-| D.C. \~Da Capo\~ (English edition) | `DCENG` | 1.69 build 461 | Mostly playable |
+| D.C. \~Da Capo\~ (English edition) | `DCENG` | 1.69 build 461 | Very playable |
 | Tayutama -It's happy days- | `TayutamaHD` | 1.69 build 472 | Very playable |
 | Kira Kira Curtain Call (English edition) | `KiraKiraCurtainCallENG` | 1.492 | Mostly playable |
 | Prism Rhythm | `PrismRhythm` | 1.494 | Very playable |
