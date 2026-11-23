@@ -71,6 +71,7 @@ The games we have been working on, with the engine build each one needs
 | Gakuou -It's Heartful Days!!- | `Gackoh_HD` | 1.547 | Very playable |
 | Hanairo Heptagram | `HanairoHeptagram` | 1.553 | Very playable |
 | Magical Charming! | `MagicalCharming!` | 1.573 | Very playable |
+| Green Green Overdrive Edition | `GreenGreen` | 1.584 | Playable, some very minor visual glitches |
 | Sekai to Sekai no Mannaka de | `SekaiToSekaiNoMannakaDe` | 1.588 | Very playable |
 | Unmei Senjou no Phi | `UnmeisenjouNoPhi` | 1.599 | Very playable |
 | Kodomo no Asobi | `KodomoNoAsobi` | 1.616 | Very playable |
