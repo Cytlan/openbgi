@@ -28,6 +28,14 @@ static int EffCurrent(OpenBGI_t* o, Bmp_t* out, int no, int gen)
 	return BmpMgr_GetInfo(o->gfx.dispBmpMgr, out, no) && BmpMgr_Generation(o->gfx.dispBmpMgr, no) == gen;
 }
 
+// narrow a vector map to the snapshot's size, keeping its top-left corner
+static void EffCropToSnap(const Effector_t* e, Bmp_t* map)
+{
+	Rect_t r = {0, 0, e->snap.w - 1, e->snap.h - 1};
+	if(map->w > e->snap.w || map->h > e->snap.h)
+		Bmp_Crop(map, &r);
+}
+
 /* "91 60": DispObj(6, slotId), put on the list, with a screen-sized
  * snapshot buffer, in gradient mode with type 0, level 0 and priority 0 */
 void Effector_Ctor(OpenBGI_t* o, Effector_t* e, int slotId)
@@ -102,6 +110,9 @@ static void Effector_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t
 				return;
 			if(e->vec2 != -1 && !EffCurrent(o, &v2, e->vec2, e->vec2Gen))
 				return;
+			EffCropToSnap(e, &v1); // 1.529 on a map may be larger than the screen: its top-left part is used
+			if(e->vec2 != -1)
+				EffCropToSnap(e, &v2);
 			Blit_Displace(dst, &e->snap, &v1, e->vec2 != -1 ? &v2 : NULL, level, e->amount);
 			break;
 		case 1:
@@ -122,24 +133,32 @@ static void Effector_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t
 	}
 }
 
+static int EffVecSizeOk(OpenBGI_t* o, const Bmp_t* map, const Bmp_t* back)
+{
+	if(o->engine.profile->gen >= GEN_1_529)
+		return map->w >= back->w && map->h >= back->h;
+	return map->w == back->w && map->h == back->h;
+}
+
 /* "91 65", mode 0: displacement through one or two screen-sized vector
  * maps (pixel mode 4), mixed by the level; `amount` is passed to
  * Blit_Displace (non-zero samples bilinearly); vec2 -1 = none.  0 ok,
  * 0x80000001 / 0x80000002 no such bitmap, 0x80000003 / 0x80000004 not a
- * vector map of the screen's size (vec1 / vec2). */
+ * vector map of the screen's size (vec1 / vec2).  Up to 1.494 the size
+ * must be the screen's; 1.529 on takes any map at least that large. */
 int Effector_SetVector(OpenBGI_t* o, Effector_t* e, int vec1, int vec2, int level, int amount, int prio)
 {
 	Bmp_t back, info;
 	Gfx_GetBackBmp(o, &back);
 	if(!BmpMgr_GetInfo(o->gfx.dispBmpMgr, &info, vec1))
 		return (int)0x80000001;
-	if(info.mode != 4 || info.w != back.w || info.h != back.h)
+	if(info.mode != 4 || !EffVecSizeOk(o, &info, &back))
 		return (int)0x80000003;
 	if(vec2 != -1)
 	{
 		if(!BmpMgr_GetInfo(o->gfx.dispBmpMgr, &info, vec2))
 			return (int)0x80000002;
-		if(info.mode != 4 || info.w != back.w || info.h != back.h)
+		if(info.mode != 4 || !EffVecSizeOk(o, &info, &back))
 			return (int)0x80000004;
 	}
 	Effector_FreeTable(e);

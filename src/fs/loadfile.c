@@ -556,7 +556,13 @@ int Dir_Exists(OpenBGI_t* o, const char* dir, const char* name)
 int FileExists(OpenBGI_t* o, const char* arc, const char* name)
 {
 	char path[0x104];
-	int r = Dir_Exists(o, o->files.baseDir, name);
+	int r;
+	if(!arc && (name[0] == '\\' || (name[0] && name[1] == ':')))
+	{ // an absolute name is looked up as it is, not in the base directory
+		uint32_t a = Fs_FileAttrs(o, name);
+		return (int)(((~a) >> 4) & 1);
+	}
+	r = Dir_Exists(o, o->files.baseDir, name);
 	if(!arc)
 		return r ? r : Dir_Exists(o, o->files.altDir, name);
 	if(r)
