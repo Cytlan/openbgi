@@ -184,6 +184,11 @@ static uint32_t DecodedLimit(OpenBGI_t* o)
 	return 0x4000000u;     // 64 MB from 1.529
 }
 
+uint32_t LoadFile_BufferSize(OpenBGI_t* o)
+{
+	return o->engine.profile->gen >= GEN_1_69_472 ? DecodedLimit(o) : 0x2000000u; // (the builds before have no limit: 32 MB buffers)
+}
+
 // n bytes for a file as stored, with a zeroed tail so that the header tests never read past the data
 static uint8_t* RawAlloc(uint32_t n)
 {
@@ -225,7 +230,10 @@ static int DecodeRange(OpenBGI_t* o, void* dst, const uint8_t* src, uint32_t src
 		const CbgHeader_t* h = (const CbgHeader_t*)src;
 		uint32_t bpp = h->bpp & 0xffffu;
 		uint8_t* to;
-		total = 0x10u + (uint32_t)h->width * h->height * (bpp == 24 ? 4 : bpp >> 3);
+		uint64_t pixels = (uint64_t)h->width * h->height * (bpp == 24 ? 4 : bpp >> 3);
+		if(0x10u + pixels > DecodedLimit(o))
+			return 6; // a picture that would not fit the load buffers
+		total = 0x10u + (uint32_t)pixels;
 		direct = dst && off == 0 && size == 0;
 		to = direct ? (uint8_t*)dst : (tmp = (uint8_t*)BGI_Calloc(total));
 		if(BGI_CbgDecode(src, to) != 0)

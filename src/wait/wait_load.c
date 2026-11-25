@@ -6,7 +6,8 @@
  *
  * Interface: waitobj.h (the constructors).
  *
- *   WaitLoader     base: a file read by the loader thread into a 32 MB buffer
+ *   WaitLoader     base: a file read by the loader thread into a buffer of
+ *                  the build's load limit (LoadFile_BufferSize: 32 .. 64 MB)
  *   WaitBmpLoad    "90 10": the file becomes a bitmap slot; pushes nothing
  *   WaitSeLoad     "A0 20" / "A0 21": the file becomes a sound effect slot;
  *                  pushes nothing
@@ -35,7 +36,7 @@
 typedef struct WaitLoader // 0x238 bytes
 {
 	Wait_t w;         // (WaitCounted)
-	uint8_t* buf;     // 32 MB file buffer
+	uint8_t* buf;     // the file buffer (LoadFile_BufferSize bytes)
 	char arc[0x104];  // lower-cased archive name ("" for none)
 	char name[0x104]; // lower-cased file name
 	uint32_t status;  // loader status: 0 pending, -1 failed, else the size in bytes
@@ -92,7 +93,7 @@ static void WaitLoader_Ctor(OpenBGI_t* o, WaitLoader_t* w, Thread_t* t, const ch
 	strcpy(w->name, name);
 	SjisStrLwr(o, w->name);
 	w->useCache = useCache && o->files.fileCache != NULL;
-	w->buf = (uint8_t*)BGI_Alloc(0x2000000);
+	w->buf = (uint8_t*)BGI_Alloc(LoadFile_BufferSize(o));
 	if(w->useCache)
 	{
 		w->cacheHit = FileCache_Lookup(o, o->files.fileCache, w->buf, &w->status, ARC_ARG(w), w->name) != 0;

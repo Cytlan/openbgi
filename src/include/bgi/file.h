@@ -225,6 +225,11 @@ void Loader_Stop(OpenBGI_t* o);
  * CompressedBG.  Returns the size in buf.  Prompts for the disc while the
  * file is missing; throws when the user gives up (or without a disc). */
 uint32_t LoadFile(OpenBGI_t* o, void* buf, const char* arc, const char* name);
+/* The bytes a buffer for LoadFile needs when the file's size is not asked
+ * for first: the largest file the build loads (32 MB up to 1.69 build
+ * 451, then 40, 48 and, from 1.529 on, 64 MB).  The original's own load
+ * buffers have this size. */
+uint32_t LoadFile_BufferSize(OpenBGI_t* o);
 /* "80 31" up to 1.69 build 444, "81 30" of 1.529 on: part of a file as
  * stored; 0 ok, 1 not found, 2 the range reaches past the end, 3 the size
  * exceeds the file, -1 short read */

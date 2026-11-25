@@ -804,7 +804,7 @@ static void Engine_DetectVersion(OpenBGI_t* o)
 	DetectResult_t r;
 
 	GetBootProgram(o, arc, file);
-	buf = (uint8_t*)BGI_Alloc(0x2000000); // a 32 MB scratch buffer, as the engine's own file-size probe uses
+	buf = (uint8_t*)BGI_Alloc(LoadFile_BufferSize(o)); // a scratch buffer of the load limit, as the engine's own file-size probe uses
 	if(BGI_TRY(o, frame))
 	{
 		n = LoadFile(o, buf, strcmp(arc, ".") == 0 ? NULL : arc, file);

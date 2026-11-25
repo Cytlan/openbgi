@@ -31,7 +31,7 @@
 #include "bgi/vm.h"
 #include "bgi/core.h"
 
-#define LOAD_BUFFER 0x2000000 // 32 MB: the engine's load buffer
+#define LOAD_BUFFER 0x2000000 // 32 MB: the buffer of "92 1F"
 
 /* "90 10": load an image file into a slot.  The loader's cache is consulted
  * first; a Windows BMP is decoded directly, anything else must be a raw
@@ -43,7 +43,7 @@
  * this code. */
 int BmpOp_LoadFile(OpenBGI_t* o, int slot, const char* arc, const char* name)
 {
-	uint8_t* buf = (uint8_t*)Vm_TempAlloc(o, LOAD_BUFFER); // the load may ask for the disc
+	uint8_t* buf = (uint8_t*)Vm_TempAlloc(o, LoadFile_BufferSize(o)); // the load may ask for the disc
 	uint32_t size = 0;
 	int r;
 
