@@ -210,7 +210,9 @@ void SetDisplayMode(OpenBGI_t* o, int sizeIdx, int pixelMode, int fullscreen)
 	o->display.pixelMode = pixelMode;
 	o->display.fullscreen = fullscreen;
 	Gfx_Resize(o, o->gfx.gfx, picW, picH, pixelMode, letterbox, modeW, modeH, o->display.aspectClass);
-	MainWin_CursorShow(o, Cursor_IsShown(o)); // the mode switch resets the cursor count
+	/* (the 1.69 original forces the system's ShowCursor count back to 0 or
+	 * -1 here; a host's count is not changed by a mode switch, so another
+	 * call would only add to it) */
 	o->display.inSetDisplayMode = 0;
 }
 

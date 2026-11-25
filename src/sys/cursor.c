@@ -93,9 +93,15 @@ static int Move_Interp(int delta, int curve, uint32_t step, uint32_t steps)
 
 // ---- auto-hide ("B0 05") ----------------------------------------------
 
-// show or hide the system cursor (the host's window keeps the show count)
+/* show or hide the system cursor for the auto-hide (the host's window
+ * keeps the show count): the host is told only when the auto-hide's own
+ * hide is taken or given back, so that the count never drifts (the
+ * original forces the count to 0 or -1 instead) */
 static void CursorShowSys(OpenBGI_t* o, int show)
 {
+	if(o->cursor.hideHeld == !show)
+		return;
+	o->cursor.hideHeld = !show;
 	MainWin_CursorShow(o, show);
 }
 

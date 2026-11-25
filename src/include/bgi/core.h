@@ -582,6 +582,7 @@ struct OpenBGI
 		int mvCancelOnMove;   // stop when the user moves the mouse
 		int hideEnabled;      // auto-hide is on
 		int hideShown;        // the cursor is currently shown by the auto-hide
+		int hideHeld;         // the auto-hide's hide is on the host's count
 		uint32_t hideDelay;   // ms of rest before the cursor is hidden
 		uint32_t hideAt;      // the tick at which it will be hidden
 		int hideLast[2];      // the position last seen (0x80000000: none yet)

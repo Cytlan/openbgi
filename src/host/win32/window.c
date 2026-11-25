@@ -1065,7 +1065,7 @@ void OS_CursorSetShape(int shape)
 	gWin32CursorShape = (shape >= 0 && shape < 5) ? shape : 0;
 }
 
-// ShowCursor(TRUE / FALSE): the system counts the calls; src/sys/cursor.c keeps its own shown flag and calls this when it flips (and again after a mode switch, which resets the count)
+// ShowCursor(TRUE / FALSE): the system counts the calls; src/sys/cursor.c keeps its own shown flags and calls this when one flips
 void OS_CursorShow(int show)
 {
 	ShowCursor(show != 0);
