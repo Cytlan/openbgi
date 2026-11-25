@@ -456,3 +456,37 @@ int BfMovie_DecodeFrame(const void* data, uint32_t size, uint32_t frame, uint8_t
 	BGI_Free(pixels);
 	return 1;
 }
+
+// ---- a streamed movie read frame by frame (bfmovie.h) ---------------------------------
+
+uint32_t BfMovie_StreamedHeadSize(const void* header)
+{
+	const BfMovieHeader_t* h = (const BfMovieHeader_t*)header;
+	if(memcmp(h->magic, BFMOVIE_MAGIC, 16) != 0 || !IsStreamed(h) || h->frames > (0xffffffffu - STREAMED_OFFSETS) / 4)
+		return 0;
+	return STREAMED_OFFSETS + h->frames * 4;
+}
+
+int BfMovie_StreamedRange(const void* head, uint32_t headSize, uint32_t fileSize, uint32_t frame, uint32_t* off, uint32_t* len)
+{
+	const BfMovieHeader_t* h = (const BfMovieHeader_t*)head;
+	const uint32_t* offset;
+	uint32_t start, end;
+	if(headSize < 0x40 || BfMovie_StreamedHeadSize(head) != headSize || frame >= h->frames)
+		return 0;
+	offset = Offsets(h);
+	start = offset[frame];
+	end = frame + 1 < h->frames ? offset[frame + 1] : fileSize;
+	if(start >= fileSize || end > fileSize || end <= start)
+		return 0;
+	*off = start;
+	*len = end - start;
+	return 1;
+}
+
+int BfMovie_DecodeStreamed(const void* head, uint32_t headSize, const uint8_t* frame, uint32_t len, uint8_t* dst, int pitch)
+{
+	if(headSize < 0x40 || BfMovie_StreamedHeadSize(head) != headSize)
+		return 0;
+	return StreamedFrame((const BfMovieHeader_t*)head, frame, len, dst, pitch);
+}

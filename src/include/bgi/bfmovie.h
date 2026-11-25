@@ -81,6 +81,23 @@ int BfMovie_CanDecode(const void* data); // 1 for the types BfMovie_DecodeFrame 
  * malformed. */
 int BfMovie_DecodeFrame(const void* data, uint32_t size, uint32_t frame, uint8_t* dst, int pitch);
 
+/* A streamed movie whose frames stay in the file ("92 F1" with its flag
+ * set): only the head is kept - the 0x40 header bytes, the quantisation
+ * tables and the frame offsets, 0xC0 + 4 * frames bytes -, and each frame
+ * is read when it is decoded.
+ *
+ * BfMovie_StreamedHeadSize: the head's size from the file's first 0x40
+ * bytes; 0 when they are not the header of a streamed movie (the magic,
+ * type 0x10000 or 0x10001).
+ * BfMovie_StreamedRange: where frame `frame` lies in a file of fileSize
+ * bytes - it runs to the next frame's offset, the last one to the end of
+ * the file; 0 for a frame that is not there or lies outside the file.
+ * BfMovie_DecodeStreamed: decode the `len` bytes of a frame into dst, as
+ * BfMovie_DecodeFrame does. */
+uint32_t BfMovie_StreamedHeadSize(const void* header);
+int BfMovie_StreamedRange(const void* head, uint32_t headSize, uint32_t fileSize, uint32_t frame, uint32_t* off, uint32_t* len);
+int BfMovie_DecodeStreamed(const void* head, uint32_t headSize, const uint8_t* frame, uint32_t len, uint8_t* dst, int pitch);
+
 /* The encoder of the archive tools (bfmovieenc.c): a movie of type 0 is
  * built from its pictures, one BfMovieEnc_AddFrame per frame in order -
  * `pixels` holds height rows of `pitch` bytes, a pixel being 4 bytes (blue,

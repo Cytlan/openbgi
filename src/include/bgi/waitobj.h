@@ -99,6 +99,8 @@ Wait_t* WaitSeMem_New(OpenBGI_t* o, struct Thread* t, int slot, const void* data
 // 1.69/472 on: "90 F4" (pushes 0 ok / 1 / 2 not a movie) and the deferred "90 F6" (pushes 0 / 3 / 5 / 8)
 Wait_t* WaitSeqLoad_New(OpenBGI_t* o, struct Thread* t, const char* arc, const char* name, int32_t* outNo, int32_t* info);
 Wait_t* WaitSeqDecode_New(OpenBGI_t* o, struct Thread* t, int bmpNo, int no, uint32_t frame);
+// "92 F1" with its flag set: a streamed movie whose frames stay in the file (pushes 0 ok / 1 no name / 2 not a streamed movie)
+Wait_t* WaitSeqOpen_New(OpenBGI_t* o, struct Thread* t, const char* arc, const char* name, int32_t* outNo, int32_t* info);
 
 /* "B0 08" (src/wait/wait_quake.c): the screen quake.  Allocates the wait
  * into *out before validating the parameters (as the original does; the

@@ -13,13 +13,17 @@
 #include "bgi/gfx/bmseq.h"
 #include "bgi/gfx/bmpmgr.h"
 #include "bgi/bfmovie.h"
+#include "bgi/file.h"
 #include "bgi/core.h"
 
 typedef struct BmSeq
 {
 	int32_t no;         // the number the scripts use (from o->bmseq.counter)
-	uint8_t* data;      // a copy of the file (shared with the clone)
+	uint8_t* data;      // a copy of the file, or of its head when the frames stay in the file (shared with the clone)
 	uint32_t size;      // bytes of data
+	char* arc;          // the frames stay in the file: its archive (NULL: a loose file) and name, in one block
+	char* name;         // .. with data (NULL: the whole file is in data)
+	uint32_t fileSize;  // .. and its size
 	int32_t cloneOf;    // the record this one was cloned from (0: none)
 	int32_t clone;      // the clone made of this one (0: none)
 	struct BmSeq* next; // the list, newest first
@@ -50,6 +54,39 @@ uint32_t BmSeq_Register(OpenBGI_t* o, const void* data, uint32_t size, int32_t* 
 	s->data = (uint8_t*)BGI_Alloc(size);
 	memcpy(s->data, data, size);
 	s->size = size;
+	s->next = o->bmseq.list;
+	o->bmseq.list = s;
+	*outNo = s->no;
+	info[0] = (int32_t)h->width;
+	info[1] = (int32_t)h->height;
+	info[2] = (int32_t)h->mode;
+	info[3] = (int32_t)h->fps;
+	info[4] = (int32_t)h->frames;
+	return 0;
+}
+
+uint32_t BmSeq_RegisterStreamed(OpenBGI_t* o, const void* head, uint32_t headSize, const char* arc, const char* name, uint32_t fileSize,
+	int32_t* outNo, int32_t info[5])
+{
+	const BfMovieHeader_t* h = (const BfMovieHeader_t*)head;
+	size_t arcLen = arc ? strlen(arc) + 1 : 0, nameLen = strlen(name) + 1;
+	BmSeq_t* s;
+	if(headSize < 0x40 || BfMovie_StreamedHeadSize(head) != headSize)
+		return 0x80000002u;
+	s = (BmSeq_t*)BGI_Alloc(sizeof *s);
+	memset(s, 0, sizeof *s);
+	s->no = ++o->bmseq.counter;
+	s->data = (uint8_t*)BGI_Alloc(headSize + arcLen + nameLen); // the head, then the two names
+	memcpy(s->data, head, headSize);
+	s->size = headSize;
+	s->name = (char*)s->data + headSize;
+	memcpy(s->name, name, nameLen);
+	if(arc)
+	{
+		s->arc = s->name + nameLen;
+		memcpy(s->arc, arc, arcLen);
+	}
+	s->fileSize = fileSize;
 	s->next = o->bmseq.list;
 	o->bmseq.list = s;
 	*outNo = s->no;
@@ -100,6 +137,9 @@ uint32_t BmSeq_Clone(OpenBGI_t* o, int32_t no, int32_t* outNo)
 	c->no = ++o->bmseq.counter;
 	c->data = s->data;
 	c->size = s->size;
+	c->arc = s->arc;
+	c->name = s->name;
+	c->fileSize = s->fileSize;
 	c->cloneOf = no;
 	c->next = o->bmseq.list;
 	o->bmseq.list = c;
@@ -109,7 +149,8 @@ uint32_t BmSeq_Clone(OpenBGI_t* o, int32_t no, int32_t* outNo)
 }
 
 /* Decode frame `frame` of movie `no` into bitmap slot bmpNo, which must
- * hold a 32-bit bitmap of the movie's width, height and pixel mode.  0 ok,
+ * hold a 32-bit bitmap of the movie's width, height and pixel mode.  The
+ * frame of a movie that stays in its file is read from there first.  0 ok,
  * 0x80000003 no such number, 0x80000004 no such frame, 0x80000005 the
  * slot does not match, 0x8000000A a movie of an unknown type, 0x80000008
  * the decoder failed. */
@@ -128,6 +169,18 @@ uint32_t BmSeq_Decode(OpenBGI_t* o, int bmpNo, int32_t no, uint32_t frame)
 		return 0x80000005u;
 	if(!BfMovie_CanDecode(s->data))
 		return 0x8000000au;
+	if(s->name)
+	{ // the frame is read from the file (as stored, without the disc prompt) and decoded from there
+		uint32_t off, len;
+		uint8_t* buf;
+		int ok;
+		if(!BfMovie_StreamedRange(s->data, s->size, s->fileSize, frame, &off, &len))
+			return 0x80000008u;
+		buf = (uint8_t*)BGI_Alloc(len);
+		ok = LoadFileRange(o, buf, s->arc, s->name, off, len) == 0 && BfMovie_DecodeStreamed(s->data, s->size, buf, len, b.pixels, b.pitch);
+		BGI_Free(buf);
+		return ok ? 0 : 0x80000008u;
+	}
 	if(!BfMovie_DecodeFrame(s->data, s->size, frame, b.pixels, b.pitch))
 		return 0x80000008u; // (the pool's "decode failed")
 	return 0;

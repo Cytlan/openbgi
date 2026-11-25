@@ -19,7 +19,7 @@ record may have one clone that shares its data under a second number.
 | `90 F6` | `bmp, no, frame -> r` | Decodes the frame into the slot: 0 OK, 3 no such number, 4 no such frame, 5 the slot's size or pixel mode differs |
 | `90 F7` | `no, &out -> r` | A clone under a new number: 0 OK, 3, 7 already cloned |
 | `80 53` | | The next `90 F6` runs inside a wait object, which pushes the result: 0, 3, 5, 8 decode failed |
-| `92 F1` | `&no, &info, name, arc, streamed` | `90 F4` with a flag for the streamed form; the whole file is loaded either way |
+| `92 F1` | `&no, &info, name, arc, streamed` | `90 F4` with a flag. Flag 0: as `90 F4`. Flag set: the file must be a streamed movie (type 0x10000 or 0x10001); only its header, quantisation tables and frame offsets are read, and `90 F6` reads each frame from the file. The wait pushes 0 OK, 1 no name, 2 not a streamed movie. |
 | `92 F0` | `arc, name, x, y, w, h -> length` | A movie in a common format played from an archive entry |
 
 The scripts drive playback themselves: they call `80 53` + `90 F6` for

@@ -15,6 +15,9 @@
  *                  sequence record; pushes 0 ok / 1 / 2 not a movie
  *   WaitSeqDecode  "90 F6" after "80 53": the frame is decoded on the next
  *                  pass instead of at once; pushes 0 / 3 / 5 / 8
+ *   WaitSeqOpen    "92 F1" with its flag set: a streamed BF_Movie becomes a
+ *                  record that reads its frames from the file; pushes 0 / 1
+ *                  / 2 (not a WaitLoader: the file is not loaded)
  *
  * The constructor lower-cases both names, consults the file cache when the
  * caller allows it and queues the read; poll() waits for the loader's status
@@ -31,6 +34,7 @@
 #include "bgi/strutil.h"
 #include "bgi/gfx/bmpops.h"
 #include "bgi/gfx/bmseq.h"
+#include "bgi/bfmovie.h"
 #include "bgi/core.h"
 
 typedef struct WaitLoader // 0x238 bytes
@@ -428,6 +432,91 @@ Wait_t* WaitSeqDecode_New(OpenBGI_t* o, Thread_t* t, int bmpNo, int no, uint32_t
 	return &w->w;
 }
 
+/* "92 F1" with its flag set: a streamed movie is opened, not loaded.  The
+ * original reads the file's first 0x40 bytes, then the quantisation tables
+ * and the frame offsets, in two jobs of the loader thread, and makes the
+ * record of them; a frame is read from the file when it is decoded.  Here
+ * both reads happen on the first poll.  The result is pushed when the wait
+ * is released: 0 ok, 1 no file name, 2 not a streamed movie (a movie of
+ * type 0 is refused as well) or its head cannot be read. */
+typedef struct WaitSeqOpen
+{
+	Wait_t w;        // (WaitCounted)
+	char* arc;       // copies of the names (arc NULL: a loose file; name NULL: none was given)
+	char* name;
+	int32_t* outNo;  // receives the sequence number
+	int32_t* info;   // five words: width, height, mode, rate, frames
+	uint32_t result; // the code to push
+} WaitSeqOpen_t;
+
+static char* CopyName(const char* s)
+{
+	char* c = NULL;
+	if(s)
+	{
+		c = (char*)BGI_Alloc(strlen(s) + 1);
+		strcpy(c, s);
+	}
+	return c;
+}
+
+static void WaitSeqOpen_Destroy(OpenBGI_t* o, Wait_t* base)
+{
+	WaitSeqOpen_t* w = (WaitSeqOpen_t*)base;
+	Thread_Push(base->thread, w->result);
+	BGI_Free(w->arc);
+	BGI_Free(w->name);
+	WaitCount_Dec(o);
+	WaitCounted_Dtor(o, base);
+	BGI_Free(base);
+}
+
+// read the head and register the movie; 0 ok, 2 otherwise
+static uint32_t SeqOpen(OpenBGI_t* o, WaitSeqOpen_t* w)
+{
+	uint8_t header[0x40], *head;
+	uint32_t headSize, fileSize, r;
+	if(LoadFileRange(o, header, w->arc, w->name, 0, sizeof header) != 0)
+		return 2;
+	headSize = BfMovie_StreamedHeadSize(header);
+	fileSize = GetFileSizeFast(o, w->arc, w->name);
+	if(headSize == 0 || headSize > fileSize)
+		return 2;
+	head = (uint8_t*)BGI_Alloc(headSize);
+	memcpy(head, header, sizeof header);
+	r = 2;
+	if(LoadFileRange(o, head + sizeof header, w->arc, w->name, sizeof header, headSize - (uint32_t)sizeof header) == 0 &&
+		BmSeq_RegisterStreamed(o, head, headSize, w->arc, w->name, fileSize, w->outNo, w->info) == 0)
+		r = 0;
+	BGI_Free(head);
+	return r;
+}
+
+static int WaitSeqOpen_Poll(OpenBGI_t* o, Wait_t* base)
+{
+	WaitSeqOpen_t* w = (WaitSeqOpen_t*)base;
+	Wait_Tick(o, base);
+	w->result = w->name ? SeqOpen(o, w) : 1;
+	return 1;
+}
+
+static const WaitVtbl_t WaitSeqOpen_Vtbl = {WaitSeqOpen_Destroy, WaitSeqOpen_Poll, Wait_SetTimer, Wait_IsDirtyBase, Wait_OnMessage};
+
+// open the streamed BF_Movie file `name` of archive `arc` (NULL: a loose file) and register it ("92 F1" with its flag set)
+Wait_t* WaitSeqOpen_New(OpenBGI_t* o, Thread_t* t, const char* arc, const char* name, int32_t* outNo, int32_t* info)
+{
+	WaitSeqOpen_t* w = (WaitSeqOpen_t*)BGI_Alloc(sizeof *w);
+	WaitCounted_Ctor(o, &w->w, t);
+	WaitCount_Inc(o);
+	w->w.vt = &WaitSeqOpen_Vtbl;
+	w->arc = CopyName(arc);
+	w->name = CopyName(name);
+	w->outNo = outNo;
+	w->info = info;
+	w->result = 1;
+	return &w->w;
+}
+
 // the name of a wait class of this file, for the debugger (NULL: not one of these)
 const char* WaitLoad_ClassName(const WaitVtbl_t* vt)
 {
@@ -439,5 +528,7 @@ const char* WaitLoad_ClassName(const WaitVtbl_t* vt)
 		return "WaitSeqLoad";
 	if(vt == &WaitSeqDecode_Vtbl)
 		return "WaitSeqDecode";
+	if(vt == &WaitSeqOpen_Vtbl)
+		return "WaitSeqOpen";
 	return NULL;
 }

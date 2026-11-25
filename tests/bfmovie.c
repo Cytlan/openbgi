@@ -659,6 +659,91 @@ static void TestStreamed(OpenBGI_t* o)
 	CHECK(BlockIs(pix, 64, 16, 8, 0, 156, 135, 138, 0) && BlockIs(pix, 64, 16, 8, 1, 133, 133, 133, 0));
 }
 
+// poll a wait as the scheduler would until it reports done, release it, and give what it pushed
+static uint32_t RunWait(OpenBGI_t* o, Thread_t* t, Wait_t* w)
+{
+	int polls, r;
+	t->sp = 0;
+	for(polls = 0, r = 0; r == 0 && polls < 2000; polls++)
+	{
+		r = w->vt->poll(o, w);
+		if(r == 0)
+			OS_SleepMs(1);
+	}
+	CHECK(r == 1);
+	Wait_Release(o, w);
+	CHECK(t->sp == 1);
+	return t->stack[0];
+}
+
+/* "92 F1" with its flag set (WaitSeqOpen): a streamed movie is opened and
+ * its frames are read from the file as they are decoded - as a loose file
+ * and as an archive entry larger than the loader's limit (the movie with
+ * 70 MB behind it).  The frames must decode to what the whole file in
+ * memory gives; a clone reads the same file and outlives its original; a
+ * movie of type 0, a file that is no movie, a missing file and no name are
+ * turned away with the original's codes.  Needs the loader and the drive
+ * TestWaits set up. */
+static void TestStreamedOpen(OpenBGI_t* o)
+{
+	static uint8_t file[0x1000];
+	Thread_t* t = Thread_New(o, 0x100, 0x100, 0x100);
+	int32_t no = 0, clone = 0, info[5] = {0, 0, 0, 0, 0};
+	size_t n;
+	FILE* f;
+	Bmp_t b;
+	printf("streamed, opened\n");
+	n = StreamedMovie(file, 0x10001, 16, 8, 32);
+	f = fopen("s.bm", "wb");
+	fwrite(file, 1, n, f);
+	fclose(f);
+	o->gfx.bmpMgr = BmpMgr_New(4);
+	BmpMgr_Create(o->gfx.bmpMgr, 0, 16, 8, PM_ARGB32);
+	BmpMgr_GetInfo(o->gfx.bmpMgr, &b, 0);
+	// the loose file
+	CHECK(RunWait(o, t, WaitSeqOpen_New(o, t, NULL, "s.bm", &no, info)) == 0);
+	CHECK(no > 0 && info[0] == 16 && info[1] == 8 && info[2] == 2 && info[4] == 3);
+	CHECK(BmSeq_Decode(o, 0, no, 0) == 0);
+	CHECK(BlockIs(b.pixels, b.pitch, 16, 8, 0, 156, 135, 138, 0xC0) && BlockIs(b.pixels, b.pitch, 16, 8, 1, 148, 148, 148, 0xC0));
+	CHECK(BmSeq_Decode(o, 0, no, 1) == 0 && BmSeq_Decode(o, 0, no, 2) == 0);
+	CHECK(BlockIs(b.pixels, b.pitch, 16, 8, 0, 156, 135, 138, 0x40) && BlockIs(b.pixels, b.pitch, 16, 8, 1, 133, 133, 133, 0xC0));
+	CHECK(BmSeq_Decode(o, 0, no, 3) == 0x80000004u);
+	// the clone reads the same file, also when its original is gone
+	CHECK(BmSeq_Clone(o, no, &clone) == 0 && BmSeq_Free(o, no) == 0);
+	CHECK(BmSeq_Decode(o, 0, clone, 0) == 0 && BlockIs(b.pixels, b.pitch, 16, 8, 1, 148, 148, 148, 0xC0));
+	// the file went away: the frame cannot be read
+	remove("s.bm");
+	CHECK(BmSeq_Decode(o, 0, clone, 1) == 0x80000008u);
+	CHECK(BmSeq_Free(o, clone) == 0);
+	// what is turned away: a missing file, no name, a movie of type 0, a file that is no movie
+	no = 0;
+	CHECK(RunWait(o, t, WaitSeqOpen_New(o, t, NULL, "s.bm", &no, info)) == 2 && no == 0);
+	CHECK(RunWait(o, t, WaitSeqOpen_New(o, t, NULL, NULL, &no, info)) == 1 && no == 0);
+	CHECK(RunWait(o, t, WaitSeqOpen_New(o, t, NULL, "clip.bm", &no, info)) == 2 && no == 0);
+	CHECK(RunWait(o, t, WaitSeqOpen_New(o, t, NULL, "text.bm", &no, info)) == 2 && no == 0);
+	{ // an archive entry of 70 MB: the movie with nothing behind it (the last frame runs to the end, so only the first two are read)
+		uint8_t entry[0x80];
+		uint32_t count = 1, size = (uint32_t)n + (70u << 20);
+		memset(entry, 0, sizeof entry);
+		strcpy((char*)entry, "big.bm");
+		memcpy(entry + 0x64, &size, 4);
+		f = fopen("movies.arc", "wb");
+		fwrite("BURIKO ARC20", 1, 12, f);
+		fwrite(&count, 4, 1, f);
+		fwrite(entry, 1, sizeof entry, f);
+		fwrite(file, 1, n, f);
+		fseek(f, (long)(70u << 20) - 1, SEEK_CUR);
+		fputc(0, f);
+		fclose(f);
+		CHECK(RunWait(o, t, WaitSeqOpen_New(o, t, "movies.arc", "big.bm", &no, info)) == 0 && info[4] == 3);
+		CHECK(BmSeq_Decode(o, 0, no, 0) == 0 && BmSeq_Decode(o, 0, no, 1) == 0);
+		CHECK(BlockIs(b.pixels, b.pitch, 16, 8, 0, 156, 135, 138, 0x40) && BlockIs(b.pixels, b.pitch, 16, 8, 1, 133, 133, 133, 0xC0));
+		CHECK(BmSeq_Free(o, no) == 0);
+	}
+	BmpMgr_Delete(o->gfx.bmpMgr);
+	o->gfx.bmpMgr = NULL;
+}
+
 /* The smoke test on a real movie: when BGI_BM_FILE names a .bm file, read
  * it, check its header and decode every frame in sequence into one
  * buffer; all of them have to succeed.  With BGI_BM_OUT set the last
@@ -728,6 +813,7 @@ int main(void)
 	TestMovie(o, 32);
 	TestMovie(o, 24);
 	TestStreamed(o);
+	TestStreamedOpen(o);
 	TestRealFile();
 	if(TestHost_Chdir(TestHost_TempRoot()) == 0)
 		TestHost_RemoveTree(dir);

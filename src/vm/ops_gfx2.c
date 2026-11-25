@@ -662,9 +662,9 @@ static int Opcode_Gfx2_MoviePlayArc(OpenBGI_t* o, Thread_t* t)
  * The BF_Movie sequence load of "90 F4" (the wait pushes 0 ok / 1 / 2 not
  * a movie when it ends; the thread blocks on it).  `streamed` asks for
  * the form that keeps only the header and index in memory and reads the
- * frames from the archive, whose files are of the BF_Movie types 0x10000
- * / 0x10001 - the whole file is loaded here either way, and a frame of
- * either kind is decoded from it. */
+ * frames from the archive (WaitSeqOpen): the file must be of the BF_Movie
+ * types 0x10000 / 0x10001 then, and may be larger than the loader takes.
+ * Without it the whole file is loaded, whatever its type. */
 static int Opcode_Gfx2_SeqLoad(OpenBGI_t* o, Thread_t* t)
 {
 	int streamed = (int)Thread_Pop(t);
@@ -672,8 +672,7 @@ static int Opcode_Gfx2_SeqLoad(OpenBGI_t* o, Thread_t* t)
 	const char* arc = (const char*)PopPtr(o, t);
 	int32_t* info = (int32_t*)PopPtr(o, t);
 	int32_t* outNo = (int32_t*)PopPtr(o, t);
-	(void)streamed;
-	Thread_SetWait(o, t, WaitSeqLoad_New(o, t, arc, name, outNo, info));
+	Thread_SetWait(o, t, streamed ? WaitSeqOpen_New(o, t, arc, name, outNo, info) : WaitSeqLoad_New(o, t, arc, name, outNo, info));
 	return 2;
 }
 
