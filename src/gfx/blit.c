@@ -93,19 +93,9 @@ static void AlphaCopy16(Bmp_t* dst, const Bmp_t* src)
  * alpha >= 2 (lanes B G R; the top byte keeps d's value) */
 static void AlphaCopy32_To1(Bmp_t* dst, const Bmp_t* src)
 {
-	int y, x;
+	int y;
 	for(y = 0; y < src->h; y++)
-	{
-		const uint32_t* s = (const uint32_t*)ROW(src, y);
-		uint32_t* d = (uint32_t*)ROW(dst, y);
-		for(x = 0; x < src->w; x++)
-		{
-			uint32_t sv = s[x], dv = d[x];
-			if(!(sv & 0xfe000000u))
-				continue;
-			d[x] = (dv & 0xff000000u) | Lerp7(dv, sv, sv >> 25);
-		}
-	}
+		kBlitRows.alphaCopy((uint32_t*)ROW(dst, y), (const uint32_t*)ROW(src, y), src->w);
 }
 
 /* ARGB32 <- ARGB32: "over" with the destination alpha.  With sa, da the
@@ -207,17 +197,10 @@ static void Blend16(Bmp_t* dst, const Bmp_t* src, int level, int skipZero)
  * replaced by the source's (its lane multiplies by 0) */
 static void Blend32_Plain(Bmp_t* dst, const Bmp_t* src, int level)
 {
-	int l2 = level >> 1, y, x;
+	const BlitRows_t* rows = ROWS_FOR(level >= 0 && level <= 0x100);
+	int l2 = level >> 1, y;
 	for(y = 0; y < src->h; y++)
-	{
-		const uint32_t* s = (const uint32_t*)ROW(src, y);
-		uint32_t* d = (uint32_t*)ROW(dst, y);
-		for(x = 0; x < src->w; x++)
-		{
-			uint32_t sv = s[x];
-			d[x] = (sv & 0xff000000u) | Lerp7(sv, d[x], (uint32_t)l2);
-		}
-	}
+		rows->blendPlain((uint32_t*)ROW(dst, y), (const uint32_t*)ROW(src, y), src->w, l2);
 }
 
 /* ARGB32 <- RGB32 blend: the source is opaque with weight
@@ -252,19 +235,10 @@ static void Blend32_1to2(Bmp_t* dst, const Bmp_t* src, int level)
 // RGB32 <- ARGB32 blend: d += (s - d) * w >> 7 with w = ((a >> 1) * inv) >> 8, alpha >= 2 only
 static void Blend32_2to1(Bmp_t* dst, const Bmp_t* src, int level)
 {
-	int inv = 0x100 - level, y, x;
+	const BlitRows_t* rows = ROWS_FOR(level >= 0 && level <= 0x100);
+	int inv = 0x100 - level, y;
 	for(y = 0; y < src->h; y++)
-	{
-		const uint32_t* s = (const uint32_t*)ROW(src, y);
-		uint32_t* d = (uint32_t*)ROW(dst, y);
-		for(x = 0; x < src->w; x++)
-		{
-			uint32_t sv = s[x], dv = d[x];
-			if(!(sv & 0xfe000000u))
-				continue;
-			d[x] = (dv & 0xff000000u) | Lerp7(dv, sv, ((sv >> 25) * (uint32_t)inv) >> 8);
-		}
-	}
+		rows->blendAlpha((uint32_t*)ROW(dst, y), (const uint32_t*)ROW(src, y), src->w, inv);
 }
 
 /* ARGB32 <- ARGB32 blend: "over" (AlphaCopy32_To2) with the source alpha
@@ -371,35 +345,10 @@ void Blit_Over(Bmp_t* dst, const Bmp_t* src, int level)
  * d * (256 - ra) / 256 */
 static void Crossfade32(Bmp_t* dst, const Bmp_t* a, const Bmp_t* b, int ratio, int level)
 {
-	int inv = 0x100 - level, y, x;
+	const BlitRows_t* rows = ROWS_FOR(level >= 0 && level <= 0x100 && ratio >= 0 && ratio <= 0x100);
+	int inv = 0x100 - level, y;
 	for(y = 0; y < a->h; y++)
-	{
-		const uint32_t* pa = (const uint32_t*)ROW(a, y);
-		const uint32_t* pb = (const uint32_t*)ROW(b, y);
-		uint32_t* d = (uint32_t*)ROW(dst, y);
-		for(x = 0; x < a->w; x++)
-		{
-			uint32_t av = pa[x], bv = pb[x], dv = d[x];
-			int va = ((int)(av >> 24) * inv) >> 8; // table 1: (alpha * inv) >> 8
-			int vb = ((int)(bv >> 24) * inv) >> 8;
-			int ra = va + (((vb - va) * ratio) >> 8); // alpha lane of the lerp
-			int i, out, wd;
-			if(ra == 0)
-				continue;
-			wd = 0x100 - ra;
-			out = 0;
-			for(i = 0; i < 24; i += 8)
-			{
-				int ac = (int)((av >> i) & 0xff), bc = (int)((bv >> i) & 0xff);
-				int dc = (int)((dv >> i) & 0xff);
-				int a1 = (ac * va) >> 8, b1 = (bc * vb) >> 8;
-				int c = a1 + (((b1 - a1) * ratio) >> 8);
-				c += (dc * wd) >> 8;
-				out |= Sat8(c) << i;
-			}
-			d[x] = (uint32_t)out;
-		}
-	}
+		rows->crossfade((uint32_t*)ROW(dst, y), (const uint32_t*)ROW(a, y), (const uint32_t*)ROW(b, y), a->w, ratio, inv);
 }
 
 /* Draw the cross fade of two ARGB32 pictures (ratio 0 = a, 0x100 = b) over
@@ -528,18 +477,10 @@ static void Add32_From1(Bmp_t* dst, const Bmp_t* src, int level, int withAlpha)
 	int y, x;
 	if(level <= 0x100)
 	{ // (the scaled colour stays a byte: three lanes at once)
+		const BlitRows_t* rows = ROWS_FOR(level >= 0);
 		uint32_t top = withAlpha ? (uint32_t)(level > 0xff ? 0xff : level) << 24 : 0;
 		for(y = 0; y < src->h; y++)
-		{
-			const uint32_t* s = (const uint32_t*)ROW(src, y);
-			uint32_t* d = (uint32_t*)ROW(dst, y);
-			for(x = 0; x < src->w; x++)
-			{
-				uint32_t sv = s[x];
-				if(sv & 0x00ffffffu)
-					d[x] = AddSat4(d[x], Scale3(sv, (uint32_t)level, 8) | top);
-			}
-		}
+			rows->addPlain((uint32_t*)ROW(dst, y), (const uint32_t*)ROW(src, y), src->w, level, top);
 		return;
 	}
 	for(y = 0; y < src->h; y++)
@@ -571,26 +512,10 @@ static void Add32_From1(Bmp_t* dst, const Bmp_t* src, int level, int withAlpha)
  * its alpha; an RGB32 one keeps its top byte. */
 static void Add32_From2(Bmp_t* dst, const Bmp_t* src, int level, int withAlpha)
 {
-	int y, x;
+	const BlitRows_t* rows = ROWS_FOR(level >= 0);
+	int y;
 	for(y = 0; y < src->h; y++)
-	{
-		const uint32_t* s = (const uint32_t*)ROW(src, y);
-		uint32_t* d = (uint32_t*)ROW(dst, y);
-		for(x = 0; x < src->w; x++)
-		{
-			uint32_t sv = s[x], dv = d[x], out;
-			int a = (int)(sv >> 25), w;
-			if(!(sv & 0xfe000000u))
-				continue;
-			w = level >= 0x100 ? a : (a * level) >> 8;
-			out = AddSat4(dv & 0x00ffffffu, Scale3(sv, (uint32_t)w, 7));
-			if(withAlpha)
-				out |= (uint32_t)Sat8((int)(dv >> 24) + Sat8(w << 1)) << 24;
-			else
-				out |= (int)(dv & 0xff000000u);
-			d[x] = (uint32_t)out;
-		}
-	}
+		rows->addAlpha((uint32_t*)ROW(dst, y), (const uint32_t*)ROW(src, y), src->w, level, withAlpha);
 }
 
 /* Effects 0x02 / 0x21: add src scaled by `level` / 256 to dst with

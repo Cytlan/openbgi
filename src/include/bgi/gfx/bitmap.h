@@ -218,6 +218,25 @@ int Blit_Bicubic(Bmp_t* dst, float dx, float dy, const Bmp_t* src, float sx, flo
 // ---- tuning switches of the original -------------------------------------
 // The C blitters take no notice of the CPU; the switches are kept so that
 // the start-up sequence of the graphics manager is the same.
+/* The rows of the commonest 32-bit blits (src/gfx/blit_rows.c): n pixels
+ * of a destination row and of its source rows.  kBlitRowsPlain holds the
+ * word-lane loops; kBlitRows the ones the blitters call, which are this
+ * build's SSE2 or NEON loops (`name` says which) or the plain ones again
+ * ("none").  Both give the same bytes.  The fast loops ask for levels in
+ * range, as each line says; the plain ones take anything. */
+typedef struct BlitRows
+{
+	const char* name;                                                                                   // "SSE2", "NEON" or "none"
+	void (*alphaCopy)(uint32_t* d, const uint32_t* s, int n);                                           // RGB32 <- ARGB32
+	void (*blendAlpha)(uint32_t* d, const uint32_t* s, int n, int inv);                                 // RGB32 <- ARGB32 at 0x100 - level; 0 <= inv <= 0x100
+	void (*blendPlain)(uint32_t* d, const uint32_t* s, int n, int l2);                                  // 32-bit <- 32-bit without alpha at level >> 1; 0 <= l2 <= 128
+	void (*crossfade)(uint32_t* d, const uint32_t* a, const uint32_t* b, int n, int ratio, int inv);    // RGB32 <- two ARGB32; 0 <= ratio, inv <= 0x100
+	void (*addAlpha)(uint32_t* d, const uint32_t* s, int n, int level, int withAlpha);                  // 32-bit <- ARGB32, added; 0 <= level
+	void (*addPlain)(uint32_t* d, const uint32_t* s, int n, int level, uint32_t top);                   // 32-bit <- RGB32, added; 0 <= level <= 0x100
+} BlitRows_t;
+extern const BlitRows_t kBlitRowsPlain;
+extern const BlitRows_t kBlitRows;
+
 void Blit_InitTables(OpenBGI_t* o);             // build the MMX multiply tables (a flag here)
 void Blit_SetSse(OpenBGI_t* o, int on);         // the CPU has SSE
 void Blit_SetSse2(OpenBGI_t* o, int on);        // the CPU has SSE2

@@ -102,4 +102,7 @@ static inline uint32_t AddSat4(uint32_t x, uint32_t y)
 	return sum | ((over >> 7) * 0xffu);
 }
 
+// the rows of a blit: the build's fast loops when the arguments are in the range they ask for, the plain ones otherwise (blit_rows.c)
+#define ROWS_FOR(inRange) ((inRange) ? &kBlitRows : &kBlitRowsPlain)
+
 #endif // BGI_GFX_BLIT_INTERNAL_H_

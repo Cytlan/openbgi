@@ -676,7 +676,7 @@ PRESENT_OPT := $(if $(filter -O0 -O1 -Og,$(OPT)),,-O3)
 $(OBJDIR)/host/os_present.o: CFLAGS += $(PRESENT_OPT)
 # so are the blitters, where most of a game's processor time goes: in every build of the core (HOT_OPT in the
 # compile rules of the program, the library and the libretro core)
-HOT_OPT = $(if $(filter %/gfx/blit.o %/gfx/blit_modes.o %/gfx/blit_xform.o,$@),$(PRESENT_OPT))
+HOT_OPT = $(if $(filter %/gfx/blit.o %/gfx/blit_rows.o %/gfx/blit_modes.o %/gfx/blit_xform.o,$@),$(PRESENT_OPT))
 ifneq ($(FFMPEG_BUILT),)
 $(OBJDIR)/movie/ffmovie.o: $(FFMPEG_BUILT)
 $(FFMPEG_BUILT):

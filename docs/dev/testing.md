@@ -61,6 +61,7 @@ on standard error every five seconds.
 | `dropped` | Sound frames mixed that found no room in the ring |
 | `starved` | Sound frames the host asked for and the ring did not have: silence was played. A host that asks for more than it plays (the test host does) shows a large number |
 | `disk` | Read from files through the host: the rate, the reads and the time spent in them |
+| `rows` | The blitters' fast rows of this build: `SSE2`, `NEON` or `none` (below) |
 
 - The panel shows the same figures of the last half second, and two
   graphs: the last 240 frames' periods (green up to a sixtieth of a
@@ -73,6 +74,61 @@ on standard error every five seconds.
 - A run for a first picture of the launcher's and the settings' own
   engine never have it on.
 - `tests/perf.c` runs it on clocks the test moves.
+
+## The blitters' fast rows
+
+`src/gfx/blit_rows.c`, `src/gfx/blit_simd.h`. The rows of the commonest
+blits exist twice: in word lanes, and four pixels at a time with the
+processor's vector instructions. The build decides which the blitters
+call. Nothing is asked of the processor at run time.
+
+| Build | Fast rows |
+|---|---|
+| x86, 64-bit | SSE2 |
+| x86, 32-bit | SSE2 when built with `-msse2`. None otherwise: the Windows 32-bit build has none |
+| ARM, 64-bit | NEON |
+| ARM, 32-bit | NEON when the compiler has it on (Android's has) |
+| The browser, anything else | None |
+
+| Row loop | The blit |
+|---|---|
+| Alpha copy | A picture with alpha onto the screen: sprites, the message window (effect `0x00`) |
+| Blend with alpha | The same at a level: a sprite that fades (`0x01`, `0x20`) |
+| Blend without alpha | Two pictures without alpha, mixed (`0x01`, `0xF0`) |
+| Cross fade | Two pictures with alpha, mixed onto the screen: one sprite turning into another |
+| Add with alpha, add without alpha | Light (`0x02`, `0x21`) |
+
+Every other blit is a word-lane or byte loop as before.
+
+- Both forms give the same bytes. `test_blitrows` compares them over
+  40 000 random rows a loop: every length from 0 to 70, any alignment,
+  every level.
+- `test_blitgold` holds the blitters to the sums the first code gave,
+  whichever rows they call.
+- `test_blitrows time` prints what a 1920 x 1080 pass of each loop
+  takes in both forms.
+- `make OPT="-O2 -g -DBGI_NO_SIMD"` builds without the fast rows.
+- The performance display names the rows in its last line.
+
+To add a fast row:
+
+1. Move the row of the blit from `blit.c` into `blit_rows.c` as a
+   `Plain_` function. Add its pointer to `BlitRows_t`
+   (`src/include/bgi/gfx/bitmap.h`).
+2. Write the `Fast_` function with the names of `blit_simd.h`. They are
+   the same in SSE2 and NEON, so one function serves both.
+3. Say in a comment which values of its arguments it takes. In `blit.c`
+   choose the table with `ROWS_FOR(condition)`.
+4. Add the loop to `tests/blitrows.c`.
+
+To run the NEON rows without an ARM machine, with a cross compiler and
+QEMU's user mode:
+
+```
+aarch64-linux-gnu-gcc -std=c99 -O3 -static -Iinclude -Isrc/include -Isrc/gfx \
+    -D_POSIX_C_SOURCE=200809L -o test_blitrows_arm64 tests/blitrows.c src/gfx/blit_rows.c
+qemu-aarch64 ./test_blitrows_arm64
+```
 
 ## The test host
 

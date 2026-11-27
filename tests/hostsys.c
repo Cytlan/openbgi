@@ -244,10 +244,31 @@ static int AmdCpuid(uint32_t leaf, uint32_t out[4])
 	}
 }
 
+static int gNewCpu; // the machine's processor is an Intel one made after the table of leaf 2
+
+// its leaf 2 says "see leaf 4" alone; the level 1 data cache is the first of leaf 4, the level 2 in the extended leaf
+static int NewCpuid(uint32_t leaf, uint32_t out[4])
+{
+	switch(leaf)
+	{
+		case 0: Regs(out, 0x1b, Str4("Genu"), Str4("ntel"), Str4("ineI")); return 1;
+		case 1: Regs(out, 0x000806f8, 0, 0, (1u << 15) | (1u << 23) | (1u << 25) | (1u << 26)); return 1;
+		case 2: Regs(out, 0x00feff01, 0, 0, 0); return 1;
+		// data, level 1; 64-byte lines, 1 partition, 12 ways; 64 sets: 48 KB
+		case 4: Regs(out, 0x00000121, (11u << 22) | 63, 63, 0); return 1;
+		case 0x80000000u: Regs(out, 0x80000008u, 0, 0, 0); return 1;
+		case 0x80000005u: Regs(out, 0, 0, 0, 0); return 1;
+		case 0x80000006u: Regs(out, 0, 0, 0x08006040, 0); return 1; // L2: 2 MB, 8 ways (code 6), 64-byte lines
+		default: return 0;
+	}
+}
+
 static int MCpuid(void* user, uint32_t leaf, uint32_t out[4])
 {
 	static const char brand[49] = "  Intel(R)  Core(TM)2   CPU  T7200              "; // 48 bytes, runs of spaces
 	(void)user;
+	if(gNewCpu)
+		return NewCpuid(leaf, out);
 	if(gAmd)
 		return AmdCpuid(leaf, out);
 	if(gOldCpu && leaf >= 0x80000000u)
@@ -702,6 +723,11 @@ static void TestMachine(void)
 	strcpy(buf, "x");
 	CHECK(!Cpu_BrandString(o, buf) && buf[0] == 0);
 	gOldCpu = 0;
+	// an Intel processor made after the table: its caches from leaf 4 and the extended leaf
+	gNewCpu = 1;
+	CHECK(Cpu_Detect(o));
+	CHECK(s->vendor == 0 && s->l1 == 0x400c0030u && s->l2 == 0x40080800u && s->l3 == 0);
+	gNewCpu = 0;
 	// the AMD processor: the extended fields folded in, the brand id and the caches of the extended leaves
 	gAmd = 1;
 	CHECK(Cpu_Detect(o));

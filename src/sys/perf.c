@@ -33,6 +33,7 @@
 #include "bgi/launcher.h"
 #include "bgi/gfx/typeface.h"
 #include "bgi/gfx/bmpmgr.h"
+#include "bgi/gfx/bitmap.h"
 #include "bgi/snd/sndout.h"
 #include "bgi/snd/wavemaster.h"
 #include "bgi/core.h"
@@ -277,7 +278,7 @@ void Perf_End(OpenBGI_t* o, const OpenBGI_Frame_t* f)
 		if(g.valid)
 		{
 			Perf_Line(&g, line, sizeof line);
-			fprintf(stderr, "openbgi: perf: %s\n", line);
+			fprintf(stderr, "openbgi: perf: %s; rows %s\n", line, kBlitRows.name);
 		}
 		SpanOpen(o, &p->log, now);
 	}
@@ -444,7 +445,7 @@ static void Paint(OpenBGI_t* o, int dpi)
 		g->diskUs / 1000, g->diskUs % 1000 / 100);
 	Text(p, x, y, t, COL_TEXT);
 	y += line;
-	snprintf(t, sizeof t, "%dx%d on %dx%d  %d dpi", o->screen.pic.w, o->screen.pic.h, s->width, s->height, dpi);
+	snprintf(t, sizeof t, "%dx%d on %dx%d %d dpi %s", o->screen.pic.w, o->screen.pic.h, s->width, s->height, dpi, kBlitRows.name);
 	Text(p, x, y, t, COL_DIM);
 }
 

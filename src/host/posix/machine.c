@@ -118,7 +118,7 @@ int OS_Cpuid(uint32_t leaf, uint32_t out[4])
 	unsigned max = __get_cpuid_max(leaf & 0x80000000u, NULL);
 	if(max == 0 || leaf > max)
 		return 0;
-	__cpuid(leaf, a, b, c, d);
+	__cpuid_count(leaf, 0, a, b, c, d); // (the first of a leaf that has several: leaf 4's level 1 data cache)
 	out[0] = a;
 	out[1] = b;
 	out[2] = c;

@@ -210,7 +210,7 @@ phone's Back button, or with Cancel on the pad.
 | Second graph | The memory over the last minute |
 | SND | Sounds playing, and how far ahead the sound is prepared. "starved" counts sound that came too late and was heard as a gap |
 | DISK | How much was read from files, in how many reads, and how long that took |
-| Last line | The game's picture size, the screen's size and its density |
+| Last line | The game's picture size, the screen's size and its density. Then the fast drawing loops this build has: `NEON`, `SSE2` or `none` |
 
 - The panel takes no touches: what is under it can still be tapped.
 - The same figures are written to standard error every five seconds.

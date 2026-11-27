@@ -14,7 +14,12 @@
  *
  * Intel caches are decoded from the CPUID leaf 2 descriptor bytes with the
  * table below (only the descriptors known in 2008); everything else reads
- * the extended leaves 0x80000005 / 0x80000006.  The host supplies the
+ * the extended leaves 0x80000005 / 0x80000006.  An Intel processor made
+ * after the table answers leaf 2 with "see leaf 4" alone: its level 1
+ * cache is then read from leaf 4 and its level 2 from the extended leaf
+ * (Cpu_LaterIntelCaches), so that it gets bands as the others do.  The
+ * blitters' SSE2 and NEON loops are not chosen here: the build has them
+ * or not (src/gfx/blit_simd.h).  The host supplies the
  * CPUID instruction and the time stamp counter (OpenBGI_Machine_t,
  * Host_Cpuid), so a host without them reports no processor at all.
  */
@@ -219,6 +224,29 @@ static void Cpu_ExtendedCaches(OpenBGI_t* o, uint32_t* l1, uint32_t* l2)
 	*l2 = (((ecx << 8) | ways) << 16) | (ecx >> 16);
 }
 
+/* What leaf 2 did not say, for the Intel processors whose only descriptor
+ * is 0xff ("the caches are in leaf 4"; every one since about 2010).  The
+ * first cache of leaf 4 is the level 1 data cache on all of them: its
+ * size is ways * partitions * line * sets.  The host's CPUID asks for
+ * that first cache only, so the level 2 comes from 0x80000006, which
+ * Intel fills in too.  The level 3 stays unknown: nothing uses it but
+ * the programs that read the block. */
+static void Cpu_LaterIntelCaches(OpenBGI_t* o, uint32_t* l1, uint32_t* l2)
+{
+	uint32_t r[4];
+	if(!*l1 && Cpu_Cpuid(o, r, 4) && (r[0] & 0x1f) == 1 && ((r[0] >> 5) & 7) == 1)
+	{
+		uint32_t line = (r[1] & 0xfff) + 1, parts = ((r[1] >> 12) & 0x3ff) + 1, ways = (r[1] >> 22) + 1, sets = r[2] + 1;
+		uint32_t kb = (uint32_t)(((uint64_t)line * parts * ways * sets) >> 10);
+		*l1 = (line & 0xff) << 24 | (ways & 0xff) << 16 | (kb > 0xffff ? 0xffff : kb);
+	}
+	if(!*l2)
+	{
+		uint32_t none = 0;
+		Cpu_ExtendedCaches(o, &none, l2);
+	}
+}
+
 /* Fill o->util.sysInfo: identification and caches, and start measuring
  * the clock, which Cpu_MeasureStep finishes a second later.  0 without
  * CPUID. */
@@ -229,7 +257,10 @@ int Cpu_Detect(OpenBGI_t* o)
 		return 0;
 	s->l1 = s->l2 = s->l3 = 0;
 	if(s->vendor == 0)
+	{
 		Cpu_IntelCaches(o, s->family, &s->l1, &s->l2, &s->l3);
+		Cpu_LaterIntelCaches(o, &s->l1, &s->l2);
+	}
 	else
 		Cpu_ExtendedCaches(o, &s->l1, &s->l2);
 	Cpu_MeasureBegin(o);
