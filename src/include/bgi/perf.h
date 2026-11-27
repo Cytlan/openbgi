@@ -82,6 +82,7 @@ typedef struct PerfState
 	int on;                       // it measures, shows and writes
 	int loaded;                   // the setting was read for this run
 	int forced;                   // BGI_PERF: on whatever the setting says
+	int watch;                    // BGI_PERF=2: the log also says what had the picture painted again
 	int freeRun;                  // "frames": "free" - the host was told not to hold its frames to the screen's rate
 	int64_t begin, last;          // this frame's start and the one's before (ns); 0: none yet
 	uint16_t period[PERF_FRAMES]; // the last frames' periods in tenths of a millisecond (0xffff: longer), a ring

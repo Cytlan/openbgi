@@ -102,7 +102,11 @@
 #define TXT_SET_PERF            gT[77]
 
 #define TXT_SET_LIMIT           gT[78]
-#define TXT_COUNT               79
+#define TXT_SET_SIZE            gT[79]
+#define TXT_SIZE_AUTO           gT[80]
+#define TXT_SIZE_FIT            gT[81]
+#define TXT_SET_FULL            gT[82]
+#define TXT_COUNT               83
 
 strings_en() {
     TXT_WINDOW_TITLE = "OpenBGI - Select game";
@@ -191,4 +195,8 @@ strings_en() {
     TXT_FILTER_NEAREST = "Nearest";
     TXT_SET_PERF = "Performance display";
     TXT_SET_LIMIT = "Frame limiter";
+    TXT_SET_SIZE = "Window size";
+    TXT_SET_FULL = "Full screen";
+    TXT_SIZE_AUTO = "Automatic";
+    TXT_SIZE_FIT = "Fit the screen";
 }

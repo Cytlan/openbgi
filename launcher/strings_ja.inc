@@ -87,4 +87,8 @@ strings_ja() {
     TXT_FILTER_NEAREST = "ニアレスト";
     TXT_SET_PERF = "パフォーマンス表示";
     TXT_SET_LIMIT = "フレームリミッター";
+    TXT_SET_SIZE = "ウィンドウサイズ";
+    TXT_SET_FULL = "フルスクリーン";
+    TXT_SIZE_AUTO = "自動";
+    TXT_SIZE_FIT = "画面に合わせる";
 }

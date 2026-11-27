@@ -88,6 +88,8 @@ int Settings_Touch(OpenBGI_t* o, int id, int phase, int x, int y); // (the surfa
 int Settings_Pad(OpenBGI_t* o, const OpenBGI_PadState_t* state);   // (the on-screen pad's)
 int Settings_Key(OpenBGI_t* o, int vk, int down, int flags);
 int Settings_Button(OpenBGI_t* o, int button, int down, int flags);
+int Settings_Pointer(OpenBGI_t* o, int x, int y); // the mouse's place in the game's picture, for the panel; 1 while the panel is up
+int Settings_OwnKey(OpenBGI_t* o, int vk, int down); // the settings key while the panel is up: it takes the panel down; 1 when it was that key
 /* What a program reads and sets of the path "": Settings_Value is 0 when
  * `key` is none of these, 1 with value `i` in dst, -1 when there is no
  * such value; Settings_Set is -1 when `key` is none of these, else

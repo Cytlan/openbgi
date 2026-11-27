@@ -137,6 +137,7 @@ static void Load(OpenBGI_t* o)
 	if(o->engine.optPreview || o->settings.game)
 		return;
 	p->forced = env && env[0] && strcmp(env, "0") != 0;
+	p->watch = env && strcmp(env, "2") == 0;
 	Perf_Set(o, p->forced || (Engine_CfgGet(o, "", "perf", 0, value, sizeof value) > 0 && strcmp(value, "on") == 0), 0);
 	Perf_SetLimit(o, !(Engine_CfgGet(o, "", "frames", 0, value, sizeof value) > 0 && strcmp(value, "free") == 0), 0); // (a run before may have left the host free)
 }
@@ -225,6 +226,37 @@ static void Figures(OpenBGI_t* o, const PerfSpan_t* s, int64_t now, PerfFigures_
 	g->diskKbs = (uint32_t)(disk * 1000 * NS_MS / 1024 / (uint64_t)span);
 	g->diskReads = p->diskReads - s->diskReads;
 	g->diskUs = (int)((p->diskNs - s->diskNs) / 1000);
+}
+
+/* What had the picture painted again since the last time, a line each
+ * (BGI_PERF=2): how often, the object's class and priority, and its
+ * rectangle.  The class and the priority are those of the object's sort
+ * key, which is what the compositor is told. */
+static void Redraws(OpenBGI_t* o)
+{
+	static const char* const kClass[16] = {"background", "map", "sprite", "window", "particles", "rain", "effector", "filter", "virtual object", "group",
+		"knob", "class 11", "class 12", "class 13", "class 14", "class 15"};
+	Compositor_t* c = o->gfx.gfx ? o->gfx.gfx->comp : NULL;
+	int i;
+	if(!c)
+		return;
+	if(c->watchOn)
+	{
+		if(c->watchAll)
+			fprintf(stderr, "openbgi: perf: redraw: %u times: the whole picture\n", (unsigned)c->watchAll);
+		for(i = 0; i < COMP_WATCH; i++)
+		{
+			const CompWatch_t* w = &c->watch[i];
+			if(w->count)
+				fprintf(stderr, "openbgi: perf: redraw: %u times: %s, priority %u, %d x %d, last at %d, %d\n", (unsigned)w->count, kClass[(w->key >> 16) & 15],
+					(unsigned)(w->key >> 20), (int)(w->r.r - w->r.l + 1), (int)(w->r.b - w->r.t + 1), (int)w->r.l, (int)w->r.t);
+		}
+		if(c->watchMore)
+			fprintf(stderr, "openbgi: perf: redraw: %u times: others\n", (unsigned)c->watchMore);
+	}
+	memset(c->watch, 0, sizeof c->watch);
+	c->watchAll = c->watchMore = 0;
+	c->watchOn = 1;
 }
 
 /* The engine itself: its version, the blitters' fast rows of this build
@@ -316,6 +348,8 @@ void Perf_End(OpenBGI_t* o, const OpenBGI_Frame_t* f)
 			Perf_Line(&g, line, sizeof line);
 			fprintf(stderr, "openbgi: perf: %s\n", line);
 		}
+		if(p->watch)
+			Redraws(o);
 		SpanOpen(o, &p->log, now);
 	}
 }

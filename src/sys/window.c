@@ -446,6 +446,8 @@ static int Wnd_SettingsKey(OpenBGI_t* o, int vk, int down, int flags)
 	if((flags & OPENBGI_KEY_TAKEN) || (Inframe_Up(o) && !Inframe_SettingsUp(o)))
 		return 0;
 	o->input.settingsHeld = 1;
+	if(o->overlay.surface.width > 0 && !Inframe_Up(o) && Settings_Open(o))
+		return 1; // the settings over the game, where the host shows the layer they are drawn in
 	Inframe_Settings(o);
 	return 1;
 }
@@ -611,14 +613,14 @@ static void Input_Deliver(OpenBGI_t* o, int kind, int a, int b, int x, int y, in
 // (while the settings are up over the game - settings.h - the keys and the buttons are theirs, and the game's pointer rests)
 void OpenBGI_Key(OpenBGI_t* o, int vk, int down, int flags)
 {
-	if(Settings_Key(o, vk, down, flags))
+	if(Settings_OwnKey(o, vk, down) || Settings_Key(o, vk, down, flags))
 		return;
 	Input_Deliver(o, IN_KEY, vk, down != 0, 0, 0, flags, NULL);
 }
 
 void OpenBGI_Pointer(OpenBGI_t* o, int x, int y)
 {
-	if(Settings_Up(o))
+	if(Settings_Pointer(o, x, y))
 		return;
 	Input_Deliver(o, IN_POINTER, 0, 0, x, y, 0, NULL);
 }

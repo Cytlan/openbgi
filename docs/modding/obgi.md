@@ -237,6 +237,9 @@ engine at once:
 |---|---|---|
 | `"pad"` | `on`, `off` | The on-screen pad |
 | `"through"` | `on`, `off` | Whether a touch beside the pad reaches the game |
+| `"sizes"` | A list of names, read only | The window's sizes, where the host fits a window to its screen: `auto`, `100`, `150`, `200`, `fit`. No value elsewhere, and none in full screen |
+| `"size"` | One of them | The window's size |
+| `"fullscreen"` | `on`, `off` | Full screen, as Alt+Enter. No value where the host fits no window to a screen |
 | `"perf"` | `on`, `off` | The performance display |
 | `"limit"` | `on`, `off` | The frames a second are held to the screen's refresh rate. No value where the host cannot hold them: show no row then |
 | `"filters"` | A list of names, read only | The filters the picture can be scaled with: `game` (what the game chose), `bicubic`, `bilinear`, `nearest`, then the host's own by their names (`Anime4K A`). No value where the host does not scale the picture |

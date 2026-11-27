@@ -79,6 +79,7 @@ typedef struct OverlayState
 {
 	OpenBGI_Surface_t surface; // as the host said it; a width of 0: none (kept when the engine starts again)
 	int loaded;                // the settings were read for this run
+	int bare;                  // no on-screen controls: the host fits a window to a screen, which is worked with a mouse and keys
 	int padOn;                 // the pad is shown and plays
 	int padOnly;               // while the pad is on a touch beside the controls does not reach the picture ("touchThrough": "off")
 	uint8_t* pix;              // the layer: four bytes a pixel, w x h
@@ -109,6 +110,12 @@ typedef struct OverlayState
 
 void Overlay_Frame(OpenBGI_t* o, OpenBGI_Frame_t* f); // the engine's frame: the layer as it is now, and what changed in it
 void Overlay_Free(OpenBGI_t* o);                      // the layer's pixels go (the surface stays as it was said)
+/* Whether the layer carries the on-screen controls (the settings button,
+ * the pad): on a surface that is a whole screen, a phone's.  A host that
+ * fits a window to its screen (OpenBGI_Window_t.workArea) is worked with
+ * a mouse and keys: its layer carries the settings and the performance
+ * display alone, and is there only while one of them is. */
+int Overlay_Controls(OpenBGI_t* o);
 int Overlay_PadOn(OpenBGI_t* o);
 // the pad on or off, kept in the settings or (keep 0) for this run only
 void Overlay_SetPad(OpenBGI_t* o, int on, int keep);

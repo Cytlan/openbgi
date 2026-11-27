@@ -59,6 +59,19 @@ typedef struct BandJob // one band of a dirty rectangle, painted by one worker c
 	uint32_t minKey;
 } BandJob_t;
 
+/* What asked for the picture to be painted again, for the performance
+ * display's log (BGI_PERF=2): each size of rectangle of each priority
+ * and class with how often it came and where it was last, up to
+ * COMP_WATCH different ones between two readings; how often the whole picture was asked for; and how many came
+ * that found no room in the table. */
+#define COMP_WATCH 16
+typedef struct CompWatch
+{
+	uint32_t key; // the object's priority and class: the top 16 bits of its sort key
+	Rect_t r;
+	uint32_t count; // 0: free
+} CompWatch_t;
+
 typedef struct Compositor
 {
 	ObjNode_t* objects; // ascending by key
@@ -76,6 +89,9 @@ typedef struct Compositor
 	int32_t nextJob; // the next job a worker takes
 	WorkerPool_t* pool;
 	int32_t ownsPool; // the pool is private and freed with the compositor
+	int32_t watchOn;  // the changed rectangles are counted (below)
+	CompWatch_t watch[COMP_WATCH];
+	uint32_t watchAll, watchMore;
 } Compositor_t;
 
 void Compositor_Ctor(Compositor_t* c, int maxDirty, ScreenBmp_t* screen, uint32_t bandPixels, WorkerPool_t* sharedPool);

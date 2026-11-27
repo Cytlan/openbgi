@@ -95,6 +95,16 @@ static void SetScaling(void* user, int rule)
 	gRule = rule;
 }
 
+static int gDesk; // the next engine's host fits a window to a screen (kDesk)
+
+static void WorkArea(void* user, int* x, int* y, int* w, int* h)
+{
+	(void)user;
+	*x = *y = 0;
+	*w = 1920;
+	*h = 1080;
+}
+
 static int gLimit = -1; // what the host was last told about holding its frames to the screen
 
 static void SetFrameLimit(void* user, int on)
@@ -114,6 +124,8 @@ static const char* FilterName(void* user, int n)
 // (no work area: it does not fit a window to a screen, as a phone's does not)
 // .. and it can hold its frames to its screen's refresh rate
 static const OpenBGI_Window_t kScales = {.size = sizeof(OpenBGI_Window_t), .setScaling = SetScaling, .filterName = FilterName, .setFrameLimit = SetFrameLimit};
+// a host of the same kind that fits a window to its screen: a computer's, worked with a mouse and keys
+static const OpenBGI_Window_t kDesk = {.size = sizeof(OpenBGI_Window_t), .setScaling = SetScaling, .filterName = FilterName, .workArea = WorkArea};
 
 // where the program keeps what the test looks at (its global memory)
 #define AT_MODE   0x1000
@@ -200,7 +212,7 @@ static OpenBGI_t* EngineUp(int program)
 	OpenBGI_t* o;
 	gHost = *OS_Host();
 	gHost.ticksMs = TicksMs;
-	gHost.window = program == 2 ? &kScales : NULL;
+	gHost.window = program == 2 ? (gDesk ? &kDesk : &kScales) : NULL;
 	gRule = -1;
 	o = OpenBGI_New(&gHost);
 	if(!o)
@@ -552,6 +564,54 @@ static int Reads(OpenBGI_t* p, const char* key, int i, const char* want)
 	return Settings_Value(p, key, i, v, sizeof v) == 1 && strcmp(v, want) == 0;
 }
 
+static void TestDesk(void)
+{
+	OpenBGI_t *o, *p;
+	char v[32];
+	printf("desk\n");
+	gDesk = 1;
+	o = EngineUp(2);
+	gDesk = 0;
+	if(!o)
+		return;
+	Surface(o);
+	Frames(o, 2);
+	// no on-screen controls, and no layer while there is nothing to show in it
+	CHECK(MainWin_ViewOn(o) && !Overlay_Controls(o) && !o->overlay.pix);
+	// the settings key puts the panel up, where it put the display settings box up before the host showed a layer
+	o->input.settingsKey = 0x78; // (F9, as a run's input settings have it)
+	OpenBGI_Key(o, 0x78, 1, 0);
+	OpenBGI_Key(o, 0x78, 0, 0);
+	Frames(o, 6);
+	CHECK(Settings_Up(o) && !o->inframe.up && !o->input.settingsHeld);
+	p = o->settings.panel;
+	if(!p)
+	{
+		EngineDown(o);
+		return;
+	}
+	CHECK(o->overlay.pix != NULL);
+	// no rows of the pad's; the window's sizes, the one that is on
+	CHECK(Settings_Value(p, "pad", 0, v, sizeof v) == -1 && Settings_Value(p, "through", 0, v, sizeof v) == -1);
+	CHECK(Reads(p, "sizes", 0, "auto") && Reads(p, "sizes", 1, "100") && Reads(p, "sizes", 4, "fit") && Settings_Value(p, "sizes", 5, v, sizeof v) == -1);
+	CHECK(Reads(p, "size", 0, "auto") && Settings_Value(p, "size", 1, v, sizeof v) == -1 && Settings_Set(p, "size", "huge") == 0);
+	CHECK(Reads(p, "fullscreen", 0, "off") && Settings_Set(p, "fullscreen", "maybe") == 0);
+	// the mouse's place in the game's picture is one on the surface for the panel: the picture lies at 100, 0 and is 400 x 300 there
+	OpenBGI_Pointer(o, o->screen.pic.w / 2, o->screen.pic.h / 2);
+	Frames(o, 1);
+	CHECK(p->input.pointerX == 300 && p->input.pointerY == 150);
+	// the key again takes the panel down at the frame's end; its repeat and release are taken too
+	OpenBGI_Key(o, 0x78, 1, 0);
+	CHECK(Settings_Up(o) && o->settings.close && o->input.settingsHeld);
+	OpenBGI_Key(o, 0x78, 1, 0);
+	OpenBGI_Key(o, 0x78, 0, 0);
+	Frames(o, 1);
+	CHECK(!Settings_Up(o) && !o->input.settingsHeld);
+	Frames(o, 1);
+	CHECK(!o->overlay.pix && !o->inframe.up);
+	EngineDown(o);
+}
+
 static void TestOptions(void)
 {
 	OpenBGI_t* o = PanelUp(0);
@@ -736,6 +796,7 @@ int main(void)
 	TestInput();
 	TestBridge();
 	TestOptions();
+	TestDesk();
 	TestEnds();
 	OS_Shutdown();
 	if(gFails)

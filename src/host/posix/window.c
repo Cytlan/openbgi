@@ -313,17 +313,52 @@ void X11_FillLetterbox(void)
 	XFreeGC(gX11Dpy, gc);
 }
 
-// no surface is said here: no layer
+/* The surface the picture is laid on, said to the engine whenever it is
+ * another (OsHostHandlers_t.surface): the window's pixels, the picture's
+ * place in them and the pixels an inch - while the picture is drawn
+ * through the graphics processor, which draws the layer over it.  Drawn
+ * any other way there is no surface, and so no layer: the engine keeps
+ * its display settings box then.
+ *
+ * The engine's measures are a phone's, 160 to the inch where a pixel is
+ * a unit; a monitor is looked at from further away, and its 96 to the
+ * inch are the same unit (the desktop's scale counts as it does for
+ * everything else). */
+void X11_SurfaceTell(void)
+{
+	static OpenBGI_Surface_t told;
+	OpenBGI_Surface_t s;
+	if(!gX11Input.surface)
+		return;
+	memset(&s, 0, sizeof s);
+	s.size = sizeof s;
+	if(gX11Win && X11Gl_On() && gGlPicW > 0 && gGlPicH > 0)
+	{
+		TargetSize(&s.width, &s.height);
+		s.picture.w = gGlPicW;
+		s.picture.h = gGlPicH;
+		if(gMapOn)
+		{
+			s.picture.x = gFsOffX;
+			s.picture.y = gFsOffY;
+			s.picture.w = (int)(gFsModeW * gFsScale);
+			s.picture.h = (int)(gFsModeH * gFsScale);
+		}
+		s.dpi = OS_WindowDpi() * 160 / 96;
+	}
+	if(memcmp(&s, &told, sizeof s) == 0)
+		return;
+	told = s;
+	gX11Input.surface(gX11Input.user, &s);
+}
+
+// the layer, into the texture the picture's draw puts over everything
 void OS_WindowLayer(const unsigned char* pixels, int w, int h, int pitch, int x, int y, int cw, int ch)
 {
-	BGI_UNUSED(pixels);
-	BGI_UNUSED(w);
-	BGI_UNUSED(h);
-	BGI_UNUSED(pitch);
-	BGI_UNUSED(x);
-	BGI_UNUSED(y);
-	BGI_UNUSED(cw);
-	BGI_UNUSED(ch);
+	if(!gX11Win || !X11Gl_On())
+		return;
+	OsGl_Layer(pixels, w, h, pitch, x, y, cw, ch);
+	gGlDirty = 1;
 }
 
 /* The picture through the graphics processor, once for all that a frame

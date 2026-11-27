@@ -100,6 +100,13 @@ static OpenBGI_t* EngineUp(const OpenBGI_Machine_t* machine)
 {
 	OpenBGI_t* o;
 	gHost = *OS_Host();
+	if(gHost.window)
+	{ // a phone's host fits no window to a screen (one that does gets no on-screen controls: tests/settings.c)
+		static OpenBGI_Window_t window;
+		window = *gHost.window;
+		window.workArea = NULL;
+		gHost.window = &window;
+	}
 	gHost.ticksMs = TicksMs;
 	gHost.perfNs = PerfNs;
 	gHost.machine = machine;

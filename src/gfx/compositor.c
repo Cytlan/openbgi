@@ -87,6 +87,9 @@ int Compositor_Threads(OpenBGI_t* o)
 
 void Compositor_Ctor(Compositor_t* c, int maxDirty, ScreenBmp_t* screen, uint32_t bandPixels, WorkerPool_t* sharedPool)
 {
+	c->watchOn = 0;
+	memset(c->watch, 0, sizeof c->watch);
+	c->watchAll = c->watchMore = 0;
 	c->maxDirty = maxDirty;
 	c->screen = screen;
 	c->bandPixels = bandPixels;
@@ -205,6 +208,39 @@ void Compositor_ClearDirty(Compositor_t* c)
 void Compositor_InvalidateAll(Compositor_t* c)
 {
 	c->fullRedraw = 1;
+	if(c->watchOn)
+		c->watchAll++;
+}
+
+// one more rectangle of an object's priority and class, for the performance display's log
+static void Watch(Compositor_t* c, uint32_t key, const Rect_t* r)
+{
+	CompWatch_t* spare = NULL;
+	int i;
+	key &= 0xffff0000u;
+	for(i = 0; i < COMP_WATCH; i++)
+	{
+		CompWatch_t* w = &c->watch[i];
+		if(!w->count)
+		{
+			if(!spare)
+				spare = w;
+		}
+		else if(w->key == key && w->r.r - w->r.l == r->r - r->l && w->r.b - w->r.t == r->b - r->t)
+		{ // (the same size: an object that moves is one line, with the place it had last)
+			w->r = *r;
+			w->count++;
+			return;
+		}
+	}
+	if(!spare)
+	{
+		c->watchMore++;
+		return;
+	}
+	spare->key = key;
+	spare->r = *r;
+	spare->count = 1;
 }
 
 // "90 09": objects whose key is below priority `p` are not drawn (backgrounds always are)
@@ -270,6 +306,8 @@ void Compositor_AddDirty(Compositor_t* c, uint32_t minKey, Rect_t* r)
 	if(!Rect_Clip(r, &c->screen->screen))
 		return;
 	R = *r;
+	if(c->watchOn)
+		Watch(c, minKey, &R);
 
 	for(link = &c->dirty; (n = *link) != NULL; link = &n->next)
 	{

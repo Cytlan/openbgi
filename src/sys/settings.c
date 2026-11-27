@@ -92,6 +92,8 @@ int Settings_Open(OpenBGI_t* o)
 	}
 	OpenBGI_Focus(p, 1); // (its "window" is the one in front)
 	Overlay_PanelChanged(o);
+	if(!Overlay_Controls(o))
+		MainWin_CursorShow(o, 1); // (a mouse works the panel: its arrow is seen whatever the game does with it)
 	return 1;
 }
 
@@ -110,6 +112,8 @@ void Settings_Close(OpenBGI_t* o)
 	OpenBGI_Stop(p);
 	OpenBGI_Delete(p);
 	Overlay_PanelChanged(o);
+	if(!Overlay_Controls(o))
+		MainWin_CursorShow(o, o->cursor.cursorShown); // (the game's own again)
 }
 
 void Settings_Failed(OpenBGI_t* panel, const char* text)
@@ -214,6 +218,34 @@ int Settings_Key(OpenBGI_t* o, int vk, int down, int flags)
 	return 1;
 }
 
+/* The pointer of a host that is worked with a mouse (no on-screen
+ * controls): its place in the game's picture, as the host says it, is
+ * one on the surface, which is the panel's picture.  Where a finger works
+ * the panel its touches place the pointer, and this is nothing. */
+int Settings_Pointer(OpenBGI_t* o, int x, int y)
+{
+	const OpenBGI_Surface_t* s = &o->overlay.surface;
+	OpenBGI_t* p = o->settings.panel;
+	if(!p)
+		return 0;
+	if(Overlay_Controls(o) || s->picture.w <= 0 || s->picture.h <= 0 || o->screen.pic.w <= 0 || o->screen.pic.h <= 0)
+		return 1;
+	OpenBGI_Pointer(p, s->picture.x + (int)((long long)x * s->picture.w / o->screen.pic.w), s->picture.y + (int)((long long)y * s->picture.h / o->screen.pic.h));
+	return 1;
+}
+
+/* The settings key while the panel is up (the keys are the panel's
+ * then): its press takes the panel down at the frame's end. */
+int Settings_OwnKey(OpenBGI_t* o, int vk, int down)
+{
+	if(!o->settings.panel || !o->input.settingsKey || vk != o->input.settingsKey)
+		return 0;
+	if(down && !o->input.settingsHeld)
+		o->settings.close = 1;
+	o->input.settingsHeld = down != 0;
+	return 1;
+}
+
 // (a button where the panel's own pointer is: the host's place is one of the game's picture)
 int Settings_Button(OpenBGI_t* o, int button, int down, int flags)
 {
@@ -234,6 +266,9 @@ static void Text(char* dst, size_t size, const char* s)
 
 // the filters by the names the program knows them by: the four of every host, then the host's own
 static const char* const kFilters[VIEW_FILTER_OWN] = {"game", "bicubic", "bilinear", "nearest"};
+
+// the window's sizes as the program names them: VIEW_SIZE_AUTO .. VIEW_SIZE_FIT
+static const char* const kSizes[] = {"auto", "100", "150", "200", "fit"};
 
 static const char* FilterName(OpenBGI_t* g, int i)
 {
@@ -273,9 +308,28 @@ int Settings_Value(OpenBGI_t* o, const char* key, int i, char* dst, size_t size)
 		return 1;
 	}
 	if(strcmp(key, "pad") == 0 || strcmp(key, "through") == 0)
-	{
-		Text(dst, size, (key[0] == 'p' ? Overlay_PadOn(g) : Overlay_Through(g)) ? "on" : "off");
-		return i == 0 ? 1 : -1;
+	{ // (no value where the layer has no on-screen controls: no such rows)
+		int controls = Overlay_Controls(g);
+		Text(dst, size, !controls ? "" : (key[0] == 'p' ? Overlay_PadOn(g) : Overlay_Through(g)) ? "on" : "off");
+		return controls && i == 0 ? 1 : -1;
+	}
+	if(strcmp(key, "fullscreen") == 0)
+	{ // (where the host fits a window to its screen: there the player switches, as with Alt+Enter)
+		Text(dst, size, !MainWin_ViewOn(g) ? "" : g->display.fullscreen ? "on" : "off");
+		return MainWin_ViewOn(g) && i == 0 ? 1 : -1;
+	}
+	if(strcmp(key, "sizes") == 0 || strcmp(key, "size") == 0)
+	{ // the window's size, where the host fits a window to its screen and the picture does not fill the screen
+		int vsize, filter, whole;
+		if(!MainWin_ViewOn(g) || g->display.fullscreen)
+			return -1;
+		MainWin_ViewSettings(g, &vsize, &filter, &whole);
+		if(key[4] != 's')
+			i = i == 0 ? vsize : -1;
+		if(i < 0 || i >= (int)(sizeof kSizes / sizeof kSizes[0]))
+			return -1;
+		Text(dst, size, kSizes[i]);
+		return 1;
 	}
 	if(strcmp(key, "perf") == 0)
 	{
@@ -354,6 +408,28 @@ int Settings_Set(OpenBGI_t* o, const char* key, const char* value)
 			return 0;
 		Perf_SetLimit(g, on, 1);
 		return 1;
+	}
+	if(strcmp(key, "fullscreen") == 0)
+	{
+		if(!OnOff(value, &on) || !MainWin_ViewOn(g))
+			return 0;
+		if(on != (g->display.fullscreen != 0) && g->display.windowRestored)
+			Display_ToggleStyle(g); // as Alt+Enter does it
+		return 1;
+	}
+	if(strcmp(key, "size") == 0)
+	{
+		int vsize, filter, whole, i;
+		if(!value || !MainWin_ViewOn(g) || g->display.fullscreen)
+			return 0;
+		MainWin_ViewSettings(g, &vsize, &filter, &whole);
+		for(i = 0; i < (int)(sizeof kSizes / sizeof kSizes[0]); i++)
+			if(strcmp(kSizes[i], value) == 0)
+			{
+				MainWin_ViewApply(g, i, filter, whole);
+				return 1;
+			}
+		return 0;
 	}
 	if(strcmp(key, "filter") == 0 || strcmp(key, "quality") == 0 || strcmp(key, "whole") == 0)
 	{

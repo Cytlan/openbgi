@@ -35,9 +35,15 @@ On Windows, Linux and macOS:
 - The window's size is not remembered: the next start has the size the
   game asks for again.
 
-F9 opens the display settings over the picture. Click a setting to
-step through its values, or use the arrow keys; F9, Escape or "Close"
-puts them away.
+F9 opens the settings over the picture. Click a setting to step
+through its values, or use the arrow keys; F9, Escape or "Close" puts
+them away.
+
+- On Linux with a graphics processor the settings are a panel, the
+  same as in the Android app. It also has "Performance display"
+  ([below](#the-performance-display)) and "Close the game".
+- On Windows and macOS, and without a graphics processor, they are a
+  box with the display settings alone.
 
 | Setting | Values |
 |---|---|

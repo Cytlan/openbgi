@@ -74,6 +74,11 @@ on standard error every five seconds.
   engine never have it on.
 - The last line of the panel is the engine itself: `OpenBGI 1.0  SIMD
   NEON  threads 1 of 8`. The log has it once, when the display comes on.
+- `BGI_PERF=2` adds to the log what had the picture painted again in
+  those five seconds, a line each: how often, the object's class and
+  priority, the rectangle's size and where it was last. `the whole
+  picture` counts the full repaints; `others` what found no room among
+  16 lines.
 - `tests/perf.c` runs it on clocks the test moves.
 
 ## The blitters' fast rows

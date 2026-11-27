@@ -414,7 +414,10 @@ int OS_PumpMessages(void)
 	if(!gX11Dpy)
 		return 0;
 	if(XPending(gX11Dpy) <= 0)
+	{
+		X11_SurfaceTell(); // (once a round: the window's size or the picture's place may be another)
 		return 0;
+	}
 	XNextEvent(gX11Dpy, &ev);
 	DispatchEvent(&ev);
 	return 1;

@@ -18,6 +18,8 @@
 //   Whole steps only      the picture only at whole multiples of its size ("whole")
 //   On-screen pad         the pad of the on-screen controls ("pad")
 //   Touch beside the pad  whether a touch beside the pad reaches the game ("through")
+//   Window size           where the host fits a window to its screen ("sizes", "size"): a computer's
+//   Full screen           there too ("fullscreen"), as Alt+Enter
 //   Performance display   the engine's figures of its own run, over everything ("perf")
 //   Frame limiter         no more frames a second than the screen shows; off to measure ("limit"; where the host can)
 //   Close the game        as the window's close button: the game asks, the launcher follows
@@ -67,6 +69,8 @@
 #define ROW_CLOSE_GAME  5
 #define ROW_PERF        6
 #define ROW_LIMIT       7
+#define ROW_SIZE        8
+#define ROW_FULL        9
 
 // what a finger went down on, or the keys' focus is on: a row's number, or
 #define SET_NOTHING     -2
@@ -113,6 +117,11 @@ global int gSetListKey @ G_VARS + 0x494;    // .. and the rows (settings_list)
 global int gSetPerf @ G_VARS + 0x498;       // what the performance display's row shows
 global int gSetLimit @ G_VARS + 0x49c;      // what the frame limit's row shows
 global int gSetLimits @ G_VARS + 0x4a0;     // the host can hold its frames to the screen: there is such a row
+global int gSetSize @ G_VARS + 0x4a4;       // the window's size (an index of gSetSizes)
+global int gSetSizeN @ G_VARS + 0x4a8;      // how many sizes the engine names: 0 where no window is fitted to a screen
+global int gSetFull @ G_VARS + 0x4d8;       // what the full screen's row shows
+global int gSetPads @ G_VARS + 0x4ac;       // the layer has on-screen controls: there are the pad's two rows
+global char gSetSizes[5][8] @ G_VARS + 0x4b0; // the sizes as the engine names them: "auto", "100", "150", "200", "fit"
 global int gSetRow[SET_MAX_ROWS] @ G_VARS + 0x500;              // the rows, top to bottom: ROW_...
 global char gSetFilters[SET_MAX_FILTERS][32] @ G_VARS + 0x600;  // the filters' names as the engine has them
 
@@ -169,7 +178,18 @@ settings_init() {
 
 // What the rows show, from the game's engine; the rows there are.
 settings_read() { int i; int n;
-    gSetPad = settings_is("pad", "on");
+    gSetPads = OBGI_CFG_GET("", "pad", 0, gCfgTmp, 16) > 0;
+    gSetPad = gSetPads && streq(gCfgTmp, "on");
+    gSetSizeN = 0;
+    while (gSetSizeN < 5 && OBGI_CFG_GET("", "sizes", gSetSizeN, gSetSizes[gSetSizeN], 8) > 0) {
+        gSetSizeN = gSetSizeN + 1;
+    }
+    gSetSize = 0;
+    if (OBGI_CFG_GET("", "size", 0, gCfgTmp, 16) > 0) {
+        for (i = 0; i < gSetSizeN; i = i + 1) {
+            if (streq(gSetSizes[i], gCfgTmp)) gSetSize = i;
+        }
+    }
     gSetThrough = settings_is("through", "on");
     gSetPerf = settings_is("perf", "on");
     gSetLimits = OBGI_CFG_GET("", "limit", 0, gCfgTmp, 16) > 0;
@@ -188,16 +208,28 @@ settings_read() { int i; int n;
         }
     }
     n = 0;
-    if (gSetFilterN > 0) {
-        gSetRow[0] = ROW_FILTER;
-        gSetRow[1] = ROW_QUALITY;
-        gSetRow[2] = ROW_WHOLE;
-        n = 3;
+    if (gSetSizeN > 0) {
+        gSetRow[0] = ROW_SIZE;
+        n = 1;
     }
-    gSetRow[n] = ROW_PAD;
-    gSetRow[n + 1] = ROW_THROUGH;
-    gSetRow[n + 2] = ROW_PERF;
-    n = n + 3;
+    if (OBGI_CFG_GET("", "fullscreen", 0, gCfgTmp, 16) > 0) {
+        gSetFull = streq(gCfgTmp, "on");
+        gSetRow[n] = ROW_FULL;
+        n = n + 1;
+    }
+    if (gSetFilterN > 0) {
+        gSetRow[n] = ROW_FILTER;
+        gSetRow[n + 1] = ROW_QUALITY;
+        gSetRow[n + 2] = ROW_WHOLE;
+        n = n + 3;
+    }
+    if (gSetPads) {
+        gSetRow[n] = ROW_PAD;
+        gSetRow[n + 1] = ROW_THROUGH;
+        n = n + 2;
+    }
+    gSetRow[n] = ROW_PERF;
+    n = n + 1;
     if (gSetLimits) {
         gSetRow[n] = ROW_LIMIT;
         n = n + 1;
@@ -290,6 +322,8 @@ settings_panel() { int sz; int tw; int bg; int key;
 
 // A row's name.
 settings_label(row) {
+    if (row == ROW_SIZE) return TXT_SET_SIZE;
+    if (row == ROW_FULL) return TXT_SET_FULL;
     if (row == ROW_FILTER) return TXT_SET_FILTER;
     if (row == ROW_QUALITY) return TXT_SET_QUALITY;
     if (row == ROW_WHOLE) return TXT_SET_WHOLE;
@@ -310,11 +344,28 @@ settings_filter_text(i) {
     return gSetFilters[i];
 }
 
+// What the window's size `i` is called.
+settings_size_text(i) {
+    if (streq(gSetSizes[i], "auto")) return TXT_SIZE_AUTO;
+    if (streq(gSetSizes[i], "fit")) return TXT_SIZE_FIT;
+    if (streq(gSetSizes[i], "100")) return "100 %";
+    if (streq(gSetSizes[i], "150")) return "150 %";
+    if (streq(gSetSizes[i], "200")) return "200 %";
+    return gSetSizes[i];
+}
+
+// What a row with a list shows: the filter's name, the window's size.
+settings_value_text(row) {
+    if (row == ROW_SIZE) return settings_size_text(gSetSize);
+    return settings_filter_text(gSetFilter);
+}
+
 // Whether a row can be changed now: the quality only of a filter of the host's own, the
 // touches beside the pad only while there is a pad.
 settings_usable(row) {
     if (row == ROW_QUALITY) return gSetFilter >= 4;
     if (row == ROW_THROUGH) return gSetPad;
+    if (row == ROW_SIZE) return !gSetFull;
     return 1;
 }
 
@@ -325,6 +376,7 @@ settings_on(row) {
     if (row == ROW_PAD) return gSetPad;
     if (row == ROW_PERF) return gSetPerf;
     if (row == ROW_LIMIT) return gSetLimit;
+    if (row == ROW_FULL) return gSetFull;
     return gSetThrough;
 }
 
@@ -352,7 +404,7 @@ settings_value_w() { return px(210); }
 // All the rows into their bitmap, and the part of it that is seen into the view - when
 // a row looks another way than it was drawn: its value, the focus, the finger on it.
 settings_list() { int i; int row; int y; int m; int sz; int col; int sw; int sh; int sx; int sy; int k; int vw; int tw; int usable;
-    k = gSetFilter * 32 + gSetPad + gSetThrough * 2 + gSetWhole * 4 + gSetHigh * 8 + gSetPerf * 16 + gSetLimit * 1024;
+    k = gSetFilter * 32 + gSetPad + gSetThrough * 2 + gSetWhole * 4 + gSetHigh * 8 + gSetPerf * 16 + gSetLimit * 1024 + gSetFull * 2048 + gSetSize * 0x1000000;
     if (gKeyMode) k = k + (gSetFocus + 2) * 4096;
     if (gSetPress >= 0 && !gSetDrag) k = k + (gSetPress + 1) * 65536;
     if (k == gSetListKey) return;
@@ -373,13 +425,13 @@ settings_list() { int i; int row; int y; int m; int sz; int col; int sw; int sh;
         if (row == ROW_CLOSE_GAME) col = COL_SET_WARN;
         sz = px(19);
         text(BMP_SET_LIST, m, y + (gSetRowH - sz) / 2 - px(1), settings_label(row), sz, 0, col);
-        if (row == ROW_FILTER) {            // the value between two arrows
+        if (row == ROW_FILTER || row == ROW_SIZE) { // the value between two arrows
             vw = settings_value_w();
             sx = gSetListW - m - vw;
             gfx0.bmp_blit(BMP_SET_LIST, sx, y + gSetRowH / 2 - px(10), BMP_SET_BACK, 0, 0);
             gfx0.bmp_blit(BMP_SET_LIST, sx + vw - px(16), y + gSetRowH / 2 - px(10), BMP_SET_NEXT, 0, 0);
             sz = px(18);
-            fit_end(gFit, settings_filter_text(gSetFilter), sz, 0, vw - px(44));
+            fit_end(gFit, settings_value_text(row), sz, 0, vw - px(44));
             tw = text_w(gFit, sz, 0);
             text(BMP_SET_LIST, sx + (vw - tw) / 2, y + (gSetRowH - sz) / 2 - px(1), gFit, sz, 0, COL_TEXT);
         } else if (row != ROW_CLOSE_GAME) { // a switch
@@ -452,6 +504,13 @@ settings_filter(n) {
     OBGI_CFG_SET("", "filter", 0, gSetFilters[gSetFilter]);
 }
 
+// The window's size `n` after the one that is on (-1: before), round the list.
+settings_size(n) {
+    if (gSetSizeN < 1) return;
+    gSetSize = (gSetSize + n + gSetSizeN) % gSetSizeN;
+    OBGI_CFG_SET("", "size", 0, gSetSizes[gSetSize]);
+}
+
 // A switch to `on` (1, 0) or over (-1).
 settings_switch(row, on) {
     if (on < 0) on = !settings_on(row);
@@ -470,6 +529,9 @@ settings_switch(row, on) {
     } else if (row == ROW_PERF) {
         gSetPerf = on;
         if (on) { OBGI_CFG_SET("", "perf", 0, "on"); } else { OBGI_CFG_SET("", "perf", 0, "off"); }
+    } else if (row == ROW_FULL) {
+        gSetFull = on;
+        if (on) { OBGI_CFG_SET("", "fullscreen", 0, "on"); } else { OBGI_CFG_SET("", "fullscreen", 0, "off"); }
     } else if (row == ROW_LIMIT) {
         gSetLimit = on;
         if (on) { OBGI_CFG_SET("", "limit", 0, "on"); } else { OBGI_CFG_SET("", "limit", 0, "off"); }
@@ -486,13 +548,13 @@ settings_activate(i, x, dir) { int row;
     if (i < 0 || i >= gSetRows) return;
     row = gSetRow[i];
     if (!settings_usable(row)) return;
-    if (row == ROW_FILTER) {
+    if (row == ROW_FILTER || row == ROW_SIZE) {
         if (dir == 0 && x >= 0 && x - gSetX - gSetListX < gSetListW - px(14) - settings_value_w() * 2 / 3
             && x - gSetX - gSetListX >= gSetListW - px(14) - settings_value_w() - px(20)) {
             dir = -1;                       // the arrow that points back
         }
         if (dir == 0) dir = 1;
-        settings_filter(dir);
+        if (row == ROW_SIZE) { settings_size(dir); } else { settings_filter(dir); }
     } else if (row == ROW_CLOSE_GAME) {
         if (dir == 0 && !gSetClosed) {
             gSetClosed = 1;

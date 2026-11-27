@@ -26,6 +26,7 @@
 #include "bgi/launcher.h"
 #include "bgi/settings.h"
 #include "bgi/perf.h"
+#include "bgi/display.h"
 #include "bgi/core.h"
 
 #include <math.h>
@@ -482,7 +483,7 @@ static int Hit(const OverlayState_t* v, int x, int y)
 {
 	int k, best = -1;
 	long long bestD = 0;
-	for(k = 0; k < OVERLAY_CONTROLS; k++)
+	for(k = 0; k < OVERLAY_CONTROLS && !v->bare; k++)
 	{
 		const OverlayControl_t* c = &v->c[k];
 		long long dx = x - c->cx, dy = y - c->cy, d = dx * dx + dy * dy, reach = c->r + c->r / 5 + 2;
@@ -556,6 +557,11 @@ void Overlay_PanelChanged(OpenBGI_t* o)
 		}
 	Release(o);
 	v->underAll = 1;
+}
+
+int Overlay_Controls(OpenBGI_t* o)
+{
+	return !MainWin_ViewOn(o);
 }
 
 int Overlay_PadOn(OpenBGI_t* o)
@@ -862,7 +868,7 @@ static void PerfPlace(const OverlayState_t* v, int w, int h, int* x, int* y)
 	Safe(v, &sx, &sy, &sw, &sh);
 	BGI_UNUSED(h);
 	*x = sx;
-	for(i = 0; i < 3; i++)
+	for(i = 0; i < 3 && !v->bare; i++)
 		if(v->c[kLeft[i]].side > 0 && v->c[kLeft[i]].x + v->c[kLeft[i]].side > *x)
 			*x = v->c[kLeft[i]].x + v->c[kLeft[i]].side;
 	*x += gap;
@@ -870,7 +876,7 @@ static void PerfPlace(const OverlayState_t* v, int w, int h, int* x, int* y)
 	if(*x + w > sx + sw)
 	{
 		*x = sx + (sw - w) / 2;
-		*y = m->y + m->side + gap;
+		*y = v->bare ? sy + gap : m->y + m->side + gap;
 	}
 	if(*x < 0)
 		*x = 0;
@@ -892,6 +898,13 @@ void Overlay_Frame(OpenBGI_t* o, OpenBGI_Frame_t* f)
 	}
 	if(!v->loaded && o->engine.stage == ENGINE_STAGE_VM)
 		Load(o);
+	v->bare = !Overlay_Controls(o);
+	if(v->bare && !Settings_Up(o) && !Perf_On(o))
+	{ // nothing to show: no layer
+		if(v->pix)
+			Overlay_Free(o);
+		return;
+	}
 	// the gestures' distances are physical: the picture's pixels an inch, as it lies on the surface
 	if(s->picture.w > 0 && o->screen.pic.w > 0)
 	{
@@ -937,7 +950,7 @@ void Overlay_Frame(OpenBGI_t* o, OpenBGI_Frame_t* f)
 		Renew(v, oldX, oldY, oldW, oldH);
 		Renew(v, px, py, pw, ph);
 	}
-	for(k = 0; k < OVERLAY_CONTROLS; k++)
+	for(k = 0; k < OVERLAY_CONTROLS && !v->bare; k++)
 		if(v->stale & 1u << k)
 			Draw(v, k, Settings_Up(o));
 	v->stale = 0;

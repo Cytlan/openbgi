@@ -89,6 +89,7 @@ void X11Gl_Swap(void); // what was drawn is shown
 
 // ---- xdnd.c: files dropped on the main window ---------------------------------------------------
 
+void X11_SurfaceTell(void);   // the window as the surface the picture is laid on, to the engine when it is another (window.c)
 void X11_DndApply(void);      // the window says whether it takes drops (OS_DragAccept); for a new window too
 void X11_DndReset(void);      // the main window is gone
 int X11_DndEvent(XEvent* ev); // 1 when the event was the drop protocol's
