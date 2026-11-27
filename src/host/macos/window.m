@@ -1384,6 +1384,19 @@ void OS_WindowPresent(void)
 {
 }
 
+// no surface is said here: no layer
+void OS_WindowLayer(const unsigned char* pixels, int w, int h, int pitch, int x, int y, int cw, int ch)
+{
+	BGI_UNUSED(pixels);
+	BGI_UNUSED(w);
+	BGI_UNUSED(h);
+	BGI_UNUSED(pitch);
+	BGI_UNUSED(x);
+	BGI_UNUSED(y);
+	BGI_UNUSED(cw);
+	BGI_UNUSED(ch);
+}
+
 // the picture the engine draws: scaled into a windowed client area of another size (Recompute)
 void OS_WindowSetPicture(int w, int h)
 {

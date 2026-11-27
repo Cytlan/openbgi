@@ -207,10 +207,19 @@ static void ViewAspect(OpenBGI_t* o)
 	t->setAspect(o->host.user, w, h);
 }
 
+/* Whether the settings' filter and steps hold: the host shows the
+ * picture at another size than its own - a window fitted to its screen,
+ * or a surface the picture is laid on (OpenBGI_SetSurface: a phone). */
+int MainWin_ViewScales(OpenBGI_t* o)
+{
+	const OpenBGI_Window_t* t = Host(o);
+	return MainWin_ViewOn(o) || (t && t->setScaling && o->overlay.surface.width > 0);
+}
+
 const char* MainWin_ViewFilterName(OpenBGI_t* o, int n)
 {
 	const OpenBGI_Window_t* t = Host(o);
-	return MainWin_ViewOn(o) && t->filterName && n >= 0 ? t->filterName(o->host.user, n) : NULL;
+	return MainWin_ViewScales(o) && t->filterName && n >= 0 ? t->filterName(o->host.user, n) : NULL;
 }
 
 // two names without regard to the case of their letters
@@ -249,7 +258,7 @@ static void ViewScaling(OpenBGI_t* o)
 	int rule = o->window.gameRule;
 	if(!t || !t->setScaling)
 		return;
-	if(MainWin_ViewOn(o))
+	if(MainWin_ViewScales(o))
 	{
 		ViewFilterFind(o);
 		switch(o->window.setFilter)
@@ -469,6 +478,13 @@ void MainWin_ViewApply(OpenBGI_t* o, int size, int filter, int whole)
 		return;
 	MainWin_GetRect(o, &x, &y, &w, &h);
 	ViewWindowed(o, x, y, o->window.w, o->window.h);
+}
+
+// the host's rule again, after what decides it changed elsewhere (a surface came or went)
+void MainWin_ViewRescale(OpenBGI_t* o)
+{
+	if(o->window.alive)
+		ViewScaling(o);
 }
 
 void MainWin_ViewReset(OpenBGI_t* o)

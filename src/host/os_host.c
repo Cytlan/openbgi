@@ -176,6 +176,21 @@ static void HostTouch(void* user, int id, int phase, int x, int y)
 	OpenBGI_Touch((OpenBGI_t*)user, id, phase, x, y);
 }
 
+static void HostTouchScale(void* user, int picturePixelsPerInch)
+{
+	OpenBGI_TouchScale((OpenBGI_t*)user, picturePixelsPerInch);
+}
+
+static void HostSurface(void* user, const OpenBGI_Surface_t* surface)
+{
+	OpenBGI_SetSurface((OpenBGI_t*)user, surface);
+}
+
+static void HostSurfaceTouch(void* user, int id, int phase, int x, int y)
+{
+	OpenBGI_SurfaceTouch((OpenBGI_t*)user, id, phase, x, y);
+}
+
 // the pads whose state changed since the last frame, to the engine
 static void HostPads(OpenBGI_t* o)
 {
@@ -343,6 +358,7 @@ static OpenBGI_Rect_t gTextRect;                         // .. for the field the
 static OpenBGI_Frame_t gFrame = {.size = sizeof gFrame}; // the frame shown last ..
 static int gFrameKept;                                   // .. while its pixels are valid (until the next frame)
 static int gFrameShown;                                  // a frame was shown since the start
+static int gLayerOn;                                     // the back end has a layer of a frame (OS_WindowLayer)
 static int gRepaint;                                     // the window was uncovered while a frame was being made: all of it again after
 
 // w x h pixels of the kept frame's picture at (x, y) to the main window
@@ -373,6 +389,8 @@ static void RefreshEntry(void)
  * its picture with the text entry over it, black, or left alone. */
 static void Expose(void)
 {
+	if(gLayerOn && gFrame.layer) // (a back end that lost what it drew with has lost the layer too)
+		OS_WindowLayer(gFrame.layer, gFrame.layerWidth, gFrame.layerHeight, gFrame.layerPitch, 0, 0, gFrame.layerWidth, gFrame.layerHeight);
 	if(gFrame.expose == OPENBGI_EXPOSE_NONE)
 		return;
 	if(gFrame.expose == OPENBGI_EXPOSE_BLACK || !gFrame.pixels)
@@ -385,6 +403,27 @@ static void Expose(void)
 	OS_WindowPresent();
 }
 
+// the frame's layer to the back end, where it changed; 1 when it did
+static int ShowLayer(const OpenBGI_Frame_t* f)
+{
+	if(!f->layer)
+	{
+		if(!gLayerOn)
+			return 0;
+		gLayerOn = 0;
+		OS_WindowLayer(NULL, 0, 0, 0, 0, 0, 0, 0);
+		return 1;
+	}
+	if(!f->layerChanges && gLayerOn)
+		return 0;
+	if(f->layerChanges > 0 && gLayerOn)
+		OS_WindowLayer(f->layer, f->layerWidth, f->layerHeight, f->layerPitch, f->layerChange.x, f->layerChange.y, f->layerChange.w, f->layerChange.h);
+	else
+		OS_WindowLayer(f->layer, f->layerWidth, f->layerHeight, f->layerPitch, 0, 0, f->layerWidth, f->layerHeight);
+	gLayerOn = 1;
+	return 1;
+}
+
 /* The changed rectangles of the frame's picture (all of it for -1) to the
  * main window, and the back end's text entry painted over them again (its
  * background is the picture); the input method on where the frame takes
@@ -393,7 +432,7 @@ static void Expose(void)
  * shown again as it says. */
 void OS_ShowFrame(const OpenBGI_Frame_t* f)
 {
-	int i;
+	int i, layer;
 	if(f->textInput != gTextOn || (f->textInput && memcmp(&gTextRect, &f->textRect, sizeof gTextRect) != 0))
 	{
 		gTextOn = f->textInput;
@@ -403,6 +442,7 @@ void OS_ShowFrame(const OpenBGI_Frame_t* f)
 	gFrame = *f;
 	gFrameKept = 1;
 	gFrameShown = 1;
+	layer = ShowLayer(f);
 	if(gRepaint)
 	{ // uncovered in the meantime
 		gRepaint = 0;
@@ -411,7 +451,11 @@ void OS_ShowFrame(const OpenBGI_Frame_t* f)
 			return; // (all of it)
 	}
 	if(!f->pixels || !f->changes)
+	{
+		if(layer)
+			OS_WindowPresent(); // (the layer alone is another)
 		return;
+	}
 	if(f->changes < 0)
 		BlitKept(0, 0, f->width, f->height);
 	else
@@ -496,6 +540,9 @@ int OS_RunEngine(OpenBGI_t* o, const char* cmdLine)
 	in.focus = HostFocus;
 	in.text = HostText;
 	in.touch = HostTouch;
+	in.touchScale = HostTouchScale;
+	in.surface = HostSurface;
+	in.surfaceTouch = HostSurfaceTouch;
 	in.paint = HostPaint;
 	in.entryPaint = HostEntryPaint;
 	in.close = HostClose;
@@ -550,6 +597,9 @@ int OS_RunEngine(OpenBGI_t* o, const char* cmdLine)
 	memset(&gFrame, 0, sizeof gFrame);
 	gFrame.size = sizeof gFrame;
 	gFrameShown = 0;
+	if(gLayerOn)
+		OS_WindowLayer(NULL, 0, 0, 0, 0, 0, 0, 0);
+	gLayerOn = 0;
 	gRepaint = 0;
 	OsPreview_Stop();
 	r = OpenBGI_Stop(o);

@@ -67,7 +67,7 @@ static int32_t MulShr(int32_t a, uint32_t b, int sh)
 	return (int32_t)((int64_t)p >> sh);
 }
 
-// the effects the transform, cross-fade and wipe blitters apply themselves (0 alpha copy, 1 and 0x20 blend); any other goes through a temporary and Bmp_BlitEffect
+// the effects the transform, cross-fade and wipe blitters apply themselves (0 alpha copy, 1 and 0x20 blend) - into an RGB32 screen, which is all they draw into; any other, and any screen with alpha ("EF 31"), goes through a temporary and Bmp_BlitEffect
 static int DirectEffect(int e)
 {
 	return e == 0 || e == 1 || e == 0x20;
@@ -1347,7 +1347,7 @@ static void Sprite_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t* 
 			}
 			Bmp_Crop(&a, local);
 			Bmp_Crop(&b, local);
-			if(!DirectEffect(effect))
+			if(!DirectEffect(effect) || dst->mode != PM_RGB32)
 			{
 				Bmp_Alloc(&tmp, a.w, a.h, a.mode);
 				Blit_CrossfadeTo(&tmp, &a, &b, s->mixRatio);
@@ -1372,7 +1372,7 @@ static void Sprite_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t* 
 				FinishMasked(o, s, dst, local, &tmp, &mask, maskOwned, effect, level);
 				return;
 			}
-			if(!DirectEffect(effect))
+			if(!DirectEffect(effect) || dst->mode != PM_RGB32)
 			{
 				Bmp_Alloc(&tmp, lw, lh, a.mode);
 				Blit_XformCopy(&tmp, x16, y16, &a, s->curOx, s->curOy, s->curAngle, s->curSx, s->curSy, 0, s->smooth);
@@ -1390,7 +1390,7 @@ static void Sprite_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t* 
 			b = s->wipeGray;
 			Bmp_Crop(&a, local);
 			Bmp_Crop(&b, local);
-			if(!DirectEffect(effect))
+			if(!DirectEffect(effect) || dst->mode != PM_RGB32)
 			{
 				Bmp_Alloc(&tmp, a.w, a.h, a.mode);
 				Blit_GrayWipeTo(&tmp, &a, &b, s->wipeMode, prog);

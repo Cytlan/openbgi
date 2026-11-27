@@ -776,5 +776,7 @@ const AsmOpStack_t kAsmOpStack[] = {
 	{0xef, 0x2c, GEN_FIRST, GEN_LAST, 5, 1},
 	{0xef, 0x2d, GEN_FIRST, GEN_LAST, 4, 1},
 	{0xef, 0x30, GEN_FIRST, GEN_LAST, 5, 1},
+	{0xef, 0x31, GEN_FIRST, GEN_LAST, 1, 0},
+	{0xef, 0x32, GEN_FIRST, GEN_LAST, 1, 0},
 };
 const size_t kAsmOpStackCount = sizeof kAsmOpStack / sizeof kAsmOpStack[0];

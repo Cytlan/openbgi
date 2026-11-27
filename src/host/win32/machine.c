@@ -122,6 +122,12 @@ void OS_MemoryStatusEx(uint64_t* totalPhys, uint64_t* availPhys)
 	*availPhys = ms.ullAvailPhys;
 }
 
+// the process's memory: not said on Windows yet
+uint64_t OS_ProcessMemory(void)
+{
+	return 0;
+}
+
 /* "81 0B": the description of the primary display device from
  * EnumDisplayDevices into desc (n bytes); 1 when a device was found.  The
  * driver version the original takes from the Direct3D adapter identifier

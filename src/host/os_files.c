@@ -278,6 +278,12 @@ static int FilesNativeWritable(void* user, const char* path)
 	return OS_NativeWritable(path);
 }
 
+static uint32_t FilesNativeRoots(void* user, char* buf, uint32_t n)
+{
+	BGI_UNUSED(user);
+	return OS_NativeRoots(buf, n);
+}
+
 static int FilesNativeMkdir(void* user, const char* path)
 {
 	BGI_UNUSED(user);
@@ -394,6 +400,7 @@ static const OpenBGI_Files_t kFiles = {
 	FilesUserDataDir,
 	FilesBinaryDir,
 	FilesNativeWritable,
+	FilesNativeRoots,
 };
 
 const OpenBGI_Files_t* OsCommon_Files(void)

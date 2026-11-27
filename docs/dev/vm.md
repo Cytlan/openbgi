@@ -111,6 +111,14 @@ raises a script error for an unmapped area. The layout depends on the
 engine version and is part of the script ABI, because compiled scripts
 contain such pointers.
 
+A pointer of 0 is no memory. The instructions that read or write
+through their pointer whatever else they are given - load, the stores,
+the memory and string instructions of the base set - raise a script
+error for it, where the original faults and its process ends. A memory
+instruction with a count of 0 touches nothing and raises none. Other
+instructions take 0 for "none" in many places and are not checked; no
+range is checked within an area.
+
 | Area | 1.58 .. 1.66 | 1.69 builds 444, 451 | 1.69 build 472 on |
 |---|---|---|---|
 | Global memory | `A` | `A` | `A` |

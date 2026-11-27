@@ -109,7 +109,7 @@
  * host of another major, or of a newer minor than the library's.
  * OpenBGI_ApiVersion is the library's. */
 #define OPENBGI_API_MAJOR   1
-#define OPENBGI_API_MINOR   0
+#define OPENBGI_API_MINOR   1
 #define OPENBGI_API_VERSION ((OPENBGI_API_MAJOR << 16) | OPENBGI_API_MINOR)
 
 /* What marks the library's functions (OPENBGI_API): C linkage for a
@@ -537,7 +537,14 @@ typedef struct OpenBGI_DebugWindow
  *     `nativeSjis` says the native paths are Shift-JIS (Windows), and
  *     shows them through toUtf8 / fromUtf8 (NULL: they are UTF-8).
  *     setGameDir makes a native directory the game directory: exeDir and
- *     the current directory from then on.
+ *     the current directory from then on.  nativeRoots (interface 1.1)
+ *     is for a system on which the folders above its storage cannot be
+ *     listed (Android): it names the native folders a folder browser
+ *     offers in their place - a storage volume each, with what the
+ *     system calls it.  The launcher lists them above everything, as it
+ *     lists the drives where paths have drives, and takes none of them
+ *     for a folder inside another.  A host on which every folder can be
+ *     reached from the root leaves it NULL.
  *
  * A stream - what open and nativeOpen give - is read, written, sought,
  * measured and closed with the same calls; positions are 64-bit but a
@@ -628,6 +635,8 @@ typedef struct OpenBGI_Files
 	void (*userDataDir)(void* user, char* buf, size_t n);                                                          // the user's data folder (a trailing separator), made when missing; "" for none
 	void (*binaryDir)(void* user, char* buf, size_t n);                                                            // the running program's directory (a trailing separator)
 	int (*nativeWritable)(void* user, const char* path);                                                           // 1 when the file there can be written to as it is (nothing is changed); NULL: every file can
+	// interface 1.1 on
+	uint32_t (*nativeRoots)(void* user, char* buf, uint32_t n); // the folders a browser starts from: for each its native path, NUL, its name for the player (may be empty), NUL; a NUL more at the end; the length without it, 0 for none
 } OpenBGI_Files_t;
 
 /* The registry the installer's instructions read and write ("80 Ex",
@@ -676,6 +685,8 @@ typedef struct OpenBGI_Machine
 	int (*uiLanguage)(void* user);                                                // GetUserDefaultUILanguage, a LANGID; NULL: 0x411 (Japanese).  Japanese here makes the engine's own messages Japanese (else English), unless --lang= or BGI_LANG say
 	int (*displayAdapter)(void* user, char* desc, size_t n, uint32_t version[4]); // the adapter's description and driver version, most significant first; NULL: none
 	int (*audioAvailable)(void* user);                                            // DirectSound 8 is installed; NULL: 1
+	// interface 1.1 on
+	uint64_t (*processMemory)(void* user); // the bytes of memory this process holds now (its resident set), for the engine's performance display; NULL or 0: not known
 } OpenBGI_Machine_t;
 
 /* The shell: the desktop, the clipboard and other copies of the game, as
@@ -937,6 +948,21 @@ typedef struct OpenBGI_Frame
 	 * that time, placed at textRect, the field in the picture's pixels. */
 	int textInput;
 	OpenBGI_Rect_t textRect;
+	/* Interface 1.1 on: the layer, for a host that said what it draws on
+	 * (OpenBGI_SetSurface, below) - what the engine draws over everything
+	 * there, the bars beside the picture included: its on-screen controls.
+	 * `layer` is layerWidth x layerHeight pixels (the surface's size) of
+	 * four bytes, blue, green, red and alpha, the colours not multiplied
+	 * by the alpha, layerPitch bytes a row; NULL when there is nothing to
+	 * draw.  The host draws it over the scaled picture, a pixel a pixel.
+	 * `layerChanges` is 0 when it is as the frame before had it, 1 when
+	 * the rectangle `layerChange` of it changed, -1 for all of it (another
+	 * size, or a layer where there was none).  The pixels stay valid as
+	 * the picture's do. */
+	const uint8_t* layer;
+	int layerWidth, layerHeight, layerPitch;
+	int layerChanges;
+	OpenBGI_Rect_t layerChange;
 } OpenBGI_Frame_t;
 
 /* What the engine asks the host (OpenBGI_Request_t.kind).  The strings
@@ -1125,13 +1151,21 @@ OPENBGI_API int OpenBGI_Start(OpenBGI_t* o, const char* cmdLine);
  * hands over its sources, packed (tools/mkpack.py makes and describes
  * the pack; the first file is the program, for the newest engine
  * profile).  The engine writes them into the folder "launcher" of the
- * user's data folder, unless they are there, and compiles them at every
- * start: what is in that folder is what runs, so anyone can change it
+ * user's data folder, unless they are there, and compiles them there:
+ * what is in that folder is what runs, so anyone can change it
  * (docs/dev/launcher.md says what happens when a newer pack meets changed
- * files, and when the files do not compile).  The program lists the
+ * files, and when the files do not compile).  The compiled program is
+ * kept in the folder and compiled again when a file it was made from
+ * changed, or the engine did - which a pack may help it tell by a file
+ * "build.id" of any content that changes with the host's build (it is
+ * no source and is not written out).  The program lists the
  * games, lets the player choose and starts one with OpenBGI's own
  * instructions (docs/modding/obgi.md); the run then becomes that game's, in the
- * same window, and ends when the game does.  The bytes are not copied
+ * same window.  When the game ends the launcher runs again, started as
+ * it was started first, and the frames go on (interface 1.1; before, they
+ * ended with the game): they end when the launcher's program does, or
+ * after OpenBGI_Quit.  A game named on the command line is followed by
+ * no launcher.  The bytes are not copied
  * and have to stay where they are while the engine lives; NULL or a size
  * of 0 takes the launcher away again.  It is kept over a restart.  The
  * command line's --launcher=dialog asks the host as before for one
@@ -1449,6 +1483,40 @@ OPENBGI_API int OpenBGI_Targets(OpenBGI_t* o, OpenBGI_Target_t* out, int max, si
 #define OPENBGI_TOUCH_CANCEL 3
 OPENBGI_API void OpenBGI_Touch(OpenBGI_t* o, int id, int phase, int x, int y);
 OPENBGI_API void OpenBGI_TouchScale(OpenBGI_t* o, int picturePixelsPerInch);
+
+/* The surface (interface 1.1): what a host draws on, when the picture
+ * does not fill it - a phone's screen, with bars beside the picture.  A
+ * host that says so gets the engine's on-screen controls: a button that
+ * turns them on and off, and a pad - a D-pad, a stick, and buttons to
+ * confirm, cancel, skip and turn the backlog - that plays as a pad does
+ * (OpenBGI_Pad, below).  They are drawn in the frame's layer
+ * (OpenBGI_Frame_t.layer), placed by the surface's edges and sized in
+ * millimetres, so they lie in the bars where those are wide enough.
+ *
+ * OpenBGI_SetSurface says the surface, on the engine's thread between
+ * frames, at first and whenever something of it changes: its size in its
+ * own pixels; `picture`, where the host shows the picture on it; `safe`,
+ * the part of it that nothing covers (a camera's cutout, rounded
+ * corners; a width of 0: all of it); and how many of its pixels make an
+ * inch (0 when the host cannot say: 160 are taken).  NULL, or a size of
+ * 0 x 0, takes the surface away again, and the layer with it.  The host
+ * goes on placing the picture itself.
+ *
+ * OpenBGI_SurfaceTouch is OpenBGI_Touch for such a host: a contact in the
+ * surface's pixels.  One that goes down on a control is the control's
+ * until it lifts; any other is a touch on the picture, where the engine
+ * finds it by `picture`, and the distances of the gestures are physical
+ * without OpenBGI_TouchScale.  A host calls one of the two, not both. */
+typedef struct OpenBGI_Surface
+{
+	uint32_t size;          // sizeof(OpenBGI_Surface_t) as the host was compiled
+	int width, height;      // the surface, in its own pixels
+	OpenBGI_Rect_t picture; // where the host shows the picture on it
+	OpenBGI_Rect_t safe;    // the part of it that nothing covers; a width of 0: all of it
+	int dpi;                // its pixels an inch; 0: not known
+} OpenBGI_Surface_t;
+OPENBGI_API void OpenBGI_SetSurface(OpenBGI_t* o, const OpenBGI_Surface_t* surface);
+OPENBGI_API void OpenBGI_SurfaceTouch(OpenBGI_t* o, int id, int phase, int x, int y);
 
 /* A pad.  The host hands over a pad's state when it changed (it may hand
  * it over every frame), on the engine's thread between frames: the

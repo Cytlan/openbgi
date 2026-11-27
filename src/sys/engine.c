@@ -1097,6 +1097,7 @@ int OpenBGI_RunFrame(OpenBGI_t* o, OpenBGI_Frame_t* out)
 {
 	OpenBGI_Frame_t frame, *f = &frame; // whole here; the host gets what its own holds of it
 	memset(f, 0, sizeof *f);
+	Perf_Begin(o);       // the frame's start, for the performance display (while it is on)
 	Screen_NextFrame(o); // the last frame's pixels are the host's to read no longer
 	SndOut_Run(o);       // the sound up to now: the voices are where the scripts expect them
 	if((o->engine.phase != START_END && !Request_Pending(o)) || Inframe_Up(o))
@@ -1116,7 +1117,9 @@ int OpenBGI_RunFrame(OpenBGI_t* o, OpenBGI_Frame_t* out)
 		else if(o->engine.phase != START_END)
 			Engine_StartStep(o, f);
 	}
-	f->textInput = 0; // (until the entry or a dialog takes text)
+	if(o->engine.phase == START_END && !Request_Pending(o) && Launcher_Returns(o))
+		Launcher_Return(o); // a game the launcher started is over, its last box answered: the launcher's run begins in its place
+	f->textInput = 0;       // (until the entry or a dialog takes text)
 	memset(&f->textRect, 0, sizeof f->textRect);
 	Edit_Frame(o, f);       // the text entry drawn in the frame
 	Child_Frame(o, f);      // the child windows drawn in the frame
@@ -1125,11 +1128,38 @@ int OpenBGI_RunFrame(OpenBGI_t* o, OpenBGI_Frame_t* out)
 	Pad_Shown(o);           // the pointer drawn for a pad
 	SndOut_Run(o);          // the time the frame took, with the sounds it started
 	Screen_TakeFrame(o, f); // the window's picture and what changed in it since the last frame
+	Settings_Frame(o, f);   // the settings over it, while they are up: a frame of their own engine
+	Perf_End(o, f);         // the engine's work in the frame ends here for the performance display, which the layer shows
+	Overlay_Frame(o, f);    // the layer over it, for a host that said its surface: the settings' picture, that display and the on-screen controls
 	if(o->engine.phase == START_RUN)
 		Launcher_Frame(o, f); // a picture of a game the launcher started, now and then
 	f->expose = Present_Expose(o);
 	Pointer_TakeFrame(o, f); // where the frame moved the pointer
 	Host_Give(out, f, sizeof *f);
+	return Engine_Result(o);
+}
+
+/* A run of a program the engine carries itself - the launcher's,
+ * compiled (Launcher_Program) - on an engine that was never started:
+ * no command line, no game directory, no settings file, no lock, no
+ * sound, the launcher's profile.  The program is the boot program, and
+ * stays its giver's.  What OpenBGI_Start returns. */
+int Engine_StartBuiltin(OpenBGI_t* o, const uint8_t* program, uint32_t size)
+{
+	OpenBGI_Frame_t f;
+	if(o->engine.ran || !program || !size)
+		return OPENBGI_DONE;
+	o->engine.ran = 1;
+	o->files.builtinName = LAUNCHER_PROGRAM;
+	o->files.builtinData = program;
+	o->files.builtinSize = size;
+	SetBootProgram(o, ".", LAUNCHER_PROGRAM);
+	snprintf(o->engine.optEngine, sizeof o->engine.optEngine, "%s", LAUNCHER_PROFILE);
+	o->engine.launcherMode = 1;
+	o->engine.noMutex = 1;
+	o->engine.phase = START_ENGINE;
+	memset(&f, 0, sizeof f);
+	Engine_StartStep(o, &f);
 	return Engine_Result(o);
 }
 
@@ -1160,6 +1190,10 @@ int OpenBGI_Start(OpenBGI_t* o, const char* cmdLine)
 	}
 	o->engine.ran = 1;
 	snprintf(cmd, sizeof cmd, "%s", cmdLine ? cmdLine : "");
+	BGI_Free(o->engine.startCmd);
+	o->engine.startCmd = BGI_Strdup(cmd);
+	Host_GameDir(o, o->engine.startDir, sizeof o->engine.startDir);
+	o->launcher.hostQuit = 0; // (a quit the host asked for was the run's before this one)
 	Engine_ParseOptions(o, cmd);
 	if(o->engine.optVersion)
 	{
@@ -1229,10 +1263,12 @@ int OpenBGI_Start(OpenBGI_t* o, const char* cmdLine)
  * here: a stopped engine holds nothing of its run. */
 int OpenBGI_Stop(OpenBGI_t* o)
 {
+	Settings_Close(o); // the settings over this run go with it
 	if(o->engine.chooser)
 		GameChooser_End(o, 0, NULL, NULL, 0, NULL, 0); // the chooser was not answered
 	// the dialog in the frame goes; boxes from now on are the host's
 	Inframe_Free(o);
+	Perf_Stop(o); // the performance display's characters and picture
 	InputMap_Stop(o);
 	Request_Clear(o);
 	o->engine.phase = START_END;

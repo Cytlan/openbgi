@@ -699,6 +699,8 @@ const AsmOpName_t kAsmOpNames[] = {
 	{0xef, 0x2c, GEN_FIRST, GEN_LAST, "cfg_get"},
 	{0xef, 0x2d, GEN_FIRST, GEN_LAST, "cfg_set"},
 	{0xef, 0x30, GEN_FIRST, GEN_LAST, "generate_pattern"},
+	{0xef, 0x31, GEN_FIRST, GEN_LAST, "see_through"},
+	{0xef, 0x32, GEN_FIRST, GEN_LAST, "touch_drag"},
 	{0x0, 0x00, GEN_FIRST, GEN_LAST, "push_i8"},
 	{0x0, 0x01, GEN_FIRST, GEN_LAST, "push_i16"},
 	{0x0, 0x02, GEN_FIRST, GEN_LAST, "push_i32"},

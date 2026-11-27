@@ -823,7 +823,7 @@ static void TestExtensions(OpenBGI_t* o)
 	a.len = 0;
 	Op(&a, 0xef);
 	A8(&a, 0x00); // obgi.version
-	CHECK(Eval(o, &a) == 2);
+	CHECK(Eval(o, &a) == 3);
 	for(mode = 0; mode < 5; mode++)
 	{
 		a.len = 0;
@@ -887,6 +887,75 @@ static void TestExtensions(OpenBGI_t* o)
 	{
 		CHECK(f.value == BGI_SCRIPT_ERROR_VALUE);
 	}
+}
+
+// 1 when the program (a return is put after it) raises a script error
+static int Raises(OpenBGI_t* o, Asm_t* a)
+{
+	BgiTryFrame_t f;
+	Ret(a);
+	if(BGI_TRY(o, f))
+	{
+		Run(o, a);
+		BGI_END_TRY(o, f);
+		return 0;
+	}
+	return f.value == BGI_SCRIPT_ERROR_VALUE;
+}
+
+/* A null pointer where an instruction reads or writes: a script error,
+ * as a pointer into no area is - the original faults there, and its
+ * process ends.  Nothing is read or written through a null pointer when
+ * the count is 0, which is no error. */
+static void TestNullPointers(OpenBGI_t* o)
+{
+	Asm_t a;
+	printf("null pointers\n");
+	a.len = 0;
+	PushI8(&a, 0);
+	Op(&a, 0x08); // load
+	A8(&a, 2);
+	CHECK(Raises(o, &a));
+	a.len = 0;
+	PushI8(&a, 0);
+	PushI8(&a, 5);
+	Op(&a, 0x09); // store_keep: ptr, v
+	A8(&a, 2);
+	CHECK(Raises(o, &a));
+	a.len = 0;
+	PushI8(&a, 5);
+	PushI8(&a, 0);
+	Op(&a, 0x0a); // store: v, ptr
+	A8(&a, 2);
+	CHECK(Raises(o, &a));
+	a.len = 0;
+	PushI8(&a, 0);
+	PushI8(&a, 1);
+	PushI8(&a, 2);
+	Op(&a, 0x0c); // store_multi: ptr, two values
+	A8(&a, 2);
+	A8(&a, 2);
+	CHECK(Raises(o, &a));
+	a.len = 0;
+	PushI8(&a, 0);
+	PushI8(&a, 4);
+	Op(&a, 0x61); // memclr(0, 4)
+	CHECK(Raises(o, &a));
+	a.len = 0;
+	PushI8(&a, 0);
+	PushI8(&a, 0);
+	Op(&a, 0x61); // memclr(0, 0): nothing is written
+	PushI8(&a, 7);
+	CHECK(Eval(o, &a) == 7);
+	a.len = 0;
+	PushI8(&a, 0);
+	Op(&a, 0x68); // strlen(0)
+	CHECK(Raises(o, &a));
+	a.len = 0;
+	PushI8(&a, 0);
+	PushI8(&a, 0);
+	Op(&a, 0x69); // streq(0, 0)
+	CHECK(Raises(o, &a));
 }
 
 /* 1 when CheckPriority accepts prio, 0 when it raises the script error */
@@ -1707,6 +1776,7 @@ int main(void)
 	TestControl(o);
 	TestHeap(o);
 	TestErrors(o);
+	TestNullPointers(o);
 	TestExtensions(o);
 	TestLaterBuilds(o);
 	TestBorrower(o);

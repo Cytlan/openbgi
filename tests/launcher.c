@@ -16,10 +16,23 @@
  *              the new files and keeps the old ones in a backup folder
  *   broken   - sources that do not compile are said in a box, and the
  *              pack's own are compiled instead
+ *   cache    - the compiled program is kept in the folder and taken at
+ *              the next start in the compile's place: the same program;
+ *              a changed source, another build of the engine (the
+ *              pack's "build.id", which does not make the pack a newer
+ *              one) or a damaged cache file compiles again; the pack's
+ *              own sources, which run while the folder's are broken,
+ *              are kept the same way
  *   drops    - what is dropped on the launcher's window waits as a list
  *              the program takes from: a folder without the separator
  *              after it, in the order dropped, no more than the list
  *              holds, and nothing while no launcher runs
+ *   roots    - the folders a host names for a folder browser to start
+ *              from (OpenBGI_Files_t.nativeRoots): the program reads
+ *              them as the lists "roots" and "root_names", a separator
+ *              at a root's end left out and a root without a name
+ *              called by its path; the listing of "" has them, in the
+ *              host's order; a host that names none has neither
  *   pictures - the games the program lists wait for the host's run:
  *              one at a time, for the icon of the game's own program
  *              (not the setup's or the uninstaller's beside it) and for
@@ -38,6 +51,13 @@
  *              made ahead and never asked for goes with the next search;
  *              a job dropped while it is out is freed when it comes back
  *
+ *   back     - a whole run of frames, with a launcher that starts a game
+ *              the first time its program runs and ends the second
+ *              time: the launcher, the game, the launcher again and then
+ *              the end; when the host asks for the end while the game
+ *              runs (OpenBGI_Quit) no launcher follows; a game named on
+ *              the command line meets no launcher at all
+ *
  * The user's data folder is one of the test's own, in the scratch
  * directory of the test run (BGI_TEST_TMP, else the current directory).
  */
@@ -47,7 +67,10 @@
 #include "bgi/launcher.h"
 #include "bgi/wait.h"
 #include "bgi/version.h"
+#include "bgi/bpc.h"
 #include "host/os.h"
+
+#include "testhost.h"
 
 #include <stdio.h>
 
@@ -69,22 +92,26 @@ static void DataDir(void* user, char* buf, size_t n)
 
 #define MAIN "#engine 1.669\n#include \"a.inc\"\nstart() {\n    int x;\n    x = VALUE;\n    return x;\n}\n"
 
+static const char* gBuild; // the pack's "build.id" (tools/mkpack.py --build-id); NULL for a pack without one
+static const char* gMain;  // the pack's program in place of MAIN; NULL for MAIN
+
 // a pack of the two sources and a text, as tools/mkpack.py makes it (stored as they are)
 static uint32_t MakePack(const char* value)
 {
-	const char* names[3] = {"main.bpc", "a.inc", "README.txt"};
-	const char* texts[3];
+	const char* names[4] = {"main.bpc", "a.inc", "README.txt", LAUNCHER_BUILD_ID};
+	const char* texts[4];
 	char inc[64];
 	uint32_t at = 12;
-	int i;
+	int i, count = gBuild ? 4 : 3;
 	snprintf(inc, sizeof inc, "#define VALUE %s\n", value);
-	texts[0] = MAIN;
+	texts[0] = gMain ? gMain : MAIN;
 	texts[1] = inc;
 	texts[2] = "read me\n";
+	texts[3] = gBuild;
 	memcpy(gPack, "OBGIPACK", 8);
-	gPack[8] = 3;
+	gPack[8] = (uint8_t)count;
 	gPack[9] = gPack[10] = gPack[11] = 0;
-	for(i = 0; i < 3; i++)
+	for(i = 0; i < count; i++)
 	{
 		uint32_t n = (uint32_t)strlen(texts[i]), k;
 		gPack[at++] = (uint8_t)strlen(names[i]);
@@ -140,14 +167,14 @@ static void Listed(void* ctx, const char* name, int isDir)
 // what an earlier run left: the files, and those of its backup folders
 static void Sweep(OpenBGI_t* o)
 {
-	const char* names[4] = {"main.bpc", "a.inc", "README.txt", LAUNCHER_WRITTEN};
+	const char* names[6] = {"main.bpc", "a.inc", "README.txt", LAUNCHER_WRITTEN, LAUNCHER_CACHE, LAUNCHER_CACHE_OWN};
 	char path[0x500];
 	int i, k;
 	for(k = 0; k < 8; k++)
 	{
 		gBackup[0] = 0;
 		Host_NativeList(o, gFolder, Listed, NULL);
-		for(i = 0; i < 4; i++)
+		for(i = 0; i < 6; i++)
 		{
 			if(gBackup[0])
 				snprintf(path, sizeof path, "%s%s%c%s", gFolder, gBackup, Host_NativeSep(o), names[i]);
@@ -177,10 +204,22 @@ static int Prepare(OpenBGI_t* o, const char* value)
 	return Launcher_Prepare(o);
 }
 
+static uint32_t gProgramSize; // the program the last boot ran: its size
+static uint64_t gProgramSum;  // .. and a checksum of it
+
 // the boot's compile, without the run: 1 when a program came of it
 static int Compiles(OpenBGI_t* o)
 {
 	int ok = Launcher_Boot(o) && o->launcher.compiled != NULL;
+	gProgramSize = 0;
+	gProgramSum = 0xcbf29ce484222325ull;
+	if(ok)
+	{
+		uint32_t i;
+		gProgramSize = o->files.builtinSize;
+		for(i = 0; i < gProgramSize; i++)
+			gProgramSum = (gProgramSum ^ o->launcher.compiled[i]) * 0x100000001b3ull;
+	}
 	Launcher_SourcesFree(o);
 	o->launcher.running = 0;
 	return ok;
@@ -247,6 +286,59 @@ static void TestBroken(OpenBGI_t* o)
 	CHECK(Prepare(o, "4") == 0 && Compiles(o) && !Request_Pending(o));
 }
 
+static void TestCache(OpenBGI_t* o)
+{
+	char path[0x500], own[0x500];
+	uint8_t* d;
+	uint32_t size = 0, was;
+	uint64_t sum;
+	PathOf(LAUNCHER_CACHE, path, sizeof path);
+	PathOf(LAUNCHER_CACHE_OWN, own, sizeof own);
+	// (the group before left the folder compiled: a.inc says 5, the pack 4)
+	CHECK(Host_NativeStat(o, path, NULL) == OPENBGI_NATIVE_FILE);
+	CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 1); // nothing changed: taken
+	// a changed source: compiled, and what is kept of that is the program the compile made
+	Put(o, "a.inc", "#define VALUE 6\n");
+	CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 0);
+	was = gProgramSize;
+	sum = gProgramSum;
+	CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 1);
+	CHECK(was != 0 && gProgramSize == was && gProgramSum == sum);
+	// another build of the engine: compiled again; the pack is not a newer one for it (nothing is asked, no file replaced)
+	gBuild = "another build\n";
+	CHECK(Prepare(o, "4") == 0 && !Request_Pending(o) && FileIs(o, "a.inc", "#define VALUE 6\n"));
+	CHECK(Compiles(o) && o->launcher.cached == 0);
+	CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 1);
+	gBuild = NULL;
+	CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 0);
+	// a damaged cache file, and one cut short: compiled again
+	d = Host_ReadNativeFile(o, path, &size);
+	CHECK(d != NULL && size > 64);
+	if(d && size > 64)
+	{
+		d[size / 2] ^= 1;
+		CHECK(Host_WriteNativeFile(o, path, d, size));
+		CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 0 && gProgramSum == sum);
+		CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 1);
+		d[size / 2] ^= 1;
+		CHECK(Host_WriteNativeFile(o, path, d, size - 9));
+		CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 0);
+		CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 1);
+	}
+	free(d);
+	// the folder's sources broken: the pack's own run, compiled once and then taken; the box says so every time
+	Host_NativeRemove(o, own);
+	Put(o, "a.inc", "#define VALUE (\n");
+	CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 0 && Request_Pending(o) == 1);
+	Request_Clear(o);
+	CHECK(Host_NativeStat(o, own, NULL) == OPENBGI_NATIVE_FILE);
+	sum = gProgramSum;
+	CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 1 && Request_Pending(o) == 1 && gProgramSum == sum);
+	Request_Clear(o);
+	Put(o, "a.inc", "#define VALUE 5\n"); // mended: its own cache is of another a.inc by now
+	CHECK(Prepare(o, "4") == 0 && Compiles(o) && o->launcher.cached == 0 && !Request_Pending(o));
+}
+
 static void TestDrops(OpenBGI_t* o)
 {
 	char buf[0x400], path[0x500];
@@ -273,6 +365,48 @@ static void TestDrops(OpenBGI_t* o)
 		CHECK(Launcher_DropTake(o, 0) == 1);
 	CHECK(Launcher_DropTake(o, 0) == 0);
 	o->launcher.running = 0;
+}
+
+// the roots the test's host names: "path NUL name NUL" each, a NUL more at the end
+static char gRoots[64];
+static uint32_t gRootsLen;
+
+static uint32_t Roots(void* user, char* buf, uint32_t n)
+{
+	BGI_UNUSED(user);
+	if(!gRootsLen || gRootsLen + 1 > n)
+		return 0;
+	memcpy(buf, gRoots, gRootsLen + 1);
+	return gRootsLen;
+}
+
+static void TestRoots(OpenBGI_t* o)
+{
+	static const char list[] = "/a/b\0Shared\0/c/\0\0";
+	char buf[0x100];
+	int h;
+	// none named
+	CHECK(Launcher_RootValue(o, "roots", 0, buf, sizeof buf) == -1 && Launcher_RootValue(o, "root_names", 0, buf, sizeof buf) == -1);
+	CHECK(Launcher_RootValue(o, "home", 0, buf, sizeof buf) == 0);
+	// two: the second with a separator at its end and without a name
+	memcpy(gRoots, list, sizeof list);
+	gRootsLen = (uint32_t)sizeof list - 2;
+	CHECK(Launcher_RootValue(o, "roots", 0, buf, sizeof buf) == 1 && strcmp(buf, "/a/b") == 0);
+	CHECK(Launcher_RootValue(o, "root_names", 0, buf, sizeof buf) == 1 && strcmp(buf, "Shared") == 0);
+	CHECK(Launcher_RootValue(o, "roots", 1, buf, sizeof buf) == 1 && strcmp(buf, "/c") == 0);
+	CHECK(Launcher_RootValue(o, "root_names", 1, buf, sizeof buf) == 1 && strcmp(buf, "/c") == 0);
+	CHECK(Launcher_RootValue(o, "roots", 2, buf, sizeof buf) == -1 && buf[0] == 0);
+	CHECK(Launcher_RootValue(o, "roots", -1, buf, sizeof buf) == -1);
+	if(Host_NativeSep(o) == '/')
+	{ // (where paths have drives, the listing of "" is the drives)
+		h = Launcher_DirOpen(o, "", 0);
+		CHECK(h != 0 && Launcher_DirCount(o, h) == 2);
+		CHECK(Launcher_DirEntry(o, h, 0, buf, sizeof buf) == LAUNCHER_ENTRY_FOLDER && strcmp(buf, "/a/b") == 0);
+		CHECK(Launcher_DirEntry(o, h, 1, buf, sizeof buf) == LAUNCHER_ENTRY_FOLDER && strcmp(buf, "/c") == 0);
+		Launcher_DirClose(o, h);
+	}
+	gRootsLen = 0;
+	CHECK(Launcher_RootValue(o, "roots", 0, buf, sizeof buf) == -1);
 }
 
 // a file of the test's data folder: made from `data`, or (NULL) removed
@@ -627,6 +761,149 @@ static void TestReading(OpenBGI_t* o)
 	OS_DirRemove(place);
 }
 
+// ---- back to the launcher ---------------------------------------------------------------------
+
+// the game of the group "back": it waits a little and ends
+#define BACK_GAME "#engine 1.669\nstart() {\n    sys.timer_set(200);\n    sys.timer_wait();\n    return 0;\n}\n"
+
+/* The launcher of the group: the first time its program runs it notes
+ * that in its settings and starts the game at `game`, the second time
+ * it ends. */
+static void BackLauncher(char* out, size_t n, const char* game)
+{
+	char path[0x700];
+	size_t k = 0;
+	const char* p;
+	for(p = game; *p && k + 3 < sizeof path; p++)
+	{ // (the path as a string of the source)
+		if(*p == '\\' || *p == '"')
+			path[k++] = '\\';
+		path[k++] = *p;
+	}
+	path[k] = 0;
+	snprintf(out, n,
+		"#engine 1.669\n"
+		"global char gBuf[16] @ 0x1000;\n"
+		"start() { int r;\n"
+		"    sys.set_gmem_size(1);\n"
+		"    r = obgi.cfg_get(\"\", \"visits\", 0, gBuf, 16);\n"
+		"    if (r > 0) return 0;\n"
+		"    obgi.cfg_set(\"\", \"visits\", 0, \"1\");\n"
+		"    obgi.launch_game(\"%s\", \"\", 0, \"\");\n"
+		"    return 0;\n"
+		"}\n",
+		path);
+}
+
+/* Frames until the run is over (or too many went by): how often a
+ * launcher's program began to run and how often a game it started did.
+ * A box is answered as it comes (a host without sound refuses the game:
+ * its end counts all the same).  With `quit` the host asks for the end
+ * once the game is the run. */
+static int BackRun(OpenBGI_t* e, const char* cmd, int quit, int* launchers, int* games)
+{
+	OpenBGI_Frame_t f;
+	int r, i, wasLauncher = 0, wasGame = 0;
+	*launchers = *games = 0;
+	memset(&f, 0, sizeof f);
+	f.size = sizeof f;
+	r = OpenBGI_Start(e, cmd);
+	for(i = 0; r == OPENBGI_RUNNING && i < 60000; i++)
+	{
+		if(Request_Pending(e))
+			Request_Clear(e);
+		r = OpenBGI_RunFrame(e, &f);
+		if(e->launcher.running && !wasLauncher)
+			(*launchers)++;
+		if(e->launcher.launched && !wasGame)
+		{
+			(*games)++;
+			if(quit)
+				OpenBGI_Quit(e);
+		}
+		wasLauncher = e->launcher.running;
+		wasGame = e->launcher.launched;
+		OS_SleepMs(1);
+	}
+	OpenBGI_Stop(e);
+	return r == OPENBGI_DONE;
+}
+
+static void TestBack(const char* base)
+{
+	OpenBGI_Host_t host = gHost;
+	OpenBGI_t* e;
+	static char program[0x900];
+	char keptData[sizeof gData], keptFolder[sizeof gFolder], root[0x400], game[0x500], path[0x600], cmd[0x600];
+	char sep;
+	uint8_t arc[0x400];
+	BpcResult_t res;
+	int launchers, games;
+	// an engine of the group's own: it is started, as none of the others is - with the window nobody sees,
+	// since a test run has no display to make one on
+	host.window = NULL;
+	e = OpenBGI_New(&host);
+	CHECK(e != NULL);
+	if(!e)
+		return;
+	sep = Host_NativeSep(e);
+	// a data folder of the group's own, with the game in it
+	snprintf(keptData, sizeof keptData, "%s", gData);
+	snprintf(keptFolder, sizeof keptFolder, "%s", gFolder);
+	snprintf(root, sizeof root, "%s%copenbgi_test_back", base, sep);
+	TestHost_RemoveTree(root); // (what an earlier run left)
+	TestHost_Mkdir(root);
+	snprintf(gData, sizeof gData, "%s%c", root, sep);
+	snprintf(gFolder, sizeof gFolder, "%s" LAUNCHER_SOURCES "%c", gData, sep);
+	snprintf(game, sizeof game, "%s%cgame", root, sep);
+	TestHost_Mkdir(game);
+	// the game: an archive system.arc with the boot program in it
+	memset(&res, 0, sizeof res);
+	Bpc_Compile(e, BACK_GAME, strlen(BACK_GAME), "ipl.bpc", (EngineGen_t)0, NULL, NULL, &res);
+	CHECK(res.file != NULL && !res.errors && res.size > 0 && res.size < sizeof arc - 0x30);
+	if(res.file && res.size < sizeof arc - 0x30)
+	{
+		memset(arc, 0, sizeof arc);
+		memcpy(arc, "PackFile    ", 12);
+		arc[12] = 1; // one entry: its name, where it is, its size
+		memcpy(arc + 16, "ipl._bp", 7);
+		arc[16 + 20] = (uint8_t)res.size;
+		arc[16 + 21] = (uint8_t)(res.size >> 8);
+		memcpy(arc + 48, res.file, res.size);
+		snprintf(path, sizeof path, "%s%csystem.arc", game, sep);
+		CHECK(Host_WriteNativeFile(e, path, arc, 48 + res.size));
+	}
+	BGI_Free(res.file);
+	BGI_Free(res.labels);
+	// the launcher, then the game it starts, then the launcher again, which ends
+	BackLauncher(program, sizeof program, game);
+	gMain = program;
+	OpenBGI_SetLauncher(e, gPack, MakePack("1"));
+	Host_SetGameDir(e, root);
+	CHECK(BackRun(e, "", 0, &launchers, &games));
+	CHECK(launchers == 2 && games == 1);
+	CHECK(!e->launcher.launched && !e->launcher.back);
+	// the host asks for the end while the game runs: no launcher after it
+	snprintf(path, sizeof path, "%sopenbgi.json", gData);
+	Host_NativeRemove(e, path); // (the launcher's note that it ran)
+	Host_SetGameDir(e, root);
+	CHECK(BackRun(e, "", 1, &launchers, &games));
+	CHECK(launchers == 1 && games == 1);
+	// a game named on the command line: no launcher before it and none after it
+	Host_NativeRemove(e, path);
+	Host_SetGameDir(e, root);
+	snprintf(cmd, sizeof cmd, "\"%s\"", game);
+	CHECK(BackRun(e, cmd, 0, &launchers, &games));
+	CHECK(launchers == 0 && games == 0);
+	gMain = NULL;
+	OpenBGI_SetLauncher(e, NULL, 0);
+	OpenBGI_Delete(e);
+	OS_SetGameDir(base); // (a folder that is the current one cannot be removed on Windows)
+	TestHost_RemoveTree(root);
+	snprintf(gData, sizeof gData, "%s", keptData);
+	snprintf(gFolder, sizeof gFolder, "%s", keptFolder);
+}
+
 int main(void)
 {
 	const char* tmp = getenv("BGI_TEST_TMP");
@@ -635,6 +912,7 @@ int main(void)
 	gHost = *OS_Host();
 	gFiles = *gHost.files;
 	gFiles.userDataDir = DataDir;
+	gFiles.nativeRoots = Roots;
 	gHost.files = &gFiles;
 	o = OpenBGI_New(&gHost); // the engine whose code the test runs
 	if(!o)
@@ -655,14 +933,20 @@ int main(void)
 	TestNewer(o);
 	printf("broken\n");
 	TestBroken(o);
+	printf("cache\n");
+	TestCache(o);
 	printf("drops\n");
 	TestDrops(o);
+	printf("roots\n");
+	TestRoots(o);
 	printf("pictures\n");
 	TestPictures(o);
 	printf("reading\n");
 	TestReading(o);
 	Host_SetGameDir(o, base); // (a folder that is the current one cannot be removed on Windows)
 	Sweep(o);
+	printf("back\n");
+	TestBack(base);
 	OS_Shutdown();
 	if(gFails)
 	{

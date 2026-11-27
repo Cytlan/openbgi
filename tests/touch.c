@@ -47,9 +47,23 @@
  *   knob     - a drag from the knob's thumb holds the left button and
  *              moves the thumb; one from beside it too (the thumb taken at
  *              its click point); one from another target beside it points
+ *   hold     - a program that asked for the finger itself ("EF 32",
+ *              Touch_SetDrag): the pointer where the finger goes down
+ *              and the left button held from the next frame, the pointer
+ *              with the finger at once, the button released where it
+ *              lifts - no tap, no long press, no swipe, no snap; a
+ *              cancelled finger releases too; a second finger does
+ *              nothing; told off, the gestures are back
  *   other    - a cancelled contact does nothing; a third finger ends the
  *              gesture until all have lifted; two taps queue one after the
  *              other
+ *   reader   - a program that reads the left button itself every fourth
+ *              frame ("80 11", Steps_ButtonRead): a tap's release waits
+ *              until the press was read, and the press of a second tap
+ *              until the release was; one that stopped reading before the
+ *              tap is not waited for, one that stops after the press only
+ *              for STEPS_READ_MS; the right button, which it does not
+ *              read, goes on as ever
  *   frame    - through OpenBGI_RunFrame, with the picture of the screen
  *              (Screen_Setup) and what the engine draws in it: a child
  *              window or the text entry over the sprite keeps a tap from
@@ -489,6 +503,63 @@ static void TestFollow(void)
 	EngineDown(o);
 }
 
+static void TestHold(void)
+{
+	OpenBGI_t* o = EngineUp(1);
+	printf("hold\n");
+	if(!o)
+		return;
+	Button(o); // a click target at (100, 100): nothing snaps to it
+	Touch_SetDrag(o, 1);
+	// down: the pointer there, the button a frame later; it stays down however long
+	Touch(o, 1, OPENBGI_TOUCH_DOWN, 150, 140);
+	Frames(o, 40);
+	LOG("0:M150,140 1:L+");
+	CHECK(o->input.keyboard[1] & 0x80);
+	CHECK(!(o->input.keyboard[2] & 0x80) && o->input.keyState[2].counter == 0); // (no long press)
+	// moved: the pointer with it from the first pixel, the moves of one frame one step
+	Touch(o, 1, OPENBGI_TOUCH_MOVE, 150, 141);
+	Frames(o, 1);
+	Touch(o, 1, OPENBGI_TOUCH_MOVE, 150, 200);
+	Touch(o, 1, OPENBGI_TOUCH_MOVE, 150, 260);
+	Frames(o, 2);
+	LOG("0:M150,141 1:M150,260");
+	// a second finger does nothing
+	Touch(o, 2, OPENBGI_TOUCH_DOWN, 400, 300);
+	Touch(o, 2, OPENBGI_TOUCH_MOVE, 400, 350);
+	Touch(o, 2, OPENBGI_TOUCH_UP, 400, 350);
+	Frames(o, 3);
+	LOG("");
+	CHECK(o->input.keyboard[1] & 0x80);
+	// lifted: the button released there
+	Touch(o, 1, OPENBGI_TOUCH_UP, 150, 260);
+	Frames(o, 3);
+	LOG("0:L-");
+	CHECK(o->input.keyState[1].counter == 1 && !o->input.touch.tapValid);
+	// a quick flick is the button held over that way: no wheel
+	Stroke(o, 300, 100, 300, 200, 1);
+	LOG("0:M300,100 1:L+ 2:M300,200 3:L-");
+	CHECK(o->input.keyState[0x0e].counter == 0);
+	// a cancelled finger lets go too
+	Touch(o, 1, OPENBGI_TOUCH_DOWN, 50, 60);
+	Frames(o, 3);
+	Touch(o, 1, OPENBGI_TOUCH_CANCEL, 50, 60);
+	Frames(o, 3);
+	LOG("0:M50,60 1:L+ 3:L-");
+	// told off while a finger is down: that one goes on as it began, the next is a gesture again
+	Touch(o, 1, OPENBGI_TOUCH_DOWN, 300, 300);
+	Frames(o, 2);
+	Touch_SetDrag(o, 0);
+	Touch(o, 1, OPENBGI_TOUCH_MOVE, 310, 330);
+	Frames(o, 2);
+	Touch(o, 1, OPENBGI_TOUCH_UP, 310, 330);
+	Frames(o, 2);
+	LOG("0:M300,300 1:L+ 2:M310,330 4:L-");
+	Tap(o, 120, 115);
+	LOG("5:M120,115 6:L+ 7:L-");
+	EngineDown(o);
+}
+
 static void TestTwo(void)
 {
 	OpenBGI_t* o = EngineUp(1);
@@ -604,6 +675,71 @@ static void TestKnob(void)
 	Touch(o, 1, OPENBGI_TOUCH_UP, 145, 335);
 	Frames(o, 2);
 	LOG("1:M225,315 2:L+ 3:M125,315 4:L-");
+	EngineDown(o);
+}
+
+// `count` frames in which a program reads the left button itself in every `every`-th one, after the steps as
+// a pass does: what it read ('0' up, '1' down) goes to the end of `seen`
+static void FramesRead(OpenBGI_t* o, int count, int every, char* seen, size_t n)
+{
+	while(count-- > 0)
+	{
+		int read = gFrame % every == 0;
+		size_t at = strlen(seen);
+		Frames(o, 1);
+		if(read && at + 1 < n)
+		{
+			Steps_ButtonRead(o, OPENBGI_BUTTON_LEFT);
+			seen[at] = (o->input.keyboard[1] & 0x80) ? '1' : '0';
+			seen[at + 1] = 0;
+		}
+	}
+}
+
+static void TestReader(void)
+{
+	OpenBGI_t* o = EngineUp(1);
+	char seen[64] = "";
+	printf("reader\n");
+	if(!o)
+		return;
+	Button(o);
+	// read in the frames 0, 4, 8 ..: the press of frame 6 is read in frame 8, and only then comes the release
+	Touch(o, 1, OPENBGI_TOUCH_DOWN, 120, 115);
+	FramesRead(o, 5, 4, seen, sizeof seen);
+	Touch(o, 1, OPENBGI_TOUCH_UP, 120, 115);
+	FramesRead(o, 11, 4, seen, sizeof seen);
+	LOG("5:M120,115 6:L+ 9:L-");
+	CHECK(strcmp(seen, "0010") == 0);
+	// two taps one after the other: the second press waits for the release to be read (frame 4)
+	seen[0] = 0;
+	Touch(o, 1, OPENBGI_TOUCH_DOWN, 120, 115);
+	Touch(o, 1, OPENBGI_TOUCH_UP, 120, 115);
+	Touch(o, 1, OPENBGI_TOUCH_DOWN, 120, 115);
+	Touch(o, 1, OPENBGI_TOUCH_UP, 120, 115);
+	FramesRead(o, 16, 4, seen, sizeof seen);
+	LOG("0:M120,115 1:L+ 5:L- 6:M120,115 9:L+ 13:L-");
+	CHECK(strcmp(seen, "0101") == 0);
+	// the right button is not read: a long press is as ever
+	seen[0] = 0;
+	Touch(o, 1, OPENBGI_TOUCH_DOWN, 300, 300);
+	FramesRead(o, 40, 4, seen, sizeof seen);
+	Touch(o, 1, OPENBGI_TOUCH_UP, 300, 300);
+	FramesRead(o, 4, 4, seen, sizeof seen);
+	LOG("32:M300,300 33:R+ 34:R-");
+	// it stops reading after the press: the release comes when STEPS_READ_MS are over (16 frames after frame 1)
+	seen[0] = 0;
+	FramesRead(o, 1, 1, seen, sizeof seen); // (read once more, a frame before the tap)
+	Log(gLog, __LINE__);
+	Touch(o, 1, OPENBGI_TOUCH_DOWN, 120, 115);
+	Touch(o, 1, OPENBGI_TOUCH_UP, 120, 115);
+	Frames(o, 20);
+	LOG("0:M120,115 1:L+ 17:L-");
+	// .. and one that read last long before the tap is not waited for at all
+	Frames(o, 20);
+	LOG("");
+	Tap(o, 120, 115);
+	LOG("5:M120,115 6:L+ 7:L-");
 	EngineDown(o);
 }
 
@@ -760,9 +896,11 @@ int main(void)
 	TestLong();
 	TestSwipe();
 	TestFollow();
+	TestHold();
 	TestTwo();
 	TestKnob();
 	TestOther();
+	TestReader();
 	TestFrame();
 	OS_Shutdown();
 	if(gFails)

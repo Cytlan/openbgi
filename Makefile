@@ -128,6 +128,12 @@ ifneq ($(ARCHES_$(PLATFORM)),)
     $(error ARCH=$(ARCH): the $(PLATFORM) build takes $(ARCHES_$(PLATFORM)))
   endif
 endif
+# The targets that only start make again for a platform of their own
+# (`make android ARCH=arm64`): when nothing else is asked for, nothing is
+# built for the platform of this run, and an ARCH it could not build is no
+# error (ONLY_RESTART: yes).
+RESTART_GOALS := win win64 haiku macos android wasm wasm-sim headless
+ONLY_RESTART := $(if $(MAKECMDGOALS),$(if $(filter-out $(RESTART_GOALS),$(MAKECMDGOALS)),,yes))
 OBJDIR := obj/$(PLATFORM)-$(ARCH)$(if $(SAN),-san)
 BINDIR_posix   := bin/linux
 BINDIR_wasmsim := bin/linux
@@ -349,7 +355,7 @@ else
     else ifeq ($(ARCH),x86_64)
       CC := $(CC) -m64
       PKG_CONFIG := PKG_CONFIG_LIBDIR=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib64/pkgconfig:/usr/share/pkgconfig $(PKGCONF)
-    else
+    else ifeq ($(ONLY_RESTART),)
       $(error ARCH=$(ARCH) on a $(HOST_ARCH) host needs CROSS=<toolchain prefix>)
     endif
   endif
@@ -472,7 +478,8 @@ endif
 # Buriko program of OpenBGI's own (launcher/launcher.bpc, docs/dev/launcher.md)
 # whose sources are packed into them - LAUNCHER=1, the default for Linux,
 # Windows, Haiku, macOS and the test host.  The engine writes the sources
-# into the user's data folder and compiles them itself at every start, so
+# into the user's data folder and compiles them there itself (and keeps the
+# result until a source or the engine changes), so
 # no compiled program is kept in the source tree or in the binary.
 # LAUNCHER=0 leaves the sources out: the program then asks for a game with
 # the system's dialog as before.  The builds whose game comes from
@@ -747,9 +754,15 @@ FORCE:
 # (the program first: it is the file the engine compiles)
 LAUNCHER_SRC := launcher/launcher.bpc $(sort $(wildcard launcher/*.inc))
 
-$(OBJDIR)/gen/launcher.c: $(LAUNCHER_SRC) tools/mkpack.py
+# The engine keeps the program it compiled of them and compiles again when a source changed - or the
+# engine: the pack says which build carries it, by a checksum of everything the engine is built from
+# (the file "build.id" of the pack; src/sys/launcher_src.c).
+BUILD_ID_SRC := $(ENGINE_SRC) $(filter-out src/host/% src/tools/%,$(wildcard include/*.h src/include/bgi/*.h src/include/bgi/*/*.h \
+                src/*/*.h src/*/*/*.h src/*/*.inc src/*/*/*.inc))
+
+$(OBJDIR)/gen/launcher.c: $(LAUNCHER_SRC) tools/mkpack.py $(BUILD_ID_SRC)
 	@mkdir -p $(dir $@)
-	@python3 tools/mkpack.py $@ gOsLauncherSources $(LAUNCHER_SRC)
+	@python3 tools/mkpack.py $@ gOsLauncherSources $(LAUNCHER_SRC) --build-id $(BUILD_ID_SRC)
 
 $(OBJDIR)/gen/launcher.o: $(OBJDIR)/gen/launcher.c
 	$(CC) $(CFLAGS) -w -c -o $@ $<

@@ -3,14 +3,20 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """mkpack.py - source files packed into a C table, for a program the build carries as its sources.
 
-    mkpack.py OUT.c NAME FILE...
+    mkpack.py OUT.c NAME FILE... [--build-id FILE...]
 
 writes OUT.c with `const unsigned char NAME[]` (the pack) and
 `const unsigned int NAMESize`.  The Makefile makes the launcher's
 sources part of the desktop programs this way (LAUNCHER=1: launcher/,
 docs/dev/launcher.md); the engine writes them into the user's data folder and
-compiles them at every start (src/sys/launcher_src.c).  The first file is the
+compiles them there (src/sys/launcher_src.c).  The first file is the
 one that is compiled.  OUT.c is rewritten only when it would change.
+
+--build-id adds a file "build.id" to the pack that is no source: a
+checksum of the files named after it, by their names and their bytes.
+The Makefile names the engine's own sources, so that the engine can tell
+a program it compiled and kept from one that another build of it
+compiled, and compile again.
 
 The pack: the eight bytes "OBGIPACK", the number of files (32 bits, low
 byte first), then for each file the length of its name (a byte), the name
@@ -19,10 +25,21 @@ deflate), its size and its packed size (32 bits each), and the packed
 bytes.  Line ends are made LF on the way in, so that a checkout with
 CR LF packs the same.
 """
+import hashlib
 import os
 import struct
 import sys
 import zlib
+
+
+def build_id(paths):
+    """a checksum of the files, by name and content (line ends made LF), as text"""
+    h = hashlib.sha256()
+    for path in sorted(set(paths)):
+        with open(path, "rb") as f:
+            data = f.read().replace(b"\r\n", b"\n")
+        h.update(path.replace(os.sep, "/").encode("utf-8") + b"\0" + struct.pack("<I", len(data)) + data)
+    return h.hexdigest().encode("ascii") + b"\n"
 
 
 def main():
@@ -30,10 +47,20 @@ def main():
         sys.exit(__doc__)
     out, name = sys.argv[1:3]
     files = sys.argv[3:]
-    pack = bytearray(b"OBGIPACK" + struct.pack("<I", len(files)))
-    for path in files:
-        with open(path, "rb") as f:
-            data = f.read().replace(b"\r\n", b"\n")
+    stamped = None
+    if "--build-id" in files:
+        at = files.index("--build-id")
+        files, stamped = files[:at], files[at + 1:]
+    if not files:
+        sys.exit(__doc__)
+    entries = [(path, None) for path in files]
+    if stamped is not None:
+        entries.append(("build.id", build_id(stamped)))
+    pack = bytearray(b"OBGIPACK" + struct.pack("<I", len(entries)))
+    for path, data in entries:
+        if data is None:
+            with open(path, "rb") as f:
+                data = f.read().replace(b"\r\n", b"\n")
         base = os.path.basename(path).encode("ascii")
         if not 0 < len(base) < 48:
             sys.exit("mkpack.py: the name of %s is too long" % path)

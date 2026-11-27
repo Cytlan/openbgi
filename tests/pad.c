@@ -1358,6 +1358,24 @@ static void TestArrow(void)
 			RunFrames(o, &f, 1);
 			CHECK(o->input.pad.arrowH == 12 && o->input.pad.arrowW == 9 && Pixel(&f, o->input.pointerX + 4, o->input.pointerY + 14) == 0 &&
 				Pixel(&f, o->input.pointerX + 2, o->input.pointerY + 5) == 0xffffff);
+			// on a screen that says its density: 4.5 mm at least, here 45 pixels; the sizes by that
+			CHECK(OpenBGI_InputSettings(o, NULL));
+			OpenBGI_TouchScale(o, 254);
+			RunFrames(o, &f, 1);
+			CHECK(o->input.pad.arrowH == 45 && o->input.pad.arrowW == 29 && Pixel(&f, o->input.pointerX + 8, o->input.pointerY + 26) == 0xffffff);
+			CHECK(OpenBGI_InputSettings(o, "{\"pointerSize\": \"large\"}"));
+			RunFrames(o, &f, 1);
+			CHECK(o->input.pad.arrowH == 67);
+			OpenBGI_TouchScale(o, 2000); // (never larger than its picture has room for)
+			RunFrames(o, &f, 1);
+			CHECK(o->input.pad.arrowH == PAD_ARROW_MAX_H && o->input.pad.arrowW <= PAD_ARROW_MAX_W);
+			OpenBGI_TouchScale(o, 60); // a coarse screen: the picture's own rule
+			RunFrames(o, &f, 1);
+			CHECK(o->input.pad.arrowH == 24);
+			OpenBGI_TouchScale(o, 0);
+			CHECK(OpenBGI_InputSettings(o, "{\"pointerSize\": \"small\"}"));
+			RunFrames(o, &f, 1);
+			CHECK(o->input.pad.arrowH == 12);
 			// never: none for the pad either
 			CHECK(OpenBGI_InputSettings(o, "{\"pointer\": \"never\"}"));
 			RunFrames(o, &f, 1);

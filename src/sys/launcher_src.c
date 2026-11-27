@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * launcher_src.c - the launcher's program (src/include/bgi/launcher.h): its
- *            sources, kept in the user's data folder and compiled at
- *            every start; not part of the original engine
+ *            sources, kept in the user's data folder, compiled there
+ *            and the compiled program kept beside them; not part of the
+ *            original engine
  *
  * The host hands the engine the sources of the launcher, packed
  * (OpenBGI_SetLauncher; tools/mkpack.py describes the pack).  At a start
@@ -13,6 +14,18 @@
  * of them is compiled, there, by the compiler the engine has in it
  * (bgi/bpc.h).  What the folder holds is what runs: a change of a file
  * shows at the next start.
+ *
+ * The compiled program is kept in the folder (LAUNCHER_CACHE), with a
+ * note of what it was made from: every file the compile read, or looked
+ * for and did not find, with a checksum of its bytes, and the build of
+ * the engine that compiled it.  A start whose files and engine are the
+ * same takes the program from there and compiles nothing; any other
+ * compiles and writes the cache anew.  The build is the engine's release
+ * and, where the host's pack names one (the file LAUNCHER_BUILD_ID,
+ * which tools/mkpack.py makes of the engine's own sources), that: so a
+ * changed compiler compiles again.  The pack's own sources, which run
+ * when the folder's do not compile, have a cache of their own
+ * (LAUNCHER_CACHE_OWN).
  *
  * The folder is kept up to date with the engine.  LAUNCHER_WRITTEN in it
  * notes a checksum of every file the engine wrote and of the pack they
@@ -30,7 +43,8 @@
  * A "change" is one of a source (.bpc, .inc); the other files of the
  * pack follow along.  When the folder's sources do not compile the
  * messages are shown and the pack's own are compiled instead, from
- * memory; the same when there is no folder to write to.
+ * memory; the same when there is no folder to write to (nothing is kept
+ * then: every start compiles).
  */
 #include "bgi/bpc.h"
 #include "bgi/bytes.h"
@@ -43,6 +57,7 @@
 #include "bgi/core.h"
 #include "bgi/request.h"
 #include "bgi/launcher.h"
+#include "bgi/release.h"
 #include "bgi/sjis.h"
 #include "bgi/version.h"
 
@@ -52,7 +67,10 @@
 #define MESSAGE_LINES 5          // lines of the compiler's messages shown in a box,
 #define MESSAGE_WIDTH 96         // .. and characters of each
 #define FILE_MAX      0x1000000u // a source file larger than this is none
+#define CACHE_FILES   64         // files a compile may read or look for and still be kept,
+#define CACHE_FORMAT  1          // .. and the cache file's layout
 static const char kPackMagic[8] = {'O', 'B', 'G', 'I', 'P', 'A', 'C', 'K'};
+static const char kCacheMagic[8] = {'O', 'B', 'G', 'I', 'C', 'A', 'C', 'H'};
 
 typedef struct SrcFile
 {
@@ -72,6 +90,7 @@ struct LauncherSources
 	SrcFile_t f[LAUNCHER_FILES];
 	int count;
 	uint64_t hash;           // of the whole pack
+	uint64_t build;          // of the pack's LAUNCHER_BUILD_ID: the engine's build as the host's build tells it (0: it does not)
 	char dir[LAUNCHER_PATH]; // the folder, a separator after it; "" when there is none to use
 	int hasFrom, hasAsked;
 	uint64_t from;   // LAUNCHER_WRITTEN: the pack the folder was written from
@@ -112,7 +131,7 @@ static void SourcesFree(LauncherSources_t* s)
 static LauncherSources_t* Unpack(const uint8_t* pack, uint32_t size)
 {
 	LauncherSources_t* s;
-	uint32_t at = 12, count, i;
+	uint32_t at = 12, count, i, marks = 0;
 	if(!pack || size < 12 || memcmp(pack, kPackMagic, 8) != 0)
 		return NULL;
 	count = Le32(pack + 8);
@@ -146,13 +165,21 @@ static LauncherSources_t* Unpack(const uint8_t* pack, uint32_t size)
 		if(!f->data)
 			break;
 		f->data[raw] = 0;
+		at += packed;
+		if(strcmp(f->name, LAUNCHER_BUILD_ID) == 0)
+		{ // not a file of the folder, and no part of what makes a pack newer: the build that carries the pack
+			s->build = Hash(HASH_START, f->data, raw);
+			free(f->data);
+			memset(f, 0, sizeof *f);
+			marks++;
+			continue;
+		}
 		f->size = raw;
 		f->hash = Hash(HASH_START, f->data, raw);
 		s->hash = Hash(Hash(s->hash, f->name, nameLen + 1), f->data, raw);
-		at += packed;
 		s->count++;
 	}
-	if((uint32_t)s->count != count)
+	if((uint32_t)s->count + marks != count || !s->count)
 	{
 		SourcesFree(s);
 		return NULL;
@@ -509,25 +536,67 @@ void Launcher_Answer(OpenBGI_t* o, int replace)
 
 // ---- the compile -----------------------------------------------------------------------------
 
+// a file a compile asked for
+typedef struct ReadNote
+{
+	char* path;    // as the compile named it
+	int there;     // it was read
+	uint64_t hash; // .. and had these bytes
+} ReadNote_t;
+
 typedef struct ReadCtx
 {
 	OpenBGI_t* o;
 	LauncherSources_t* s;
+	ReadNote_t note[CACHE_FILES]; // what the folder's compile asked for, in its order
+	int notes;                    // .. so many; -1 when it was more than can be noted (nothing is kept then)
 } ReadCtx_t;
 
-static uint8_t* ReadFolder(void* ctx, const char* path, uint32_t* size)
+static void NotesFree(ReadCtx_t* c)
 {
-	ReadCtx_t* c = (ReadCtx_t*)ctx;
+	int i;
+	for(i = 0; i < c->notes; i++)
+		free(c->note[i].path);
+	c->notes = 0;
+}
+
+// a file of the folder as the compile reads it: NULL when there is none of that name
+static uint8_t* ReadNative(OpenBGI_t* o, const char* path, uint32_t* size)
+{
 	uint8_t* d;
 	*size = 0;
-	if(Host_NativeStat(c->o, path, NULL) != OPENBGI_NATIVE_FILE)
+	if(Host_NativeStat(o, path, NULL) != OPENBGI_NATIVE_FILE)
 		return NULL;
-	d = Host_ReadNativeFile(c->o, path, size);
+	d = Host_ReadNativeFile(o, path, size);
 	if(d && *size > FILE_MAX)
 	{
 		free(d);
 		*size = 0;
 		return NULL;
+	}
+	return d;
+}
+
+static uint8_t* ReadFolder(void* ctx, const char* path, uint32_t* size)
+{
+	ReadCtx_t* c = (ReadCtx_t*)ctx;
+	uint8_t* d = ReadNative(c->o, path, size);
+	if(c->notes >= 0)
+	{
+		size_t n = strlen(path) + 1;
+		ReadNote_t* note = c->notes < CACHE_FILES ? &c->note[c->notes] : NULL;
+		if(!note || n > 0xffff || !(note->path = (char*)malloc(n)))
+		{
+			NotesFree(c);
+			c->notes = -1;
+		}
+		else
+		{
+			memcpy(note->path, path, n);
+			note->there = d != NULL;
+			note->hash = d ? Hash(HASH_START, d, *size) : 0;
+			c->notes++;
+		}
 	}
 	return d;
 }
@@ -562,10 +631,10 @@ static EngineGen_t LauncherGen(void)
 /* Compile the first file: the folder's (folder = 1) or the pack's own.
  * 1 and *out when it compiled; else 0, with what the compiler said in
  * *messages (free() it; NULL when it said nothing, or the file is not
- * there at all). */
-static int CompileSources(OpenBGI_t* o, LauncherSources_t* s, int folder, BpcResult_t* out, char** messages)
+ * there at all).  ctx->note has what the folder's compile asked for
+ * afterwards (NotesFree). */
+static int CompileSources(OpenBGI_t* o, LauncherSources_t* s, int folder, BpcResult_t* out, char** messages, ReadCtx_t* ctx)
 {
-	ReadCtx_t ctx;
 	PrepIncludes_t inc;
 	char path[LAUNCHER_PATH + 64];
 	uint8_t* text;
@@ -573,9 +642,10 @@ static int CompileSources(OpenBGI_t* o, LauncherSources_t* s, int folder, BpcRes
 	*messages = NULL;
 	memset(out, 0, sizeof *out);
 	memset(&inc, 0, sizeof inc);
-	ctx.o = o;
-	ctx.s = s;
-	inc.ctx = &ctx;
+	NotesFree(ctx);
+	ctx->o = o;
+	ctx->s = s;
+	inc.ctx = ctx;
 	if(folder)
 	{
 		PathOf(s, s->f[0].name, path, sizeof path);
@@ -590,7 +660,7 @@ static int CompileSources(OpenBGI_t* o, LauncherSources_t* s, int folder, BpcRes
 		snprintf(path, sizeof path, "%s", s->f[0].name);
 		inc.read = ReadPack;
 	}
-	text = inc.read(&ctx, path, &size);
+	text = inc.read(ctx, path, &size);
 	if(!text)
 		return 0;
 	Bpc_CompileText(o, (const char*)text, size, path, LauncherGen(), &inc, messages, out);
@@ -602,6 +672,137 @@ static int CompileSources(OpenBGI_t* o, LauncherSources_t* s, int folder, BpcRes
 	BGI_Free(out->file);
 	out->file = NULL;
 	return 0;
+}
+
+// ---- the compiled program, kept -------------------------------------------------------------
+
+/* What a kept program has to have been compiled by to stand: this
+ * release of the engine and, where the pack says, this build of it, for
+ * the launcher's profile - and, the pack's own sources, from this pack. */
+static uint64_t CacheKey(const LauncherSources_t* s, int folder)
+{
+	uint8_t b[16];
+	uint64_t h = Hash(HASH_START, OPENBGI_TITLE, sizeof OPENBGI_TITLE);
+	h = Hash(h, LAUNCHER_PROFILE, sizeof LAUNCHER_PROFILE);
+	PutLe32(b, (uint32_t)s->build);
+	PutLe32(b + 4, (uint32_t)(s->build >> 32));
+	PutLe32(b + 8, folder ? 0 : (uint32_t)s->hash);
+	PutLe32(b + 12, folder ? 0 : (uint32_t)(s->hash >> 32));
+	return Hash(h, b, sizeof b);
+}
+
+static void PutHash(uint8_t* p, uint64_t h)
+{
+	PutLe32(p, (uint32_t)h);
+	PutLe32(p + 4, (uint32_t)(h >> 32));
+}
+
+/* The cache file (all numbers low byte first):
+ *
+ *    8  "OBGICACH"
+ *    4  CACHE_FORMAT
+ *    8  CacheKey
+ *    4  the number of files noted, then for each:
+ *         2  the length of its path, the NUL included
+ *         1  whether it was there
+ *         8  the checksum of its bytes
+ *         .. the path, as the compile named it
+ *    4  the program's size, then the program
+ *    8  the checksum of everything before
+ */
+#define CACHE_HEAD 24
+#define CACHE_NOTE 11
+
+static void CachePath(const LauncherSources_t* s, int folder, char* out, size_t n)
+{
+	PathOf(s, folder ? LAUNCHER_CACHE : LAUNCHER_CACHE_OWN, out, n);
+}
+
+/* The program kept from an earlier compile of the folder's sources
+ * (folder = 1) or the pack's own, when it stands: the same engine, and
+ * every file that compile asked for is as it was then - there or not,
+ * with the same bytes.  1 with the program in *out (BGI_Free). */
+static int CacheLoad(OpenBGI_t* o, const LauncherSources_t* s, int folder, BpcResult_t* out)
+{
+	char path[LAUNCHER_PATH + 64];
+	uint8_t *d, *program = NULL;
+	uint32_t size = 0, end, at = CACHE_HEAD, count, i, programSize = 0;
+	int ok;
+	memset(out, 0, sizeof *out);
+	CachePath(s, folder, path, sizeof path);
+	d = ReadNative(o, path, &size);
+	if(!d)
+		return 0;
+	end = size >= 8 ? size - 8 : 0; // where the checksum is
+	ok = size >= CACHE_HEAD + 4 + 8 && memcmp(d, kCacheMagic, 8) == 0 && Le32(d + 8) == CACHE_FORMAT && Le64(d + 12) == CacheKey(s, folder) &&
+		Le64(d + end) == Hash(HASH_START, d, end);
+	count = ok ? Le32(d + 20) : 0;
+	ok = ok && count <= CACHE_FILES;
+	for(i = 0; ok && i < count; i++)
+	{
+		uint32_t len, got = 0;
+		uint8_t* now;
+		if(end - at < CACHE_NOTE || (len = Le16(d + at)) == 0 || len > end - at - CACHE_NOTE || d[at + CACHE_NOTE + len - 1] != 0)
+		{
+			ok = 0;
+			break;
+		}
+		now = ReadNative(o, (const char*)d + at + CACHE_NOTE, &got);
+		ok = (now != NULL) == (d[at + 2] != 0) && (!now || Hash(HASH_START, now, got) == Le64(d + at + 3));
+		free(now);
+		at += CACHE_NOTE + len;
+	}
+	if(ok && end - at >= 4)
+	{
+		programSize = Le32(d + at);
+		if(programSize && programSize == end - at - 4 && (program = (uint8_t*)BGI_Alloc(programSize)) != NULL)
+			memcpy(program, d + at + 4, programSize);
+	}
+	free(d);
+	if(!program)
+		return 0;
+	out->file = program;
+	out->size = programSize;
+	return 1;
+}
+
+/* Keep the program a compile made, with what it asked for (`c`; NULL
+ * for the pack's own sources, which are in the key).  Nothing is kept of
+ * a compile that asked for more files than can be noted; a folder that
+ * cannot be written to keeps nothing either, and every start compiles. */
+static void CacheSave(OpenBGI_t* o, const LauncherSources_t* s, int folder, const ReadCtx_t* c, const BpcResult_t* res)
+{
+	char path[LAUNCHER_PATH + 64];
+	size_t size = CACHE_HEAD + 4 + (size_t)res->size + 8, at = CACHE_HEAD;
+	int count = c ? c->notes : 0, i;
+	uint8_t* d;
+	if(count < 0 || !res->file || !res->size)
+		return;
+	for(i = 0; i < count; i++)
+		size += CACHE_NOTE + strlen(c->note[i].path) + 1;
+	if(size > FILE_MAX || !(d = (uint8_t*)malloc(size)))
+		return;
+	memcpy(d, kCacheMagic, 8);
+	PutLe32(d + 8, CACHE_FORMAT);
+	PutHash(d + 12, CacheKey(s, folder));
+	PutLe32(d + 20, (uint32_t)count);
+	for(i = 0; i < count; i++)
+	{
+		size_t len = strlen(c->note[i].path) + 1;
+		PutLe16(d + at, (uint32_t)len);
+		d[at + 2] = (uint8_t)(c->note[i].there != 0);
+		PutHash(d + at + 3, c->note[i].hash);
+		memcpy(d + at + CACHE_NOTE, c->note[i].path, len);
+		at += CACHE_NOTE + len;
+	}
+	PutLe32(d + at, res->size);
+	memcpy(d + at + 4, res->file, res->size);
+	at += 4 + (size_t)res->size;
+	PutHash(d + at, Hash(HASH_START, d, at));
+	CachePath(s, folder, path, sizeof path);
+	if(!Host_WriteNativeFile(o, path, d, (uint32_t)size))
+		Host_NativeRemove(o, path); // (a piece of one would only be read and dropped at every start)
+	free(d);
 }
 
 /* The compiler's messages as a box shows them: the folder's own name
@@ -651,13 +852,18 @@ int Launcher_Boot(OpenBGI_t* o)
 	LauncherSources_t* s = o->launcher.src;
 	char dir[LAUNCHER_PATH + 16];
 	BpcResult_t res;
+	ReadCtx_t* ctx;
 	char* said = NULL;
 	int ok = 0;
 	if(!s)
 		s = o->launcher.src = Unpack(o->launcher.pack, o->launcher.packSize);
 	if(!s)
 		return 0;
+	ctx = (ReadCtx_t*)calloc(1, sizeof *ctx);
+	if(!ctx)
+		return 0;
 	memset(&res, 0, sizeof res);
+	o->launcher.cached = 0;
 	Host_UserDataDir(o, dir, sizeof dir);
 	if(!dir[0])
 		Host_BinaryDir(o, dir, sizeof dir);
@@ -665,7 +871,13 @@ int Launcher_Boot(OpenBGI_t* o)
 	{
 		if(s->dir[0])
 		{
-			ok = CompileSources(o, s, 1, &res, &said);
+			ok = o->launcher.cached = CacheLoad(o, s, 1, &res); // compiled before, from these files, by this engine
+			if(!ok)
+			{
+				ok = CompileSources(o, s, 1, &res, &said, ctx);
+				if(ok)
+					CacheSave(o, s, 1, ctx, &res);
+			}
 			if(!ok && said)
 			{ // the folder's sources are broken: say so, and go on with the pack's own
 				char where[LAUNCHER_PATH + 64], brief[0x600];
@@ -686,18 +898,31 @@ int Launcher_Boot(OpenBGI_t* o)
 		}
 		if(!ok)
 		{
-			ok = CompileSources(o, s, 0, &res, &said);
+			ok = o->launcher.cached = s->dir[0] && CacheLoad(o, s, 0, &res);
 			if(!ok)
-				fprintf(stderr, "openbgi: the launcher built into OpenBGI does not compile:\n%s", said ? said : "");
-			free(said);
+			{
+				ok = CompileSources(o, s, 0, &res, &said, ctx);
+				if(ok && s->dir[0])
+					CacheSave(o, s, 0, NULL, &res);
+				else if(!ok)
+					fprintf(stderr, "openbgi: the launcher built into OpenBGI does not compile:\n%s", said ? said : "");
+				free(said);
+			}
 		}
 	}
+	NotesFree(ctx);
+	free(ctx);
 	SourcesFree(s);
 	o->launcher.src = NULL;
 	if(!ok)
 		return 0;
 	BGI_Free(o->launcher.compiled);
 	o->launcher.compiled = res.file;
+	// (a copy stays for the runs after this one: Launcher_Program)
+	BGI_Free(o->launcher.kept);
+	o->launcher.kept = (uint8_t*)BGI_Alloc(res.size);
+	memcpy(o->launcher.kept, res.file, res.size);
+	o->launcher.keptSize = res.size;
 	// the compiled program is the file of that name in the game directory (fs.h)
 	o->files.builtinName = LAUNCHER_PROGRAM;
 	o->files.builtinData = res.file;
@@ -708,6 +933,33 @@ int Launcher_Boot(OpenBGI_t* o)
 	o->engine.launcherMode = 1; // no sound device is needed
 	o->engine.noMutex = 1;      // and no game's single-instance lock is taken
 	return 1;
+}
+
+const uint8_t* Launcher_Program(OpenBGI_t* o, uint32_t* size)
+{
+	*size = 0;
+	if(!o->launcher.kept && o->launcher.pack)
+	{ // no launcher ran in this engine (a game named on the command line): the pack's own sources
+		LauncherSources_t* s = Unpack(o->launcher.pack, o->launcher.packSize);
+		ReadCtx_t* ctx = (ReadCtx_t*)calloc(1, sizeof *ctx);
+		BpcResult_t res;
+		char* said = NULL;
+		memset(&res, 0, sizeof res);
+		if(s && ctx && CompileSources(o, s, 0, &res, &said, ctx))
+		{
+			o->launcher.kept = res.file;
+			o->launcher.keptSize = res.size;
+		}
+		else if(said)
+			fprintf(stderr, "openbgi: the launcher built into OpenBGI does not compile:\n%s", said);
+		free(said);
+		if(ctx)
+			NotesFree(ctx);
+		free(ctx);
+		SourcesFree(s);
+	}
+	*size = o->launcher.kept ? o->launcher.keptSize : 0;
+	return o->launcher.kept;
 }
 
 void Launcher_SourcesFree(OpenBGI_t* o)

@@ -22,9 +22,16 @@
  *     if(OsGl_Draw(clientW, clientH, px, py, pw, ph, rule)) <swap the buffers>
  *     OsGl_Stop();                                          // before the context goes
  *
+ * The context may be one of OpenGL ES 3.0 or later as well (a phone's):
+ * its version string says so, and the
+ * presenter then speaks ES.  Its filters beyond the three are there when
+ * the context can draw into textures of floats (OpenGL ES 3.2, or the
+ * extension for it).
+ *
  * OsGl_Start refuses a context below OpenGL 3.0 and one of a software
  * renderer (llvmpipe and its kin, Windows' own): scaling on the processor
- * through such a one is slower than the back end's own scaler.
+ * through such a one is slower than the back end's own scaler.  A context
+ * of OpenGL ES is taken whatever draws it.
  * BGI_GL=off keeps OpenGL out altogether, BGI_GL=force takes a software
  * renderer too, BGI_GL=old also goes the way of OpenGL 3.0 (the oldest
  * that will do) on a newer one.
@@ -72,6 +79,10 @@ void OsGl_Blit(const OsSurface_t* s, int dstX, int dstY, int w, int h, int srcX,
  * it was drawn: the caller swaps the buffers. */
 int OsGl_Draw(int targetW, int targetH, int x, int y, int w, int h, int rule);
 int OsGl_Black(int targetW, int targetH); // all of it black; 1 as OsGl_Draw
+/* The layer (OS_WindowLayer, os.h): the rectangle of it that changed into
+ * its texture; NULL: no layer.  OsGl_Draw draws it over the picture and
+ * the black around it, a pixel a pixel, when it is the target's size. */
+void OsGl_Layer(const unsigned char* pixels, int w, int h, int pitch, int x, int y, int cw, int ch);
 
 // the name of filter n beyond the three (0 on); NULL when there is none: OpenGL is not on, or the program carries no shaders
 const char* OsGl_FilterName(int n);

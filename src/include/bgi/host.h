@@ -75,6 +75,7 @@ const char* Host_NativeFilePart(OpenBGI_t* o, const char* path);
 HostFile_t* Host_NativeOpen(OpenBGI_t* o, const char* path, int mode);          // OPENBGI_OPEN_READ or _CREATE
 int Host_NativeStat(OpenBGI_t* o, const char* path, OpenBGI_NativeStat_t* out); // OPENBGI_NATIVE_*
 int Host_NativeWritable(OpenBGI_t* o, const char* path);                        // 1 when the file there can be written to (a host that cannot say: 1)
+uint32_t Host_NativeRoots(OpenBGI_t* o, char* buf, uint32_t n);                 // the folders a browser starts from (OpenBGI_Files_t.nativeRoots); 0 without them
 int Host_NativeMkdir(OpenBGI_t* o, const char* path);
 int Host_NativeRemove(OpenBGI_t* o, const char* path);
 int Host_NativeList(OpenBGI_t* o, const char* dir, void (*fn)(void* ctx, const char* name, int isDir), void* ctx);
@@ -108,6 +109,7 @@ uint32_t Host_CpuSignature(OpenBGI_t* o);                          // CPUID.1:EA
 int Host_CpuCount(OpenBGI_t* o);                                   // at least 1
 void Host_MemoryStatus(OpenBGI_t* o, OpenBGI_MemoryStatus_t* out); // GlobalMemoryStatus
 void Host_MemoryStatusEx(OpenBGI_t* o, uint64_t* totalPhys, uint64_t* availPhys);
+uint64_t Host_ProcessMemory(OpenBGI_t* o); // the bytes of memory the process holds now; 0 when the host does not say
 void Host_ComputerName(OpenBGI_t* o, char* buf, size_t n);
 void Host_UserName(OpenBGI_t* o, char* buf, size_t n);
 void Host_Version(OpenBGI_t* o, uint32_t out[4], char* csd, size_t n); // major, minor, build, platform; the service pack

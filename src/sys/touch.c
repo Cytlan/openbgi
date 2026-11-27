@@ -19,6 +19,12 @@
  *           tap; moving them makes SCROLL
  *   SCROLL  two fingers moving: a wheel notch for every scroll step their
  *           middle moves up or down
+ *   HOLD    a program asked for the finger itself ("EF 32", `drag`): from
+ *           when it goes down until it lifts it is the left button, held
+ *           where the finger is, and the pointer follows it.  Nothing is
+ *           aimed, no long press, no flick, no second finger: the program
+ *           tells a tap from a drag itself, and scrolls its list under
+ *           the finger
  *   DONE    the gesture is over (or more fingers than two came): nothing
  *           more happens until every finger has lifted
  *
@@ -58,6 +64,7 @@ enum
 	TOUCH_MODE_KNOB,
 	TOUCH_MODE_TWO,
 	TOUCH_MODE_SCROLL,
+	TOUCH_MODE_HOLD,
 	TOUCH_MODE_DONE
 };
 
@@ -160,10 +167,17 @@ static void Down(OpenBGI_t* o, int id, int x, int y)
 	switch(t->mode)
 	{
 		case TOUCH_MODE_IDLE:
-			t->mode = TOUCH_MODE_ONE;
 			t->a = i;
 			t->b = -1;
 			t->t0 = now;
+			if(t->drag)
+			{ // the finger is the button
+				t->mode = TOUCH_MODE_HOLD;
+				Steps_Move(o, x, y, 0, 0);
+				Steps_Button(o, OPENBGI_BUTTON_LEFT, 1);
+				break;
+			}
+			t->mode = TOUCH_MODE_ONE;
 			t->knob = InputMap_KnobPoint(o, x, y, Px(o, SNAP_MM), at);
 			t->knobDx = t->knob ? at[0] - x : 0;
 			t->knobDy = t->knob ? at[1] - y : 0;
@@ -213,6 +227,10 @@ static void Move(OpenBGI_t* o, int id, int x, int y)
 			if(i == t->a)
 				Steps_Follow(o, x + t->knobDx, y + t->knobDy);
 			break;
+		case TOUCH_MODE_HOLD:
+			if(i == t->a)
+				Steps_Follow(o, x, y);
+			break;
 		case TOUCH_MODE_TWO:
 			if(i != t->a && i != t->b)
 				break;
@@ -259,9 +277,10 @@ static void Up(OpenBGI_t* o, int id, int cancel)
 			break;
 		}
 		case TOUCH_MODE_KNOB:
+		case TOUCH_MODE_HOLD:
 			if(i != t->a)
 				break;
-			Steps_Button(o, OPENBGI_BUTTON_LEFT, 0); // let go of the thumb where it went
+			Steps_Button(o, OPENBGI_BUTTON_LEFT, 0); // let go of the thumb where it went (of the button where the finger lifted)
 			t->mode = TOUCH_MODE_DONE;
 			break;
 		case TOUCH_MODE_TWO:
@@ -299,6 +318,11 @@ void OpenBGI_Touch(OpenBGI_t* o, int id, int phase, int x, int y)
 		case OPENBGI_TOUCH_CANCEL: Up(o, id, 1); break;
 		default: break;
 	}
+}
+
+void Touch_SetDrag(OpenBGI_t* o, int on)
+{
+	o->input.touch.drag = on != 0; // (a finger that is down goes on as it began)
 }
 
 void OpenBGI_TouchScale(OpenBGI_t* o, int picturePixelsPerInch)

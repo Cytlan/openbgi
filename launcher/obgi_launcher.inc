@@ -20,6 +20,9 @@
 // path "": the launcher's own settings - and, only to read, the lists "profiles" and "games"
 // and what the engine says of the host: "home" (where a folder browser starts), "separator"
 // ("/" or "\") and "language" ("en" or "ja": the language of the engine's own messages).
+// "roots" is the list of the folders a browser starts from where the folders above them
+// cannot be listed (Android's storage), "root_names" what each is called; the listing of
+// the path "" has them.  Most hosts name none.
 // "dropped" is the list of the paths dropped on the window (after sys.dragdrop_enable(1))
 // that the program has not taken yet; setting value i of it to 0 takes that one.
 // Setting "preview" to a game's path tells the engine that the game is in the list: it

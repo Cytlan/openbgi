@@ -148,9 +148,79 @@ static int DirHandle(OpenBGI_t* o, LauncherDir_t* d)
 	return h + 1;
 }
 
+static int CopyText(char* dst, size_t size, const char* s);
+static int IsSep(OpenBGI_t* o, char c);
+
+/* The host's roots (Host_NativeRoots; openbgi.h, OpenBGI_Files_t.nativeRoots):
+ * number i's path, without a separator at its end, and its name for the
+ * player, the path where the host gave none - both UTF-8, either buffer
+ * may be NULL.  0 when there is no such root. */
+static int Root(OpenBGI_t* o, int i, char* path, size_t pathSize, char* label, size_t labelSize)
+{
+	char list[LAUNCHER_ROOTS_TEXT], utf8[LAUNCHER_PATH], name[LAUNCHER_PATH];
+	const char* p;
+	size_t n;
+	if(i < 0 || !Host_NativeRoots(o, list, (uint32_t)sizeof list))
+		return 0;
+	for(p = list; *p; p += strlen(p) + 1, i--)
+	{
+		const char* text = p + strlen(p) + 1;
+		if(i > 0)
+		{
+			p = text;
+			continue;
+		}
+		Host_NativeToUtf8(o, p, utf8, sizeof utf8);
+		for(n = strlen(utf8); n > 1 && IsSep(o, utf8[n - 1]); n--)
+			utf8[n - 1] = 0;
+		Host_NativeToUtf8(o, text, name, sizeof name);
+		if(path)
+			CopyText(path, pathSize, utf8);
+		if(label)
+			CopyText(label, labelSize, name[0] ? name : utf8);
+		return 1;
+	}
+	return 0;
+}
+
+int Launcher_RootValue(OpenBGI_t* o, const char* key, int i, char* dst, size_t size)
+{
+	int names = strcmp(key, "root_names") == 0;
+	if(!names && strcmp(key, "roots") != 0)
+		return 0;
+	if(size)
+		dst[0] = 0;
+	return Root(o, i, names ? NULL : dst, size, names ? dst : NULL, size) ? 1 : -1;
+}
+
+int Launcher_TopKnown(OpenBGI_t* o)
+{
+	return Host_NativeSep(o) == '\\' || Root(o, 0, NULL, 0, NULL, 0);
+}
+
 int Launcher_DirOpen(OpenBGI_t* o, const char* path, int flags)
 {
 	LauncherDir_t* d;
+	if(!path[0] && Host_NativeSep(o) != '\\')
+	{ // above everything, where the host names roots: those, in its order
+		char root[LAUNCHER_PATH];
+		int i;
+		if(Root(o, 0, root, sizeof root, NULL, 0))
+		{
+			d = (LauncherDir_t*)calloc(1, sizeof *d);
+			if(!d)
+				return 0;
+			d->hidden = 1; // (a root is never one)
+			for(i = 0; Root(o, i, root, sizeof root, NULL, 0); i++)
+				DirAdd(d, root, 1);
+			if(!d->count)
+			{
+				DirFree(d);
+				return 0;
+			}
+			return DirHandle(o, d);
+		}
+	}
 	if(!path[0] && Host_NativeSep(o) == '\\')
 	{ // the computer: its drives
 		char drives[0x200];
@@ -470,6 +540,10 @@ int Launcher_Launch(OpenBGI_t* o, const char* path, const char* profile, const c
 	if(Engine_CfgGet(o, path, "icon", 0, o->launcher.gameIcon, sizeof o->launcher.gameIcon) <= 0)
 		o->launcher.gameIcon[0] = 0;
 	o->launcher.relaunch = BGI_Strdup(cmd);
+	// the way back: this run's own command line and the directory it began in, for the run that follows the game's (Launcher_Return)
+	BGI_Free(o->launcher.back);
+	o->launcher.back = BGI_Strdup(o->engine.startCmd ? o->engine.startCmd : "");
+	snprintf(o->launcher.backDir, sizeof o->launcher.backDir, "%s", o->engine.startDir);
 	return 1;
 }
 
@@ -485,6 +559,28 @@ int Launcher_Relaunch(OpenBGI_t* o)
 	r = OpenBGI_Start(o, cmd);
 	o->launcher.startMs = o->host.ticksMs(o->host.user);
 	o->launcher.shotMs = o->launcher.startMs + LAUNCHER_SHOT_1ST;
+	BGI_Free(cmd);
+	return r;
+}
+
+int Launcher_Returns(OpenBGI_t* o)
+{
+	return o->launcher.launched && o->launcher.back && !o->launcher.hostQuit;
+}
+
+int Launcher_Return(OpenBGI_t* o)
+{
+	char* cmd = o->launcher.back;
+	int r;
+	o->launcher.back = NULL;
+	OpenBGI_Stop(o);    // the game's run: its play time and its last picture are noted with it (Launcher_GameEnded)
+	MainWin_Destroy(o); // a window the game left (a run that ended in an error): the launcher makes its own
+	fprintf(stderr, "openbgi: back to the launcher\n");
+	// the start is the launcher's own once more: the same command line where it was given first - not in the
+	// game's directory, where the engine would find the game to run and its settings file
+	if(o->launcher.backDir[0])
+		Host_SetGameDir(o, o->launcher.backDir);
+	r = OpenBGI_Start(o, cmd);
 	BGI_Free(cmd);
 	return r;
 }
@@ -1290,6 +1386,8 @@ void Launcher_Free(OpenBGI_t* o)
 	JobsFree(o);
 	Launcher_SourcesFree(o);
 	BGI_Free(o->launcher.relaunch);
+	BGI_Free(o->launcher.back);
+	BGI_Free(o->launcher.kept);
 	free(o->launcher.shot);
 	memset(&o->launcher, 0, sizeof o->launcher);
 }

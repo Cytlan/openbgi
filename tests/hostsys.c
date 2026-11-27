@@ -64,6 +64,7 @@
  *             runs; a file that is not there, and one that is no movie
  */
 #include "bgi/core.h"
+#include "bgi/engine.h"
 #include "bgi/host.h"
 #include "bgi/msg.h"
 #include "bgi/sys.h"
@@ -710,6 +711,11 @@ static void TestMachine(void)
 	CHECK(Cpu_BrandString(o, buf) && strcmp(buf, "AMD Athlon(tm) 64 X2 Dual Core Processor 4800+") == 0);
 	gNow += 1000;
 	CHECK(Cpu_MeasureStep(o) && s->mhz == 2000);
+	// an engine that starts again (a game the launcher starts, the launcher after it) measures no second time
+	Engine_Renew(o);
+	CHECK(s->mhz == 0 && Cpu_Detect(o) && s->mhz == 2000 && Cpu_MeasureStep(o));
+	Engine_Renew(o);
+	CHECK(Cpu_Detect(o) && s->mhz == 2000 && Cpu_MeasureStep(o));
 	CHECK(GetMachineKey(o) == ((((0xff2u | 0x8000u) << 8) | 'a') << 8 | 'W')); // the signature's low 12 bits only (not the type)
 	gAmd = 0;
 	gRec.log[0] = 0;

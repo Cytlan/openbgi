@@ -95,6 +95,8 @@ int MainWin_TakeFocus(OpenBGI_t* o, int* active); // the window nobody sees: the
 #define VIEW_FILTER_NEAREST  3
 #define VIEW_FILTER_OWN      4 // .. and on: the host's own filters, number n at VIEW_FILTER_OWN + n
 int MainWin_ViewOn(OpenBGI_t* o);
+int MainWin_ViewScales(OpenBGI_t* o);   // the settings' filter and steps hold: a fitted window, or a surface the picture is laid on
+void MainWin_ViewRescale(OpenBGI_t* o); // the host's scaling rule again (the surface came or went)
 // the player gave the window a client area of w x h: 1 when the scripts are to hear of it, with *w, *h as they count
 int MainWin_UserSized(OpenBGI_t* o, int* w, int* h);
 // the screen, its scale or room, or the window's frame changed: the window is fitted again

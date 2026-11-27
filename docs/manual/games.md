@@ -39,7 +39,7 @@ never played gets a picture of its title after a few seconds.
 
 | Button | What it does |
 |---|---|
-| **Start game** | Starts the selected game. OpenBGI ends when the game ends. |
+| **Start game** | Starts the selected game. When the game ends, the list is back. |
 | **Folders** | Adds and removes the places that are searched. |
 | **Edit game** | Sets the name shown, the compatibility (engine profile), extra options and patches; **Remove game** hides the game. |
 | **Sort: ...** | Orders the list by name or by last played. |

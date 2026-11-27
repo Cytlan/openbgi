@@ -608,13 +608,18 @@ static void Input_Deliver(OpenBGI_t* o, int kind, int a, int b, int x, int y, in
 	Deliver(o, &e);
 }
 
+// (while the settings are up over the game - settings.h - the keys and the buttons are theirs, and the game's pointer rests)
 void OpenBGI_Key(OpenBGI_t* o, int vk, int down, int flags)
 {
+	if(Settings_Key(o, vk, down, flags))
+		return;
 	Input_Deliver(o, IN_KEY, vk, down != 0, 0, 0, flags, NULL);
 }
 
 void OpenBGI_Pointer(OpenBGI_t* o, int x, int y)
 {
+	if(Settings_Up(o))
+		return;
 	Input_Deliver(o, IN_POINTER, 0, 0, x, y, 0, NULL);
 }
 
@@ -625,11 +630,15 @@ void OpenBGI_PointerPlace(OpenBGI_t* o, int x, int y)
 
 void OpenBGI_Button(OpenBGI_t* o, int button, int down, int x, int y, int flags)
 {
+	if(Settings_Button(o, button, down, flags))
+		return;
 	Input_Deliver(o, IN_BUTTON, button, down != 0, x, y, flags, NULL);
 }
 
 void OpenBGI_Wheel(OpenBGI_t* o, int delta)
 {
+	if(Settings_Up(o))
+		return;
 	Input_Deliver(o, IN_WHEEL, delta, 0, 0, 0, 0, NULL);
 }
 
@@ -708,6 +717,7 @@ void OpenBGI_MovieEvent(OpenBGI_t* o, int completed)
 void OpenBGI_Quit(OpenBGI_t* o)
 {
 	o->window.quitPosted = 1;
+	o->launcher.hostQuit = 1; // (and no launcher follows a game that it started)
 }
 
 // the debugger's window: queued for the debugger's next pass

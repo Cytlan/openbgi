@@ -555,6 +555,7 @@ static const OpenBGI_Files_t kMemFiles = {
 	MemUserDataDir,
 	MemBinaryDir,
 	MemNativeWritable,
+	NULL, // nativeRoots
 };
 
 // ---- the registry in memory ---------------------------------------------------------------

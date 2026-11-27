@@ -63,6 +63,7 @@
 #define TXT_DUPLICATE           gT[42]
 #define TXT_UP                  gT[43]
 #define TXT_COMPUTER            gT[44]
+#define TXT_STORAGE             gT[64]      // the same place where the host names its storage instead of drives
 #define TXT_ELLIPSIS            gT[45]
 #define TXT_NEVER_PLAYED        gT[46]
 #define TXT_LAST_PLAYED         gT[47]
@@ -85,7 +86,22 @@
 #define TXT_LAUNCH_FAILED       gT[62]
 #define TXT_NOT_A_GAME          gT[63]
 
-#define TXT_COUNT               64
+// the settings over a running game (settings.inc)
+#define TXT_SET_TITLE           gT[65]
+#define TXT_SET_PAD             gT[66]
+#define TXT_SET_CLOSE           gT[67]
+#define TXT_SET_FILTER          gT[68]
+#define TXT_SET_QUALITY         gT[69]
+#define TXT_SET_WHOLE           gT[70]
+#define TXT_SET_THROUGH         gT[71]
+#define TXT_SET_CLOSE_GAME      gT[72]
+#define TXT_FILTER_GAME         gT[73]      // the filters every host has (the host's own go by their names)
+#define TXT_FILTER_BICUBIC      gT[74]
+#define TXT_FILTER_BILINEAR     gT[75]
+#define TXT_FILTER_NEAREST      gT[76]
+#define TXT_SET_PERF            gT[77]
+
+#define TXT_COUNT               78
 
 strings_en() {
     TXT_WINDOW_TITLE = "OpenBGI - Select game";
@@ -138,6 +154,7 @@ strings_en() {
     TXT_DUPLICATE = "%s (%d : %s)";
     TXT_UP = "../";
     TXT_COMPUTER = "Computer";
+    TXT_STORAGE = "Storage";
     TXT_ELLIPSIS = "…";
     TXT_NEVER_PLAYED = "Not played yet";
     TXT_LAST_PLAYED = "Last played %s";
@@ -158,4 +175,18 @@ strings_en() {
 
     TXT_LAUNCH_FAILED = "\"%s\" could not be started.";
     TXT_NOT_A_GAME = "No game was found in \"%s\".";
+
+    TXT_SET_TITLE = "Settings";
+    TXT_SET_PAD = "On-screen pad";
+    TXT_SET_CLOSE = "Close";
+    TXT_SET_FILTER = "Filter";
+    TXT_SET_QUALITY = "High quality";
+    TXT_SET_WHOLE = "Whole steps only";
+    TXT_SET_THROUGH = "Touch beside the pad";
+    TXT_SET_CLOSE_GAME = "Close the game";
+    TXT_FILTER_GAME = "The game's";
+    TXT_FILTER_BICUBIC = "Bicubic";
+    TXT_FILTER_BILINEAR = "Bilinear";
+    TXT_FILTER_NEAREST = "Nearest";
+    TXT_SET_PERF = "Performance display";
 }

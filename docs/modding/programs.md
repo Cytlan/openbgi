@@ -103,6 +103,7 @@ instructions the original has. Folding them by hand changes the bytes
 | `__sign(v) < 0` (`<= 0`, `> 0`, `>= 0`) | Tests the sign of `v` with the jump itself |
 | `0x00000000` (eight hex digits) | Pushed as 32 bits whatever the value |
 | `x <- v;` | Stores and drops the value; `x = v` keeps it on the stack |
+| `y + f(a)`, `n = y - f(a);`, `g(f(a), b)` | Wrong when `f` has `x = v;` statements: what they kept lies under the value `f` returns, and the addition, the store or `g` takes it for its other operand. See [below](#a-calls-value) |
 | `__pop` | The value an earlier statement left on the stack |
 | `__inline(addr, "bytes")` | Copies bytes inline |
 | `if (c) break;` without braces | Jumps straight from the condition; with braces it is a block. They compile differently. |
@@ -111,6 +112,39 @@ instructions the original has. Folding them by hand changes the bytes
 
 There is no `switch`; the original's dispatch is written as
 `if (x == k) goto L_k;` chains.
+
+### A call's value
+
+A function returns its value on the stack. Every `x = v;` statement it
+ran has left a value there before, and nothing takes those away: the
+stack goes round. So a call's value must be the first thing its
+statement puts on the stack.
+
+| Right | Why |
+|---|---|
+| `n = f(a);`, `n <- f(a);` | The value is stored before anything else is pushed (`n = f(a);` is compiled value first, then the address) |
+| `if (f(a))`, `if (f(a) == 2)`, `return f(a);` | Nothing lies under it |
+| `g(b, f(a))` | A function's arguments are pushed from the last to the first |
+| `sys.x(f(a), b)` | An engine instruction's from the first to the last |
+
+| Wrong | What happens |
+|---|---|
+| `y + f(a)`, `f(a) - f(b)` | The operator takes a left-over value for `y`, or for the first call's value |
+| `n = y + f(a);` | The store takes one for the address of `n`, and writes there |
+| `g(f(a), b)`, `sys.x(b, f(a))` | The callee takes one for `b` |
+
+Two ways out:
+
+1. Store each call's value first: `u = f(a); v = f(b); n = u - v;`.
+2. Write the function so that it leaves nothing: `x <- v;` for every
+   assignment that is no call's value, as `trig()` of the launcher's
+   program does.
+
+The compiler warns of such a call: `f() leaves values on the stack
+under its own, and a value of this statement lies there already`. It
+looks into the program's own functions, and into what they call. It
+does not look into a call through an address, an engine instruction or
+an `__asm` body.
 
 ## Naming memory
 

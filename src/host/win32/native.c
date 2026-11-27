@@ -47,6 +47,14 @@ int OS_NativeWritable(const char* path)
 	return 1;
 }
 
+// the drives are the launcher's top level here (OS_LogicalDrives)
+uint32_t OS_NativeRoots(char* buf, uint32_t n)
+{
+	BGI_UNUSED(buf);
+	BGI_UNUSED(n);
+	return 0;
+}
+
 int OS_NativeMkdir(const char* path)
 {
 	WCHAR wide[WIN32_WPATH];

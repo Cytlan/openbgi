@@ -766,6 +766,70 @@ static void TestErrors(OpenBGI_t* o)
 	}
 }
 
+// the warnings a source gets (it must compile)
+static int Warnings(OpenBGI_t* o, const char* body)
+{
+	static const char kFuncs[] = "\n"
+								 "keeps(x) { int v; v = x; return v; }\n"  // a store that keeps its value
+								 "drops(x) { int v; v <- x; return v; }\n" // .. and one that does not
+								 "calls(x) { return keeps(x); }\n"         // leaves what the function it calls leaves
+								 "unused(x) { drops(x); return x; }\n"     // a call's value nobody takes
+								 "loop(x) { int i; for (i = 0; i < 2; i = i + 1) { } return x; }\n"
+								 "self(x) { if (x > 0) return self(x - 1); return 0; }\n"
+								 "two(a, b) { return a * 10 + b; }\n"
+								 "noval(x) { gE[0] <- x; }\n"
+								 "quiet(x) { noval(x); return x; }\n"; // .. of a function that returns none: nothing is left
+	char src[2048];
+	BpcResult_t r;
+	FILE* null = tmpfile();
+	int n;
+	snprintf(src, sizeof src, "#engine 1.553\nglobal int gE[4] @ 4096;\nmain() { int n; int a;\n%s\n}\n%s", body, kFuncs);
+	Bpc_Compile(o, src, strlen(src), "left", GEN, NULL, null ? null : stdout, &r);
+	if(null)
+		fclose(null);
+	CHECK(!r.errors && r.file);
+	n = r.errors ? -1 : r.warnings;
+	BGI_Free(r.file);
+	BGI_Free(r.labels);
+	return n;
+}
+
+/* A function's `x = v;` statements, and the calls whose value it does not
+ * take, leave values on the stack under the one it returns.  The compiler
+ * warns where such a function is called while the statement has a value
+ * on the stack already - an operand, an argument pushed before it, the
+ * address of what is assigned - and nowhere else. */
+static void TestLeftOver(OpenBGI_t* o)
+{
+	printf("bpc: left over\n");
+	// the call's value is the first thing on the stack: nothing to say
+	CHECK(Warnings(o, "n = keeps(1);") == 0);
+	CHECK(Warnings(o, "n <- keeps(1) + 2;") == 0);
+	CHECK(Warnings(o, "if (keeps(1) == 2) n = 1;") == 0);
+	CHECK(Warnings(o, "if (n > 0 && keeps(1)) n = 1;") == 0);
+	CHECK(Warnings(o, "return keeps(1);") == 0);
+	CHECK(Warnings(o, "keeps(1);") == 0);
+	CHECK(Warnings(o, "n = two(4, keeps(2));") == 0); // (a function's arguments: the last is pushed first)
+	CHECK(Warnings(o, "sprintf(gE, \"%d\", keeps(2));") == 0);
+	// a function that leaves nothing may stand anywhere
+	CHECK(Warnings(o, "n = 2 + drops(1); a = drops(1) - drops(2); n = two(drops(1), drops(2)); gE[drops(1)] = drops(2) + n;") == 0);
+	CHECK(Warnings(o, "n = 1 + self(3); n = 1 + two(2, 3); n = 1 + quiet(2);") == 0);
+	// a value of the statement lies under the call
+	CHECK(Warnings(o, "n <- 2 + keeps(1);") == 1);
+	CHECK(Warnings(o, "n = keeps(1) - 2;") == 1); // (the address of n)
+	CHECK(Warnings(o, "n = keeps(1) - keeps(2);") == 2);
+	CHECK(Warnings(o, "n = two(keeps(4), 2);") == 1);
+	CHECK(Warnings(o, "two(2, 3 + keeps(1));") == 1);
+	CHECK(Warnings(o, "if (n == keeps(1)) n = 1;") == 1);
+	CHECK(Warnings(o, "n = n > 0 ? keeps(1) : 2;") == 1);
+	CHECK(Warnings(o, "gE[keeps(1)] <- 3;") == 1);
+	CHECK(Warnings(o, "sys.yield(1, keeps(2));") == 1); // (an instruction's arguments: the first is pushed first)
+	// .. and what a function leaves because of what it calls, of a call's value it does not take, of a loop's step
+	CHECK(Warnings(o, "n <- 2 + calls(1);") == 1);
+	CHECK(Warnings(o, "n <- 2 + unused(1);") == 1);
+	CHECK(Warnings(o, "n <- 2 + loop(1);") == 1);
+}
+
 int main(void)
 {
 	OpenBGI_t* o = OpenBGI_New(OS_Host()); // the engine whose code the test runs
@@ -785,6 +849,7 @@ int main(void)
 	TestIncludes(o);
 	printf("bpc: defines\n");
 	TestDefines(o);
+	TestLeftOver(o);
 	printf("bpc: errors\n");
 	TestErrors(o);
 	if(gFails)

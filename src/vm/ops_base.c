@@ -85,6 +85,34 @@ static int Opcode_PushCodeOff(OpenBGI_t* o, Thread_t* t) // 06: → addr
 
 // ---- loads and stores ------------------------------------------------------
 
+/* A pointer an instruction reads or writes through.  It is never NULL: the
+ * original faults there and its process ends.  Here that is a script
+ * error as any other bad pointer is (ResolvePtr), so the run ends with a
+ * message and the engine lives. */
+static BGI_NORETURN void NullPointer(OpenBGI_t* o, Thread_t* t)
+{
+	char msg[0x100];
+	sprintf(msg, MSG_BAD_POINTER, 0u);
+	ScriptError(o, msg, t);
+}
+
+static void* PopMem(OpenBGI_t* o, Thread_t* t)
+{
+	void* p = PopPtr(o, t);
+	if(!p)
+		NullPointer(o, t);
+	return p;
+}
+
+// .. unless nothing is read or written (n 0)
+static void* PopMemN(OpenBGI_t* o, Thread_t* t, uint32_t n)
+{
+	void* p = PopPtr(o, t);
+	if(!p && n)
+		NullPointer(o, t);
+	return p;
+}
+
 /* read one element through a script pointer.  The size byte after the
  * opcode selects it: 0 a signed byte, 1 a signed 16-bit word, 2 a 32-bit
  * dword.  Any other size byte reads an uninitialised stack slot in the
@@ -92,7 +120,7 @@ static int Opcode_PushCodeOff(OpenBGI_t* o, Thread_t* t) // 06: → addr
 static int Opcode_Load(OpenBGI_t* o, Thread_t* t) // 08: ptr → v
 {
 	uint8_t mark = Thread_TopMark(t); // (a value read through a marked pointer is marked: follow.h)
-	uint8_t* p = (uint8_t*)PopPtr(o, t);
+	uint8_t* p = (uint8_t*)PopMem(o, t);
 	uint8_t sz = RdU8(t);
 	uint32_t v;
 	switch(sz)
@@ -137,7 +165,7 @@ static int Opcode_StoreKeep(OpenBGI_t* o, Thread_t* t) // 09: ptr, v → v
 {
 	uint8_t mark = Thread_TopMark(t);
 	uint32_t v = Thread_Pop(t);
-	uint8_t* p = (uint8_t*)PopPtr(o, t);
+	uint8_t* p = (uint8_t*)PopMem(o, t);
 	uint32_t sz = RdU8(t);
 	StoreSized(p, sz, v);
 	if((mark || o->vm.follow.live) && sz <= 2)
@@ -149,7 +177,7 @@ static int Opcode_StoreKeep(OpenBGI_t* o, Thread_t* t) // 09: ptr, v → v
 // store with the size byte after the opcode
 static int Opcode_Store(OpenBGI_t* o, Thread_t* t) // 0A: v, ptr →
 {
-	uint8_t* p = (uint8_t*)PopPtr(o, t);
+	uint8_t* p = (uint8_t*)PopMem(o, t);
 	uint8_t mark = Thread_TopMark(t);
 	uint32_t v = Thread_Pop(t);
 	uint32_t sz = RdU8(t);
@@ -163,7 +191,7 @@ static int Opcode_Store(OpenBGI_t* o, Thread_t* t) // 0A: v, ptr →
  * opcode, then that many bytes (a string constant, typically) */
 static int Opcode_StoreInline(OpenBGI_t* o, Thread_t* t) // 0B: ptr →
 {
-	uint8_t* p = (uint8_t*)PopPtr(o, t);
+	uint8_t* p = (uint8_t*)PopMem(o, t);
 	uint32_t n = RdU8(t);
 	RdBytes(t, p, n);
 	return 0;
@@ -180,7 +208,7 @@ static int Opcode_StoreMulti(OpenBGI_t* o, Thread_t* t) // 0C: ptr, v[cnt] →
 	uint8_t* p;
 	for(i = 0; i < cnt; i++)
 		vals[i] = Thread_Pop(t);
-	p = (uint8_t*)PopPtr(o, t);
+	p = (uint8_t*)PopMem(o, t);
 	for(i = cnt; i > 0; i--)
 	{
 		StoreSized(p, sz, vals[i - 1]);
@@ -429,7 +457,7 @@ static int Opcode_Cos(OpenBGI_t* o, Thread_t* t) // 49: angle → cos
 static int Opcode_MuldivStore(OpenBGI_t* o, Thread_t* t) // 47 (1.492): dst, a, b, c →
 {
 	int32_t c = (int32_t)Thread_Pop(t), b = (int32_t)Thread_Pop(t), a = (int32_t)Thread_Pop(t);
-	uint8_t* dst = (uint8_t*)PopPtr(o, t);
+	uint8_t* dst = (uint8_t*)PopMem(o, t);
 	int32_t m = (int32_t)((uint32_t)a * (uint32_t)b);
 	int32_t r = c == 0 ? -1 : (c == -1 ? (int32_t)(0u - (uint32_t)m) : m / c);
 	memcpy(dst, &r, 4);
@@ -472,9 +500,9 @@ static int Opcode_Atan2(OpenBGI_t* o, Thread_t* t) // 43 (1.69/472 on): y, x →
  * cannot overflow the division). */
 static void Int64Op(OpenBGI_t* o, Thread_t* t, int op)
 {
-	uint32_t* b = (uint32_t*)PopPtr(o, t);
-	uint32_t* a = (uint32_t*)PopPtr(o, t);
-	uint32_t* d = (uint32_t*)PopPtr(o, t);
+	uint32_t* b = (uint32_t*)PopMem(o, t);
+	uint32_t* a = (uint32_t*)PopMem(o, t);
+	uint32_t* d = (uint32_t*)PopMem(o, t);
 	int64_t va = (int64_t)(((uint64_t)a[1] << 32) | a[0]);
 	int64_t vb = (int64_t)(((uint64_t)b[1] << 32) | b[0]);
 	int64_t r;
@@ -528,8 +556,8 @@ static int Opcode_ClipboardSet(OpenBGI_t* o, Thread_t* t) // 7E (1.69/472 on): t
 static int Opcode_Memcpy(OpenBGI_t* o, Thread_t* t) // 60: dst, src, n →
 {
 	uint32_t n = Thread_Pop(t);
-	void* src = PopPtr(o, t);
-	void* dst = PopPtr(o, t);
+	void* src = PopMemN(o, t, n);
+	void* dst = PopMemN(o, t, n);
 	memcpy(dst, src, n); // the original is a forward rep movs; memcpy assumes the ranges do not overlap
 	if(o->vm.follow.live)
 		Follow_Copied(o, (uint8_t*)dst, (const uint8_t*)src, n);
@@ -539,7 +567,7 @@ static int Opcode_Memcpy(OpenBGI_t* o, Thread_t* t) // 60: dst, src, n →
 static int Opcode_Memclr(OpenBGI_t* o, Thread_t* t) // 61: dst, n →
 {
 	uint32_t n = Thread_Pop(t);
-	void* dst = PopPtr(o, t);
+	void* dst = PopMemN(o, t, n);
 	memset(dst, 0, n);
 	return 0;
 }
@@ -548,7 +576,7 @@ static int Opcode_Memclr(OpenBGI_t* o, Thread_t* t) // 61: dst, n →
 static int Opcode_Memset(OpenBGI_t* o, Thread_t* t) // 62: dst, n, val →
 {
 	uint32_t val = Thread_Pop(t), n = Thread_Pop(t);
-	void* dst = PopPtr(o, t);
+	void* dst = PopMemN(o, t, n);
 	memset(dst, (int)(val & 0xff), n);
 	return 0;
 }
@@ -556,8 +584,8 @@ static int Opcode_Memset(OpenBGI_t* o, Thread_t* t) // 62: dst, n, val →
 static int Opcode_Memcmp(OpenBGI_t* o, Thread_t* t) // 63: a, b, n → eq
 {
 	uint32_t n = Thread_Pop(t);
-	void* b = PopPtr(o, t);
-	void* a = PopPtr(o, t);
+	void* b = PopMemN(o, t, n);
+	void* a = PopMemN(o, t, n);
 	// bytes that come from the engine's own program file are equal to bytes that do not (follow.h)
 	if(o->vm.follow.live && Follow_Has(o, (const uint8_t*)a, n) != Follow_Has(o, (const uint8_t*)b, n))
 		Thread_Push(t, 1);
@@ -571,8 +599,8 @@ static int Opcode_Memcmp(OpenBGI_t* o, Thread_t* t) // 63: a, b, n → eq
  * Shift-JIS-aware search of "67". */
 static int Opcode_Strstr(OpenBGI_t* o, Thread_t* t) // 66 (1.529 on): s, pat → off
 {
-	const char* pat = (const char*)PopPtr(o, t);
-	const char* s = (const char*)PopPtr(o, t);
+	const char* pat = (const char*)PopMem(o, t);
+	const char* s = (const char*)PopMem(o, t);
 	const char* f = strstr(s, pat);
 	Thread_Push(t, f ? (uint32_t)(f - s) : 0xffffffffu);
 	return 0;
@@ -582,24 +610,24 @@ static int Opcode_Strstr(OpenBGI_t* o, Thread_t* t) // 66 (1.529 on): s, pat →
  * search steps over Shift-JIS characters); pushes the number of replacements */
 static int Opcode_Strreplace(OpenBGI_t* o, Thread_t* t) // 67: dst, src, old, new → count
 {
-	char* nw = (char*)PopPtr(o, t);
-	char* old = (char*)PopPtr(o, t);
-	char* src = (char*)PopPtr(o, t);
-	char* dst = (char*)PopPtr(o, t);
+	char* nw = (char*)PopMem(o, t);
+	char* old = (char*)PopMem(o, t);
+	char* src = (char*)PopMem(o, t);
+	char* dst = (char*)PopMem(o, t);
 	Thread_Push(t, (uint32_t)StrReplace(o, dst, src, old, nw));
 	return 0;
 }
 
 static int Opcode_Strlen(OpenBGI_t* o, Thread_t* t) // 68: s → len
 {
-	Thread_Push(t, (uint32_t)strlen((char*)PopPtr(o, t)));
+	Thread_Push(t, (uint32_t)strlen((char*)PopMem(o, t)));
 	return 0;
 }
 
 static int Opcode_Streq(OpenBGI_t* o, Thread_t* t) // 69: a, b → eq
 {
-	char* b = (char*)PopPtr(o, t);
-	char* a = (char*)PopPtr(o, t);
+	char* b = (char*)PopMem(o, t);
+	char* a = (char*)PopMem(o, t);
 	Thread_Push(t, strcmp(a, b) == 0);
 	return 0;
 }
@@ -633,8 +661,8 @@ static void StrAssemble(char* dst, const char* a, size_t la, const char* b, size
 
 static int Opcode_Strcpy(OpenBGI_t* o, Thread_t* t) // 6A: dst, src →
 {
-	char* src = (char*)PopPtr(o, t);
-	char* dst = (char*)PopPtr(o, t);
+	char* src = (char*)PopMem(o, t);
+	char* dst = (char*)PopMem(o, t);
 	if(dst != src)
 		memmove(dst, src, strlen(src) + 1);
 	return 0;
@@ -643,9 +671,9 @@ static int Opcode_Strcpy(OpenBGI_t* o, Thread_t* t) // 6A: dst, src →
 // dst receives a followed by b (`strcat(buf, buf, "x")` appends: see StrAssemble)
 static int Opcode_Strcat2(OpenBGI_t* o, Thread_t* t) // 6B: dst, a, b →
 {
-	char* b = (char*)PopPtr(o, t);
-	char* a = (char*)PopPtr(o, t);
-	char* dst = (char*)PopPtr(o, t);
+	char* b = (char*)PopMem(o, t);
+	char* a = (char*)PopMem(o, t);
+	char* dst = (char*)PopMem(o, t);
 	StrAssemble(dst, a, strlen(a), b, strlen(b), "", 0);
 	return 0;
 }
@@ -655,7 +683,7 @@ static int Opcode_Strcat2(OpenBGI_t* o, Thread_t* t) // 6B: dst, a, b →
  * (kinsoku; that flag ends on top) */
 static int Opcode_Getchar(OpenBGI_t* o, Thread_t* t) // 6C: s → ch, dbcs, kinsoku
 {
-	char* s = (char*)PopPtr(o, t);
+	char* s = (char*)PopMem(o, t);
 	uint32_t ch;
 	int dbcs = SjisGetChar(&ch, s);
 	Thread_Push(t, ch);
@@ -670,7 +698,7 @@ static int Opcode_Getchar(OpenBGI_t* o, Thread_t* t) // 6C: s → ch, dbcs, kins
  * the character is pushed first: s → len, ch, wide, kinsoku. */
 static int Opcode_Getchar_653(OpenBGI_t* o, Thread_t* t) // 6C (1.653 on): s → ch, wide, kinsoku
 {
-	char* s = (char*)PopPtr(o, t);
+	char* s = (char*)PopMem(o, t);
 	uint32_t ch;
 	int wide;
 	int len = TextGetCharMode(&ch, &wide, s, TextSniff(s));
@@ -685,7 +713,7 @@ static int Opcode_Getchar_653(OpenBGI_t* o, Thread_t* t) // 6C (1.653 on): s →
 // lower-case the single-byte letters of a Shift-JIS string in place
 static int Opcode_Strlwr(OpenBGI_t* o, Thread_t* t) // 6D: s →
 {
-	SjisStrLwr(o, (char*)PopPtr(o, t));
+	SjisStrLwr(o, (char*)PopMem(o, t));
 	return 0;
 }
 
@@ -693,8 +721,8 @@ static int Opcode_Strlwr(OpenBGI_t* o, Thread_t* t) // 6D: s →
 static int Opcode_Strquote(OpenBGI_t* o, Thread_t* t) // 6E: dst, src, ch →
 {
 	uint32_t ch = Thread_Pop(t);
-	char* src = (char*)PopPtr(o, t);
-	char* dst = (char*)PopPtr(o, t);
+	char* src = (char*)PopMem(o, t);
+	char* dst = (char*)PopMem(o, t);
 	char q[8];
 	size_t lq = 1;
 	if(o->enc.textUtf8)
@@ -944,6 +972,8 @@ static void* WatchCheckStore(OpenBGI_t* o, uint32_t ptr, uint32_t sz, Thread_t* 
 {
 	static const uint32_t elemSize[3] = {1, 2, 4};
 	WatchCheckRange2(o, ptr, elemSize[sz & 3], t, msg);
+	if(!ptr)
+		NullPointer(o, t);
 	return ResolvePtr(o, ptr, t);
 }
 
@@ -951,6 +981,8 @@ static void* WatchCheckStore(OpenBGI_t* o, uint32_t ptr, uint32_t sz, Thread_t* 
 static void* WatchCheckRange(OpenBGI_t* o, uint32_t ptr, uint32_t size, Thread_t* t, const char* msg)
 {
 	WatchCheckRange2(o, ptr, size, t, msg);
+	if(!ptr && size)
+		NullPointer(o, t);
 	return ResolvePtr(o, ptr, t);
 }
 

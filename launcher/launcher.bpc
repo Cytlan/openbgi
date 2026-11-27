@@ -19,13 +19,17 @@
 //   Edit game     the name, the compatibility (the engine profile), the options and the
 //                 patches of a game; Add patch, Remove patch, Remove game, Cancel, Save
 //
+// A second way to run: the settings over a running game (settings.inc), in an engine of
+// their own that the game's engine brings up.  run() chooses.
+//
 // Input: the mouse (a double click opens a row), a touch screen (taps; a double tap opens),
 // the keyboard (arrows, Enter, Escape, Tab, Page Up / Down, Home, End, Backspace, F5) and a
 // pad, whose controls the program gives the same keys (pad_keys).  A folder, a .zip, an .iso
 // or one of a game's .arc files dropped on the window is added to the places (drops).
 //
-// Build: none.  OpenBGI compiles this file itself at every start, from the folder "launcher"
-// of the user's data folder, where it writes these sources when they are not there yet.
+// Build: none.  OpenBGI compiles this file itself, from the folder "launcher" of the user's
+// data folder, where it writes these sources when they are not there yet - at the first start
+// and whenever a source there has changed since (it keeps the compiled program beside them).
 // To check a change by hand: openbgi bpc launcher.bpc -o launcher._bp
 //
 // The program is written with the engine's own instructions.  The few of OpenBGI's that it
@@ -335,7 +339,7 @@ global GameInfo gInfo @ 0x2800;
 global GameInfo gScanInfo @ 0x2900;     // scan_thread's own (it waits for the engine while the rest goes on)
 global char gProfiles[MAX_PROFILES][16] @ 0x3000;
 
-global char gBrPath[1024] @ 0x4000;     // the browser's folder, "" for the computer (Windows' drives)
+global char gBrPath[1024] @ 0x4000;     // the browser's folder, "" for the computer (Windows' drives, the host's roots)
 global char gSelPath[1024] @ 0x4400;    // the path of the selected game, kept across scans
 global char gEditName[256] @ 0x4800;
 global char gTmp1[1024] @ 0x4900;       // scratch: a setting, a dialog's answer
@@ -360,6 +364,7 @@ global char gDropLast[1024] @ 0x7c00;   // .. and the last place that came of a 
 global char gFolders[MAX_FOLDERS][1024] @ 0x8000;
 global char gEditPatches[MAX_PATCHES][1024] @ 0x18000;
 global char gPatchBlock[0x4400] @ 0x1c000;     // the patches for OBGI_LAUNCH_GAME: strings, then ""
+global char gRootBuf[1024] @ 0x20800;          // scratch: one of the host's roots, or its name (root_at, row_text)
 global Game gGames[MAX_GAMES] @ 0x48000;       // 400 x 1800 bytes
 global int gOrder[MAX_GAMES] @ 0x100000;       // the list's order: indices of gGames
 global int gT[128] @ 0x101000;                 // the texts (strings.inc)
@@ -374,12 +379,18 @@ main() {
 #include "strings_ja.inc"
 #include "paint.inc"
 #include "stage.inc"
+#include "settings.inc"
 
 // ==========================================================================================
 // The program
 // ==========================================================================================
 
 run() {
+    sys.set_gmem_size(9);
+    sys81.set_text_encoding(1);
+    if (OBGI_CFG_GET("", "mode", 0, gTmp1, 16) > 0 && streq(gTmp1, "settings")) {
+        settings_run();     // over a running game (settings.inc); it does not come back
+    }
     init();
     go_games();
     while (1) {
@@ -395,10 +406,9 @@ run() {
     }
 }
 
-// Set the engine up: memory, text, the window, the sprites, the picture, the settings.
+// Set the engine up (after run's first steps: memory and the text's encoding): text, the
+// window, the sprites, the picture, the settings.
 init() { int i; int w; int h; int desk[2]; int now[4];
-    sys.set_gmem_size(9);
-    sys81.set_text_encoding(1);
     obgi.text_direction(2);
     sys.set_close_mode(1);
     gfx0.set_fps(30);               // the pictures a second, until the stage sets its look's (stage_build)
@@ -687,8 +697,20 @@ drive_root(char* p, n) {
     return is_sep(p[2] & 255);
 }
 
+// The number of the host's root that path p is, -1 when it is none.  Where the folders
+// above the storage cannot be listed (Android), the host names the folders to start from
+// (the settings' "roots"): the computer lists them, and each has the computer above it.
+root_at(char* p) { int i; int k;
+    for (i = 0; i < 64; i = i + 1) {
+        k = OBGI_CFG_GET("", "roots", i, gRootBuf, PATH_LEN);
+        if (k < 0) return -1;
+        if (streq(gRootBuf, p)) return i;
+    }
+    return -1;
+}
+
 // The folder above `dir` into dst: the root's is the root; a drive's root has "" above it,
-// the computer, and so has a name alone.
+// the computer, and so have a root of the host's and a name alone.
 path_parent(char* dst, char* dir) { int n; int k; int r;
     n = strlen(dir);
     memcpy(dst, dir, n);
@@ -702,6 +724,11 @@ path_parent(char* dst, char* dir) { int n; int k; int r;
     dst[n] = 0;
     r = drive_root(dst, n);
     if (n == 0 || r) {
+        dst[0] = 0;
+        return;
+    }
+    r = root_at(dst);
+    if (r >= 0) {
         dst[0] = 0;
         return;
     }
@@ -977,6 +1004,8 @@ bars_draw() { int sz; char* sub;
         if (gScreen == SCR_BROWSE) {
             if (gBrPath[0]) {
                 strcpy(gTmp2, gBrPath);
+            } else if (OBGI_CFG_GET("", "roots", 0, gRootBuf, PATH_LEN) >= 0) {
+                strcpy(gTmp2, TXT_STORAGE);
             } else {
                 strcpy(gTmp2, TXT_COMPUTER);
             }
@@ -1241,6 +1270,15 @@ row_text(item) { Game* g; int k;
     }
     k = OBGI_DIR_ENTRY(gBrHandle, item, gTmp3, PATH_LEN);
     if (k == ENTRY_FOLDER) {
+        if (!gBrPath[0]) {              // in the computer: one of the host's roots goes by its name
+            k = root_at(gTmp3);
+            if (k >= 0) {
+                if (OBGI_CFG_GET("", "root_names", k, gRootBuf, PATH_LEN) > 0) {
+                    strcpy(gLine1, gRootBuf);
+                    return 0;
+                }
+            }
+        }
         strcat2(gLine1, gTmp3, "/");
         return 0;
     }
@@ -1854,8 +1892,8 @@ profile_index(char* name) { int i;
 trig(vk) { int v;
     v = sys.key_trigger(PRIO_LAYER, vk);
     if (v == 0) return 0;
-    v = v & 0x7fffffff;
-    if (v == 0) v = 1;
+    v <- v & 0x7fffffff;                        // (<-: nothing is left on the stack under the value returned)
+    if (v == 0) return 1;
     return v;
 }
 
@@ -2966,7 +3004,11 @@ br_activate(item) { int k; int a;
 br_up() {
     path_join(gParent, gBrPath, "..");
     if (streq(gParent, gBrPath)) return;
-    base_name(gChild, gBrPath);
+    if (gParent[0]) {
+        base_name(gChild, gBrPath);
+    } else {
+        strcpy(gChild, gBrPath);        // in the computer an entry is a whole path
+    }
     strcpy(gPathBuf, gParent);
     br_open(gPathBuf, gChild);
 }

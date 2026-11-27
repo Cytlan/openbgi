@@ -91,6 +91,12 @@ static int MachineAudioAvailable(void* user)
 	return OS_AudioAvailable();
 }
 
+static uint64_t MachineProcessMemory(void* user)
+{
+	BGI_UNUSED(user);
+	return OS_ProcessMemory();
+}
+
 static const OpenBGI_Machine_t kMachine = {
 	sizeof(OpenBGI_Machine_t),
 	MACHINE_CPUID,
@@ -104,6 +110,7 @@ static const OpenBGI_Machine_t kMachine = {
 	MachineUiLanguage,
 	MachineDisplayAdapter,
 	MachineAudioAvailable,
+	MachineProcessMemory,
 };
 
 const OpenBGI_Machine_t* OsCommon_Machine(void)

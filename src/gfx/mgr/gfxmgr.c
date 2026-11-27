@@ -160,7 +160,10 @@ static int32_t DibPitch(int w, int mode)
 }
 
 /* allocate the back buffer of w x h pixels in pixel mode `mode` (replacing
- * any previous one) and make `mode` the screen mode.  The buffer is a
+ * any previous one) and make `mode` the screen mode - for a see-through
+ * picture ("EF 31") ARGB32 in the place of RGB32: every blitter that
+ * draws into an ARGB32 bitmap draws into such a screen, and what nothing
+ * draws on stays clear.  The buffer is a
  * top-down bitmap of h + 2 rows with the visible rows starting at row 1;
  * both guard rows are zeroed.  With `scaled` a second surface of exactly
  * sw x sh rows is created for the stretched presentation, with
@@ -171,6 +174,8 @@ void Gfx_SetupScreen(OpenBGI_t* o, Gfx_t* g, int w, int h, int mode, int scaled,
 	int32_t pitch;
 
 	Gfx_FreeScreen(o, g);
+	if(o->gfx.seeThrough && mode == PM_RGB32)
+		mode = PM_ARGB32;
 	Gfx_SetScreenMode(o, mode);
 
 	pitch = DibPitch(w, mode);

@@ -154,8 +154,21 @@ int OpenBGI_AudioRead(OpenBGI_t* o, int16_t* out, int frames)
 	}
 	STORE(&s->taken, t + n);
 	if(n < (uint32_t)frames)
+	{
 		memset(out + (size_t)n * 2, 0, (size_t)((uint32_t)frames - n) * 4);
+		if(s->running)
+			STORE(&s->starved, s->starved + ((uint32_t)frames - n)); // (silence where sound was due)
+	}
 	return (int)n;
+}
+
+void SndOut_Stats(OpenBGI_t* o, uint32_t* ahead, uint32_t* dropped, uint32_t* starved)
+{
+	SndOut_t* s = &o->snd.out;
+	uint32_t unread = s->written - LOAD(&s->taken);
+	*ahead = s->running && (int32_t)unread > 0 ? unread : 0;
+	*dropped = s->dropped;
+	*starved = LOAD(&s->starved);
 }
 
 void OpenBGI_RunAudio(OpenBGI_t* o)

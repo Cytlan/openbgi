@@ -27,14 +27,107 @@ What the engine and a host do for the launcher. Using it:
    written and of the set they came from, to tell a changed file from
    an untouched one.
 2. Compiles `launcher.bpc` from that folder with `Bpc_CompileText`
-   (`src/include/bgi/bpc.h`). On errors it compiles the built-in sources
-   in memory instead.
+   (`src/include/bgi/bpc.h`), unless the program kept from an earlier
+   compile still stands (below). On errors it compiles the built-in
+   sources in memory instead.
 3. Boots the program with the user's data folder as the game directory
    and the profile 1.669.
 
 `src/sys/launcher.c` carries out the `obgi` instructions the program
 calls. `obgi.launch_game` stops the run and starts the engine again in
 the same process with the game's command line.
+
+## Back to the launcher
+
+`src/sys/launcher.c`, `Launcher_Return`; the frame in
+`src/sys/engine.c`.
+
+A game the launcher started does not end the run of frames. When its
+run is over and its last box is answered, the engine stops it and
+starts again as the launcher was started first: the same command
+line, in the directory that start began in.
+
+| The run | Ends by | Then |
+|---|---|---|
+| A game the launcher started | The game itself; the window's close box, as the game handles it; an error | The launcher |
+| The same | The host's `OpenBGI_Quit` (a signal, the activity gone) | `OPENBGI_DONE` |
+| A game named on the command line | Anything | `OPENBGI_DONE` |
+| The launcher | Its program ends; its window is closed | `OPENBGI_DONE` |
+
+- A host needs to do nothing: `OpenBGI_RunFrame` keeps answering
+  `OPENBGI_RUNNING` across the change, as it does when a game is
+  started.
+- The game's play time and last picture are written before the
+  launcher starts, so its list shows them.
+- The launcher's program starts from its beginning. It finds the game
+  it started through its setting `"last"`.
+- The processor's clock is measured for a second at an engine's first
+  start only (`Cpu_Detect`). A game started from the launcher, and the
+  launcher after it, start without that second.
+- `tests/launcher.c`, group "back", runs the launcher, a game and the
+  launcher again through the frames.
+
+## The settings over a game
+
+`src/sys/settings.c`, `src/include/bgi/settings.h`. The settings are a
+screen of the launcher's program (`launcher/settings.inc`). Over a
+running game a second engine, the panel, runs it. The game goes on
+under it.
+
+| Piece | How |
+|---|---|
+| The panel's engine | Made by the game's engine (`Settings_Open`) and freed by it (`Settings_Close`). It never outlives the game's run |
+| Its host | The game's clocks and fonts, and nothing else. A files table that holds no file. The OS layer keeps one text encoding and one game directory for the process, and the game has both |
+| Its program | The launcher's as the game's engine keeps it since the launcher last ran (`Launcher_Program`); for a game named on the command line the pack's own sources, compiled then |
+| Its start | `Engine_StartBuiltin`: no command line, no settings file, no lock, no sound, the launcher's profile |
+| Its frames | One with each frame of the game's engine (`Settings_Frame`), on the same thread |
+| Its picture | ARGB32 at the surface's size (`obgi.see_through`). `Overlay_Frame` copies what changed of it into the screen layer and draws the on-screen controls over it |
+| Its input | Touches beside the controls, the on-screen pad, and the host's keys and buttons, while it is up. The game gets none of them |
+| What it changes | Settings of the path `""`: `Settings_Value`, `Settings_Set` ([obgi.md](../modding/obgi.md)) |
+
+| Key | Reaches |
+|---|---|
+| `"pad"`, `"through"` | The on-screen controls: `Overlay_SetPad`, `Overlay_SetThrough` |
+| `"perf"` | The performance display: `Perf_Set` ([testing.md](testing.md#the-performance-display)) |
+| `"filters"`, `"filter"`, `"quality"`, `"whole"` | The display settings of `mainwin.c`: `MainWin_ViewSettings`, `MainWin_ViewApply`, `MainWin_ViewSetHigh`. They are on where `MainWin_ViewScales` says so: the host fits a window to its screen (`workArea`), or it said a surface and scales the picture (`setScaling`) |
+| `"game"` set to `close` | `OpenBGI_Close` of the game's engine, after the panel is gone (`closeGame`). The game asks what it asks at the window's close button. When it ends, the launcher follows |
+| `"panel"` set to `close` | `Settings_Close` when the panel's frame is over |
+
+- A host that said no surface has no layer, so no panel. No host of
+  this tree says one yet; the desktop keeps the display settings box
+  (F9).
+- The engine says on standard error how long the panel took to appear:
+  `openbgi: the settings were up after 47 ms`.
+- A request for the host from the panel (it should make none) is
+  logged and answered with 0.
+- `tests/settings.c` runs a small panel program over an engine without
+  a host's window.
+
+## The compiled program is kept
+
+Compiling the launcher takes about half a second on a desktop. The
+compiled program is kept in the folder as `compiled.cache`, with a note
+of what it was made from:
+
+| Noted | A start compiles again when |
+|---|---|
+| Every file the compile read, with a checksum of its bytes | One of them has other bytes, or is gone |
+| Every file the compile looked for and did not find | One of them is there now |
+| The engine: its release, the launcher's profile and the pack's `build.id` | Another build of OpenBGI runs |
+
+- `build.id` is a file of the pack that is no source. `tools/mkpack.py
+  --build-id` makes it: a checksum of everything the engine is built
+  from (`BUILD_ID_SRC` in the Makefile). A host with a pack of its own
+  may leave it out; the release alone tells builds apart then.
+- `build.id` is not written into the folder and does not make a pack
+  "newer".
+- The built-in sources, which run while the folder's do not compile,
+  are kept the same way as `builtin.cache`.
+- Without a data folder, or with one that cannot be written to,
+  nothing is kept and every start compiles.
+- A damaged cache file is not used: a checksum closes it.
+- `o->launcher.cached` says whether this start's program was taken
+  from the cache (`tests/launcher.c`).
 
 ## Jobs: reading without blocking
 
@@ -91,6 +184,18 @@ While a game the launcher started runs, the engine keeps a small copy
 of its picture now and then and writes the last one to `pictures/` when
 the game ends.
 
+## The folder browser's top
+
+The listing of the path `""` is what is above every folder:
+
+| Host | Listing of `""` |
+|---|---|
+| Windows | The drives (`logicalDrives`) |
+| One that names roots (`OpenBGI_Files_t.nativeRoots`; a host on Android, with its storage volumes) | Those folders, each under its whole path, in the host's order. The program reads their names as the setting `"root_names"` and takes each to have `""` above it |
+| Any other | The root folder |
+
+Drives and roots are known at once; no job is made for them.
+
 ## openbgi.json
 
     {
@@ -115,6 +220,7 @@ the game ends.
 |---|---|---|
 | `launcher.folders` | Launcher | The places searched |
 | `launcher.last`, `sort`, `look`, `width`, `height` | Launcher | Its own state |
+| `launcher.touchPad`, `touchThrough` | The on-screen controls | Whether the pad is shown, and whether touches beside it reach the picture ([input.md](input.md#on-screen-controls)) |
 | `launcher.preview` | By hand | `"none"`: no first pictures |
 | game `name`, `profile`, `options`, `patches`, `removed` | Launcher | What "Edit game" sets |
 | game `played`, `seconds`, `picture`, `icon`, `preview` | Engine | Last start, total run time, file names, `"none"` after a failed first picture |

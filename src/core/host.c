@@ -76,10 +76,23 @@ void Host_FileClose(OpenBGI_t* o, HostFile_t* h)
 		f->close(o->host.user, h);
 }
 
+// (while the performance display is on, the read is counted and timed: bgi/perf.h)
 uint32_t Host_FileRead(OpenBGI_t* o, HostFile_t* h, void* buf, uint32_t n)
 {
 	const OpenBGI_Files_t* f = Files(o);
-	return h && f && f->read ? f->read(o->host.user, h, buf, n) : 0;
+	int64_t t0 = 0, t1 = 0;
+	uint32_t got;
+	if(!h || !f || !f->read)
+		return 0;
+	if(!o->perf.on)
+		return f->read(o->host.user, h, buf, n);
+	o->host.perfNs(o->host.user, &t0);
+	got = f->read(o->host.user, h, buf, n);
+	o->host.perfNs(o->host.user, &t1);
+	o->perf.diskBytes += got;
+	o->perf.diskReads++;
+	o->perf.diskNs += t1 - t0;
+	return got;
 }
 
 uint32_t Host_FileWrite(OpenBGI_t* o, HostFile_t* h, const void* buf, uint32_t n)
@@ -272,6 +285,20 @@ int Host_NativeWritable(OpenBGI_t* o, const char* path)
 {
 	const OpenBGI_Files_t* f = Files(o);
 	return f && f->nativeWritable ? f->nativeWritable(o->host.user, path) : 1;
+}
+
+uint32_t Host_NativeRoots(OpenBGI_t* o, char* buf, uint32_t n)
+{
+	const OpenBGI_Files_t* f = Files(o);
+	uint32_t len = f && f->nativeRoots && n >= 2 ? f->nativeRoots(o->host.user, buf, n) : 0;
+	if(len == 0 || len + 1 >= n)
+	{
+		if(n >= 2)
+			buf[0] = buf[1] = 0;
+		return 0;
+	}
+	buf[len] = buf[len + 1] = 0; // (whatever the host left there)
+	return len;
 }
 
 int Host_NativeMkdir(OpenBGI_t* o, const char* path)

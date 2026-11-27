@@ -58,6 +58,19 @@ void BmpMgr_FreeAll(BmpMgr_t* m)
 		BmpMgr_FreeSlot(m, i);
 }
 
+uint64_t BmpMgr_Bytes(const BmpMgr_t* m)
+{
+	uint64_t n = 0;
+	int i;
+	for(i = 0; i < m->count; i++)
+		if(m->slots[i].buf && m->slots[i].bmp.pixels)
+		{
+			int64_t pitch = m->slots[i].bmp.pitch;
+			n += (uint64_t)(pitch < 0 ? -pitch : pitch) * (uint64_t)m->slots[i].bmp.h;
+		}
+	return n;
+}
+
 void BmpMgr_Delete(BmpMgr_t* m)
 {
 	BmpMgr_FreeAll(m);

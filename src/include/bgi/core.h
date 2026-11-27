@@ -59,6 +59,9 @@
 #include "bgi/dbg.h"
 #include "bgi/request.h"
 #include "bgi/launcher.h"
+#include "bgi/overlay.h"
+#include "bgi/settings.h"
+#include "bgi/perf.h"
 
 struct OpenBGI
 {
@@ -116,6 +119,7 @@ struct OpenBGI
 		int cpuMeasuring;  // the clock measurement runs (over the frames of the start)
 		uint32_t cpuUntil; // its end (GetTicks)
 		uint64_t cpuTsc0;  // the time stamp counter at its start
+		uint32_t cpuKept;  // what it gave in the run before this one (Engine_Renew): this run takes it and does not measure; 0 for an engine's first run
 	} util;
 
 	// the text encoding of the scripts (src/core/strutil.c)
@@ -218,6 +222,8 @@ struct OpenBGI
 		char optEngine[32];                   // --engine=
 		char optProduct[0x100];               // --productname=
 		char optGames[0x104];                 // --games=
+		char* startCmd;                       // the command line of this start as the host gave it (BGI_Free; the launcher's goes with the game it starts)
+		char startDir[0x408];                 // .. and the game directory it began in, a native path (what stands in a game's place is looked for there)
 		int optList;                          // --list-engines
 		int optListMissing;                   // --list-missing: the opcodes of the profile without a handler
 		char optListArc[0x200];               // --list=
@@ -245,6 +251,15 @@ struct OpenBGI
 
 	// the launcher: its program, and what is kept of the game it started over the engine's restart (src/sys/launcher.c)
 	LauncherState_t launcher;
+
+	// the screen layer and the on-screen controls drawn in it (src/sys/overlay.c)
+	OverlayState_t overlay;
+
+	// the settings over a running game: the engine that runs them, or - in that engine - the game's (src/sys/settings.c)
+	SettingsState_t settings;
+
+	// the performance display: what the run measures of itself, and the panel that shows it (src/sys/perf.c)
+	PerfState_t perf;
 
 	// the string encoding of the assembler, the compilers and the decompilers (src/asm/strlit.c)
 	struct
@@ -667,6 +682,7 @@ struct OpenBGI
 		BmpMgr_t* bmpMgr; // the one manager of the engine
 		// src/gfx/bitmap.c
 		int screenMode;                    // pixel mode of the back buffer
+		int seeThrough;                    // "EF 31": a 32-bit screen is made with alpha (ARGB32), and no background is drawn
 		int bmpOption;                     // "90 0F": the key colour put ARGB32 pictures were composited over, 0 = none
 		int blitSse, blitSse2, blitTuning; // the CPU switches of the original's blitter selection
 		int blitTablesReady;               // Blit_InitTables was called

@@ -60,6 +60,7 @@ typedef struct BmpMgr
 BmpMgr_t* BmpMgr_New(int count);          // allocate a manager with `count` empty slots and a font cache
 void BmpMgr_Delete(BmpMgr_t* m);          // free every slot, the ripples, the font cache and the manager
 void BmpMgr_FreeAll(BmpMgr_t* m);         // free every slot
+uint64_t BmpMgr_Bytes(const BmpMgr_t* m); // the pixels of every slot, in bytes (the performance display's)
 int BmpMgr_FreeSlot(BmpMgr_t* m, int no); // "90 12": free slot `no`; 1 if it was in use, 0 if empty or invalid
 
 /* "90 11": allocate slot `no` as a black (zero) w x h bitmap of pixel

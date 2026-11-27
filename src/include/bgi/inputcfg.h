@@ -45,7 +45,8 @@
  * is; "always" for a mouse as well, on a host that hands a mouse over and
  * shows nothing for it; "never".  "pointerSize" is the arrow's size:
  * "small", "normal" (a thirty-sixth of the picture's height, 16 pixels at
- * least) or "large".  "stickSpeed" is how fast a stick moves the pointer,
+ * least - and 4.5 mm at least where the host said the screen's density,
+ * OpenBGI_TouchScale or OpenBGI_SetSurface) or "large".  "stickSpeed" is how fast a stick moves the pointer,
  * in percent of the usual (25 .. 400), which is the picture's height in
  * about a second.  "onScreenKeyboard": false keeps the engine's keyboard
  * down until it is asked for (the keyboard action, a pad's confirm on a

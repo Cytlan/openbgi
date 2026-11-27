@@ -102,12 +102,16 @@ static int Cpu_Identify(OpenBGI_t* o, uint32_t* vendor, uint32_t* family, uint32
 /* The clock in MHz: the time stamp counter over one second, so start-up
  * takes a second (0 without CPUID).  The original sleeps in 1 ms steps
  * until GetTicks passes the end; here the start (Cpu_Detect) and the end
- * (Cpu_MeasureStep) are taken over the frames of the start-up. */
+ * (Cpu_MeasureStep) are taken over the frames of the start-up.  The
+ * original measures once a process; so does an engine: a start after its
+ * first - a game the launcher starts, the launcher after that game -
+ * takes what was measured then (`cpuKept`, from Engine_Renew) and no
+ * second. */
 static void Cpu_MeasureBegin(OpenBGI_t* o)
 {
 	uint32_t r[4];
-	o->util.sysInfo.mhz = 0;
-	o->util.cpuMeasuring = Cpu_Cpuid(o, r, 0);
+	o->util.sysInfo.mhz = o->util.cpuKept;
+	o->util.cpuMeasuring = !o->util.cpuKept && Cpu_Cpuid(o, r, 0);
 	if(!o->util.cpuMeasuring)
 		return;
 	o->util.cpuUntil = GetTicks(o) + 1000;

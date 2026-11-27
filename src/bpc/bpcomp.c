@@ -485,6 +485,7 @@ typedef struct Func
 	Node_t* body; // N_BLOCK
 	int isAsm;    // the body is a single __asm block
 	Node_t* asmNode;
+	int leaves; // whether its statements leave values on the stack under the one it returns (FuncLeaves): 0 not looked at, 1 being looked at, 2 no, 3 yes
 } Func_t;
 
 // the memory areas a variable can be declared in: what the tags of the engine's pointers name
@@ -1753,6 +1754,7 @@ typedef struct Gen
 	} named[512];
 	int namedCount;
 	char opName[16]; // OpMnemonic's "0x.." for an opcode without a name
+	int held;        // the values the statement being compiled has on the stack now (for the warning of GenCall)
 	/* a program whose code and strings do not fit the 32 KB a relative
 	 * reference spans: its strings and functions are named by their full
 	 * addresses (push_i32) instead */
@@ -2147,7 +2149,9 @@ static int GenObject(Gen_t* g, Node_t* n, Obj_t* out)
 				GenError(g, n->line, "%s is not an array", ObjName(n->a));
 				return 0;
 			}
+			g->held++; // (the array's address lies under the index)
 			GenExpr(g, n->b);
+			g->held--;
 			size = TypeSize(&out->type);
 			if(base.isArray && base.inner)
 			{ // a row of a two-dimensional array: an array itself
@@ -2215,6 +2219,120 @@ static int IsCallNode(const Node_t* n)
 	return n->kind == N_CALL || n->kind == N_OPCALL || n->kind == N_SELECT;
 }
 
+/* ---- what a function leaves on the stack ----------------------------------------------------
+ *
+ * `x = v;` as a statement is a store that keeps v on the stack, and a call
+ * whose value nobody takes leaves that value there.  Nothing takes such
+ * values away: the stack goes round.  They lie under the value the
+ * function returns, which is harmless where the caller takes that value
+ * alone and wrong where the caller has a value of its own on the stack
+ * already: in `y + f()` the addition adds what f left, not y.  The
+ * compiler cannot put that right (the original's programs are compiled
+ * the same way, byte for byte), so it says so: GenCall warns of a call to
+ * such a function while the statement has values on the stack.
+ *
+ * A function "leaves" when one of its statements does, or when it calls a
+ * function that does.  A call through an address, an engine instruction
+ * and an __asm body are not looked into. */
+
+static int FuncLeaves(Gen_t* g, Func_t* f);
+
+// the function a call names; NULL for a call through an address
+static Func_t* Callee(Gen_t* g, const Node_t* n)
+{
+	return n->kind == N_CALL && n->a && n->a->kind == N_NAME ? FindFunc(g->u, n->a->text) : NULL;
+}
+
+// whether a `return v;` is among the statements
+static int Returns(const Node_t* n)
+{
+	int i;
+	if(!n || n->kind < N_EXPR)
+		return 0;
+	if(n->kind == N_RETURN)
+		return n->a != NULL;
+	if(Returns(n->b) || Returns(n->c))
+		return 1;
+	for(i = 0; i < n->count; i++)
+		if(Returns(n->items[i]))
+			return 1;
+	return 0;
+}
+
+// whether an expression calls a function that leaves, anywhere in it
+static int CallsLeaving(Gen_t* g, const Node_t* n)
+{
+	Func_t* f;
+	int i;
+	if(!n || n->kind >= N_EXPR)
+		return 0;
+	f = Callee(g, n);
+	if(f && FuncLeaves(g, f))
+		return 1;
+	if(CallsLeaving(g, n->a) || CallsLeaving(g, n->b) || CallsLeaving(g, n->c))
+		return 1;
+	for(i = 0; i < n->count; i++)
+		if(CallsLeaving(g, n->items[i]))
+			return 1;
+	return 0;
+}
+
+// whether an expression that stands as a statement leaves its value: a store that keeps it, a call's value nobody takes
+static int LeftBehind(Gen_t* g, const Node_t* e)
+{
+	Func_t* f;
+	if(!e)
+		return 0;
+	if(e->kind == N_ASSIGN)
+		return e->b->kind != N_INITLIST && !IsCallNode(e->b);
+	f = Callee(g, e);
+	return f && !f->isAsm && Returns(f->body);
+}
+
+// whether a statement leaves a value, or calls a function that does
+static int StatementLeaves(Gen_t* g, const Node_t* s)
+{
+	int i;
+	if(!s)
+		return 0;
+	switch(s->kind)
+	{
+		case N_EXPR: return LeftBehind(g, s->a) || CallsLeaving(g, s->a);
+		case N_DECL:
+		case N_RETURN: return CallsLeaving(g, s->a);
+		case N_IF: return CallsLeaving(g, s->a) || StatementLeaves(g, s->b) || StatementLeaves(g, s->c);
+		case N_WHILE:
+		case N_DOWHILE: return CallsLeaving(g, s->a) || StatementLeaves(g, s->b);
+		case N_FOR:
+			return LeftBehind(g, s->a) || LeftBehind(g, s->c) || CallsLeaving(g, s->a) || CallsLeaving(g, s->b) || CallsLeaving(g, s->c) ||
+				(s->count && StatementLeaves(g, s->items[0]));
+		case N_BLOCK:
+			for(i = 0; i < s->count; i++)
+				if(StatementLeaves(g, s->items[i]))
+					return 1;
+			return 0;
+		case N_STOREMUL:
+			if(CallsLeaving(g, s->a))
+				return 1;
+			for(i = 0; i < s->count; i++)
+				if(CallsLeaving(g, s->items[i]))
+					return 1;
+			return 0;
+		default: return 0;
+	}
+}
+
+// (a function that calls itself, or two that call each other, are taken as leaving nothing while they are looked at)
+static int FuncLeaves(Gen_t* g, Func_t* f)
+{
+	if(!f->leaves)
+	{
+		f->leaves = 1;
+		f->leaves = !f->isAsm && StatementLeaves(g, f->body) ? 3 : 2;
+	}
+	return f->leaves == 3;
+}
+
 // the address of something that can be assigned and the size code of the access
 static int GenLvalue(Gen_t* g, Node_t* n)
 {
@@ -2260,15 +2378,18 @@ static void GenCall(Gen_t* g, Node_t* n)
 				GenError(g, n->line, "sprintf takes a destination and a format");
 				return;
 			}
-			for(i = n->count - 1; i >= 2; i--)
+			for(i = n->count - 1; i >= 2; i--, g->held++)
 				GenExpr(g, n->items[i]);
 			GenExpr(g, n->items[0]);
+			g->held++;
 			GenExpr(g, n->items[1]);
+			g->held -= n->count - 1;
 			Emit(g, "sprintf");
 			return;
 		}
-		for(i = 0; i < n->count; i++)
+		for(i = 0; i < n->count; i++, g->held++)
 			GenExpr(g, n->items[i]);
+		g->held -= n->count;
 		if(fam)
 			Emit(g, "%s.%s", Asm_FamilyName(fam), name ? name : n->text + strlen(Asm_FamilyName(fam)) + 1);
 		else if(name)
@@ -2278,12 +2399,24 @@ static void GenCall(Gen_t* g, Node_t* n)
 		return;
 	}
 	// a function: the arguments right to left, then the callee
-	for(i = n->count - 1; i >= 0; i--)
+	for(i = n->count - 1; i >= 0; i--, g->held++)
 		GenExpr(g, n->items[i]);
+	g->held -= n->count;
 	if(n->a->kind == N_NAME && FindFunc(g->u, n->a->text) && !FindVar(g->func, n->a->text) && !FindArea(g->u, n->a->text))
+	{
+		if(g->held > 0 && FuncLeaves(g, FindFunc(g->u, n->a->text)))
+			Warnf(g->lex, n->line,
+				"%s() leaves values on the stack under its own, and a value of this statement lies there already: store the call's value first, or "
+				"write the `x = v;` statements of %s as `x <- v;`",
+				n->a->text, n->a->text);
 		Emit(g, g->far ? "push_i32 %s" : "push_code_off %s", n->a->text);
+	}
 	else
+	{
+		g->held += n->count;
 		GenExpr(g, n->a);
+		g->held -= n->count;
+	}
 	Emit(g, "call");
 }
 
@@ -2332,8 +2465,11 @@ static void GenExpr(Gen_t* g, Node_t* n)
 		case N_OPCALL: GenCall(g, n); break;
 		case N_SELECT:
 			GenExpr(g, n->a);
+			g->held++;
 			GenExpr(g, n->b);
+			g->held++;
 			GenExpr(g, n->c);
+			g->held -= 2;
 			Emit(g, "select");
 			break;
 		case N_UNARY:
@@ -2351,7 +2487,9 @@ static void GenExpr(Gen_t* g, Node_t* n)
 			break;
 		case N_BINARY:
 			GenExpr(g, n->a);
+			g->held++;
 			GenExpr(g, n->b);
+			g->held--;
 			Emit(g, "%s", OpMnemonic(g, n->op));
 			break;
 		case N_ASSIGN:
@@ -2376,12 +2514,16 @@ static void GenExpr(Gen_t* g, Node_t* n)
 			if(IsCallNode(n->b))
 			{ // a call's value: the value first, then the address, and a plain store
 				GenExpr(g, n->b);
+				g->held++;
 				size = GenLvalue(g, n->a);
+				g->held--;
 				Emit(g, "store %d", size);
 				break;
 			}
 			size = GenLvalue(g, n->a);
+			g->held++;
 			GenExpr(g, n->b);
+			g->held--;
 			Emit(g, "store_keep %d", size);
 			break;
 		}
@@ -2389,7 +2531,9 @@ static void GenExpr(Gen_t* g, Node_t* n)
 		{
 			int size;
 			GenExpr(g, n->b);
+			g->held++;
 			size = GenLvalue(g, n->a);
+			g->held--;
 			Emit(g, "store %d", size);
 			break;
 		}
@@ -2537,6 +2681,7 @@ static void EmitAsmLines(OpenBGI_t* o, Gen_t* g, const char* text, int line)
 
 static void GenStatement(OpenBGI_t* o, Gen_t* g, Node_t* s)
 {
+	g->held = 0; // (a statement begins with nothing of its own on the stack)
 	switch(s->kind)
 	{
 		case N_BLOCK: GenStatements(o, g, s); break;

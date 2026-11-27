@@ -313,6 +313,19 @@ void X11_FillLetterbox(void)
 	XFreeGC(gX11Dpy, gc);
 }
 
+// no surface is said here: no layer
+void OS_WindowLayer(const unsigned char* pixels, int w, int h, int pitch, int x, int y, int cw, int ch)
+{
+	BGI_UNUSED(pixels);
+	BGI_UNUSED(w);
+	BGI_UNUSED(h);
+	BGI_UNUSED(pitch);
+	BGI_UNUSED(x);
+	BGI_UNUSED(y);
+	BGI_UNUSED(cw);
+	BGI_UNUSED(ch);
+}
+
 /* The picture through the graphics processor, once for all that a frame
  * changed: into the place the mapping gives it (the whole client area
  * when it is not scaled), by the rule of OS_WindowSetScaling, black

@@ -55,12 +55,14 @@ void Background_Invalidate(OpenBGI_t* o, DispObj_t* obj)
 }
 
 /* the draw slot: render() paints `dst` (the dirty part of the back buffer,
- * `local` tells which part); mode 0 or a failed render clears it to black */
+ * `local` tells which part); mode 0 or a failed render clears it to black
+ * - as does a see-through picture ("EF 31"), which has no background: the
+ * zero bytes are its clear pixels */
 void Background_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t* local, uint32_t minKey)
 {
 	Background_t* b = (Background_t*)obj;
 	(void)minKey;
-	if(!(b->mode != 0 && Background_Render(o, b, dst, local)))
+	if(o->gfx.seeThrough || !(b->mode != 0 && Background_Render(o, b, dst, local)))
 		Bmp_Clear(dst, NULL);
 }
 

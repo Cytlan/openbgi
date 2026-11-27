@@ -9,6 +9,14 @@
  * the back end's loader, so that the program builds and runs on a system
  * without OpenGL.
  *
+ * The same code draws through OpenGL ES 3.0 and later, which a context
+ * says of itself in its version string (any that a back end hands over):
+ * the shaders then begin with ES's
+ * version line, the picture's pixels go into the texture in the one byte
+ * order ES takes, with red and blue changed over when the texture is read,
+ * and a shader chain is there only where the context can draw into
+ * textures of floats.
+ *
  * The picture is one texture of 8 bits a colour, written row by row as
  * the frames change it (rows from the top, as the engine has them: a
  * texture's first row is the picture's top one everywhere in here, and
@@ -45,6 +53,10 @@ typedef float GLfloat;
 typedef char GLchar;
 typedef unsigned char GLubyte;
 
+#define GL_ONE                        1
+#define GL_SRC_ALPHA                  0x0302
+#define GL_ONE_MINUS_SRC_ALPHA        0x0303
+#define GL_BLEND                      0x0BE2
 #define GL_TRIANGLES                  0x0004
 #define GL_UNPACK_ROW_LENGTH          0x0CF2
 #define GL_UNPACK_ALIGNMENT           0x0CF5
@@ -52,9 +64,12 @@ typedef unsigned char GLubyte;
 #define GL_TEXTURE_2D                 0x0DE1
 #define GL_UNSIGNED_BYTE              0x1401
 #define GL_HALF_FLOAT                 0x140B
+#define GL_RED                        0x1903
+#define GL_BLUE                       0x1905
 #define GL_RGBA                       0x1908
 #define GL_RENDERER                   0x1F01
 #define GL_VERSION                    0x1F02
+#define GL_EXTENSIONS                 0x1F03
 #define GL_NEAREST                    0x2600
 #define GL_LINEAR                     0x2601
 #define GL_LINEAR_MIPMAP_LINEAR       0x2703
@@ -64,6 +79,7 @@ typedef unsigned char GLubyte;
 #define GL_TEXTURE_WRAP_T             0x2803
 #define GL_COLOR_BUFFER_BIT           0x4000
 #define GL_RGB8                       0x8051
+#define GL_RGBA8                      0x8058
 #define GL_BGRA                       0x80E1
 #define GL_CLAMP_TO_EDGE              0x812F
 #define GL_UNSIGNED_SHORT_1_5_5_5_REV 0x8366
@@ -78,6 +94,9 @@ typedef unsigned char GLubyte;
 #define GL_FRAMEBUFFER_COMPLETE       0x8CD5
 #define GL_COLOR_ATTACHMENT0          0x8CE0
 #define GL_FRAMEBUFFER                0x8D40
+#define GL_TEXTURE_SWIZZLE_R          0x8E42
+#define GL_TEXTURE_SWIZZLE_B          0x8E44
+#define GL_TEXTURE_SWIZZLE_A          0x8E45
 
 static struct
 {
@@ -122,6 +141,9 @@ static struct
 	void(GLCALL* Uniform1i)(GLint, GLint);
 	void(GLCALL* Uniform1f)(GLint, GLfloat);
 	void(GLCALL* Uniform2f)(GLint, GLfloat, GLfloat);
+	void(GLCALL* Enable)(GLenum);
+	void(GLCALL* Disable)(GLenum);
+	void(GLCALL* BlendFunc)(GLenum, GLenum);
 } gl;
 
 // the functions' names, in the order of the members above
@@ -130,7 +152,8 @@ static const char* const kNames[] = {"glGetString", "glGetError", "glGetIntegerv
 	"glGenerateMipmap", "glGenFramebuffers", "glDeleteFramebuffers", "glBindFramebuffer", "glFramebufferTexture2D", "glCheckFramebufferStatus",
 	"glGenVertexArrays", "glDeleteVertexArrays", "glBindVertexArray", "glCreateShader", "glShaderSource", "glCompileShader", "glGetShaderiv",
 	"glGetShaderInfoLog", "glDeleteShader", "glCreateProgram", "glAttachShader", "glLinkProgram", "glGetProgramiv", "glGetProgramInfoLog",
-	"glUseProgram", "glDeleteProgram", "glGetUniformLocation", "glUniform1i", "glUniform1f", "glUniform2f"};
+	"glUseProgram", "glDeleteProgram", "glGetUniformLocation", "glUniform1i", "glUniform1f", "glUniform2f", "glEnable", "glDisable",
+	"glBlendFunc"};
 
 // ---- the shader files the program carries ----------------------------------------------------------
 
@@ -283,8 +306,10 @@ static File_t* FileOf(int f)
 
 // ---- the state -----------------------------------------------------------------------------------
 
-static int gOn;  // OsGl_Start took the context
-static int gOld; // GLSL 1.30 (OpenGL 3.0 .. 3.2); else 3.30
+static int gOn;     // OsGl_Start took the context
+static int gOld;    // GLSL 1.30 (OpenGL 3.0 .. 3.2); else 3.30
+static int gEs;     // the context is OpenGL ES's (3.0 or later): GLSL ES 3.00
+static int gFloats; // a pass can draw into a texture of floats: the shader chains are to be had
 static int gMaxSize, gMaxUnits;
 static char gRenderer[128];
 static GLuint gVao, gFbo;
@@ -292,6 +317,10 @@ static GLuint gPic;          // the picture's texture
 static int gPicW, gPicH;     // its size; 0: none yet
 static GLuint gCopy, gCubic; // the two programs of the last draw
 static GLint gCopyFlip, gCubicFlip, gCubicSize;
+static GLuint gLayer;        // the layer's texture (OsGl_Layer),
+static int gLayerW, gLayerH; // .. its size,
+static GLuint gOver;         // .. and the program that draws it
+static GLint gOverFlip;
 // the plan that is set up, and its textures (slot 0 is gPic)
 static int gPlanChain = -1, gPlanPicW, gPlanPicH, gPlanOutW, gPlanOutH;
 static OsGlPlan_t gPlan;
@@ -331,6 +360,12 @@ static const char kCopy[] = "in vec2 uv;\n"
 							"uniform sampler2D tex;\n"
 							"void main() { out_color = vec4(texture(tex, uv).rgb, 1.0); }\n";
 
+// the layer: its colours with its alpha, which the blending takes
+static const char kOver[] = "in vec2 uv;\n"
+							"out vec4 out_color;\n"
+							"uniform sampler2D tex;\n"
+							"void main() { out_color = texture(tex, uv); }\n";
+
 // Catmull-Rom over four pixels each way, read at their centres
 static const char kCubic[] = "in vec2 uv;\n"
 							 "out vec4 out_color;\n"
@@ -354,8 +389,13 @@ static const char kCubic[] = "in vec2 uv;\n"
 							 "\tout_color = vec4(clamp(c, 0.0, 1.0), 1.0);\n"
 							 "}\n";
 
+/* The line every shader begins with.  OpenGL ES has no precision of its
+ * own for a fragment shader's numbers and reads a texture at the lowest
+ * unless told: both are the highest, which every ES 3.0 has. */
 static const char* Version(void)
 {
+	if(gEs)
+		return "#version 300 es\nprecision highp float;\nprecision highp sampler2D;\n";
 	return gOld ? "#version 130\n" : "#version 330 core\n";
 }
 
@@ -498,7 +538,13 @@ static Program_t* PassProgram(File_t* file, int index)
 
 // ---- textures --------------------------------------------------------------------------------------
 
-// a texture of w x h, read bilinearly and held at its edges; of floats for a pass's result, else of bytes without alpha
+/* A texture of w x h, read bilinearly and held at its edges; of floats
+ * for a pass's result, else of bytes without alpha - the picture's.
+ * OpenGL ES takes the picture's pixels only as red, green, blue, alpha in
+ * that order of bytes, where the engine's are blue, green, red and a byte
+ * that says nothing (OsGl_Blit): the texture is one with alpha there, read
+ * with red and blue changed over and its alpha as 1, so that every shader
+ * sees what it sees of the other OpenGL's. */
 static GLuint Texture(int w, int h, int floats)
 {
 	GLuint t = 0;
@@ -506,7 +552,15 @@ static GLuint Texture(int w, int h, int floats)
 	if(!t)
 		return 0;
 	gl.BindTexture(GL_TEXTURE_2D, t);
-	gl.TexImage2D(GL_TEXTURE_2D, 0, floats ? GL_RGBA16F : GL_RGB8, w, h, 0, GL_RGBA, floats ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, NULL);
+	gl.TexImage2D(GL_TEXTURE_2D, 0, floats ? GL_RGBA16F : gEs ? GL_RGBA8
+															  : GL_RGB8,
+		w, h, 0, GL_RGBA, floats ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, NULL);
+	if(gEs && !floats)
+	{
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_RED);
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_ONE);
+	}
 	gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -525,6 +579,35 @@ static void PlanDrop(void)
 			gSlot[i] = 0;
 		}
 	gPlanChain = -1;
+}
+
+/* w x h pixels of 15 bits (RGB555) as pixels of 32, for OpenGL ES, which
+ * takes none of that layout: in a buffer kept for the next call; NULL
+ * when memory ran out. */
+static const uint32_t* Wide(const unsigned char* src, int pitch, int w, int h)
+{
+	static uint32_t* buf;
+	static size_t room;
+	size_t need = (size_t)w * (size_t)h;
+	uint32_t* out;
+	int x, y;
+	if(need > room)
+	{
+		uint32_t* grown = (uint32_t*)realloc(buf, need * sizeof *buf);
+		if(!grown)
+			return NULL;
+		buf = grown;
+		room = need;
+	}
+	out = buf;
+	for(y = 0; y < h; y++, src += pitch)
+		for(x = 0; x < w; x++)
+		{
+			unsigned v = (unsigned)src[x * 2] | (unsigned)src[x * 2 + 1] << 8;
+			unsigned r = v >> 10 & 31, g = v >> 5 & 31, b = v & 31;
+			*out++ = (uint32_t)(r << 3 | r >> 2) << 16 | (uint32_t)(g << 3 | g >> 2) << 8 | (uint32_t)(b << 3 | b >> 2);
+		}
+	return buf;
 }
 
 void OsGl_Blit(const OsSurface_t* s, int dstX, int dstY, int w, int h, int srcX, int srcY, int picW, int picH)
@@ -586,6 +669,22 @@ void OsGl_Blit(const OsSurface_t* s, int dstX, int dstY, int w, int h, int srcX,
 		return;
 	gl.BindTexture(GL_TEXTURE_2D, gPic);
 	gl.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	if(gEs)
+	{ // the bytes as they lie in memory (a processor that keeps the low byte first, as every one OpenGL ES runs on here)
+		const unsigned char* from = (const unsigned char*)s->pixels + (ptrdiff_t)srcY * s->pitch + (ptrdiff_t)srcX * bytes;
+		int rowLength = s->pitch / 4;
+		if(bytes == 2)
+		{
+			from = (const unsigned char*)Wide(from, s->pitch, w, h);
+			rowLength = w;
+			if(!from)
+				return;
+		}
+		gl.PixelStorei(GL_UNPACK_ROW_LENGTH, rowLength);
+		gl.TexSubImage2D(GL_TEXTURE_2D, 0, dstX, dstY, w, h, GL_RGBA, GL_UNSIGNED_BYTE, from);
+		gl.PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+		return;
+	}
 	gl.PixelStorei(GL_UNPACK_ROW_LENGTH, s->pitch / bytes);
 	gl.TexSubImage2D(GL_TEXTURE_2D, 0, dstX, dstY, w, h, GL_BGRA, bytes == 2 ? GL_UNSIGNED_SHORT_1_5_5_5_REV : GL_UNSIGNED_INT_8_8_8_8_REV,
 		(const unsigned char*)s->pixels + (ptrdiff_t)srcY * s->pitch + (ptrdiff_t)srcX * bytes);
@@ -681,6 +780,89 @@ static GLuint RunChain(int chain, int outW, int outH, int* w, int* h)
 	return gSlot[gPlan.result];
 }
 
+// ---- the layer -------------------------------------------------------------------------------------
+
+/* The layer's texture is one with alpha, a pixel of it a pixel of the
+ * target, read without a filter.  Its bytes go in as the picture's do:
+ * as they lie in memory with red and blue changed over when read in
+ * OpenGL ES, named as they are in the other. */
+void OsGl_Layer(const unsigned char* pixels, int w, int h, int pitch, int x, int y, int cw, int ch)
+{
+	if(!gOn)
+		return;
+	if(!pixels || w < 1 || h < 1 || w > gMaxSize || h > gMaxSize)
+	{
+		if(gLayer)
+			gl.DeleteTextures(1, &gLayer);
+		gLayer = 0;
+		gLayerW = gLayerH = 0;
+		return;
+	}
+	if(!gLayer || w != gLayerW || h != gLayerH)
+	{ // a layer of another size: a new texture, and all of it
+		if(gLayer)
+			gl.DeleteTextures(1, &gLayer);
+		gl.GenTextures(1, &gLayer);
+		gLayerW = gLayerH = 0;
+		if(!gLayer)
+			return;
+		gl.BindTexture(GL_TEXTURE_2D, gLayer);
+		gl.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		if(gEs)
+		{
+			gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+			gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_RED);
+		}
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		gLayerW = w;
+		gLayerH = h;
+		x = y = 0;
+		cw = w;
+		ch = h;
+	}
+	if(x < 0)
+	{
+		cw += x;
+		x = 0;
+	}
+	if(y < 0)
+	{
+		ch += y;
+		y = 0;
+	}
+	if(cw > w - x)
+		cw = w - x;
+	if(ch > h - y)
+		ch = h - y;
+	if(cw <= 0 || ch <= 0)
+		return;
+	gl.BindTexture(GL_TEXTURE_2D, gLayer);
+	gl.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	gl.PixelStorei(GL_UNPACK_ROW_LENGTH, pitch / 4);
+	gl.TexSubImage2D(GL_TEXTURE_2D, 0, x, y, cw, ch, gEs ? GL_RGBA : GL_BGRA, gEs ? GL_UNSIGNED_BYTE : GL_UNSIGNED_INT_8_8_8_8_REV,
+		pixels + (ptrdiff_t)y * pitch + (ptrdiff_t)x * 4);
+	gl.PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+}
+
+// the layer over what the target holds, when it is the target's size (one of another size is of a surface that was)
+static void LayerDraw(int targetW, int targetH)
+{
+	if(!gLayer || !gOver || gLayerW != targetW || gLayerH != targetH)
+		return;
+	gl.Viewport(0, 0, targetW, targetH);
+	gl.ActiveTexture(GL_TEXTURE0);
+	gl.BindTexture(GL_TEXTURE_2D, gLayer);
+	gl.Enable(GL_BLEND);
+	gl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	gl.UseProgram(gOver);
+	gl.Uniform1f(gOverFlip, -1.0f);
+	gl.DrawArrays(GL_TRIANGLES, 0, 3);
+	gl.Disable(GL_BLEND);
+}
+
 // ---- the window ------------------------------------------------------------------------------------
 
 int OsGl_Black(int targetW, int targetH)
@@ -701,8 +883,11 @@ int OsGl_Draw(int targetW, int targetH, int x, int y, int w, int h, int rule)
 	if(!OsGl_Black(targetW, targetH))
 		return 0;
 	if(!gPic || w < 1 || h < 1)
+	{
+		LayerDraw(targetW, targetH);
 		return 1;
-	if(kind >= OPENBGI_SCALE_OWN && kind < OPENBGI_SCALE_OWN + CHAINS / 2 && gPack)
+	}
+	if(kind >= OPENBGI_SCALE_OWN && kind < OPENBGI_SCALE_OWN + CHAINS / 2 && gPack && gFloats)
 	{
 		GLuint made = RunChain((kind - OPENBGI_SCALE_OWN) * 2 + ((rule & OPENBGI_SCALE_HIGH) != 0), w, h, &srcW, &srcH);
 		if(made)
@@ -742,12 +927,13 @@ int OsGl_Draw(int targetW, int targetH, int x, int y, int w, int h, int rule)
 	// (the passes read every texture bilinearly)
 	gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	LayerDraw(targetW, targetH);
 	return 1;
 }
 
 const char* OsGl_FilterName(int n)
 {
-	return gOn && gPack && n >= 0 && n < CHAINS / 2 ? kFilters[n] : NULL;
+	return gOn && gPack && gFloats && n >= 0 && n < CHAINS / 2 ? kFilters[n] : NULL;
 }
 
 // ---- start and stop --------------------------------------------------------------------------------
@@ -767,16 +953,45 @@ static int Software(const char* text)
 	return 0;
 }
 
-// whether a context of this version and renderer will do; says why not on stderr
+// whether the version string is OpenGL ES's ("OpenGL ES 3.2 ..."); the numbers begin at *at then
+static int IsEs(const char* version, const char** at)
+{
+	static const char kEs[] = "OpenGL ES ";
+	int es = strncmp(version, kEs, sizeof kEs - 1) == 0;
+	*at = es ? version + sizeof kEs - 1 : version;
+	return es;
+}
+
+// whether `list`, names with a space between them, has `name`
+static int Listed(const char* list, const char* name)
+{
+	size_t n = strlen(name);
+	const char* at = list;
+	while(at && (at = strstr(at, name)) != NULL)
+	{
+		if((at == list || at[-1] == ' ') && (at[n] == ' ' || !at[n]))
+			return 1;
+		at += n;
+	}
+	return 0;
+}
+
+/* Whether a context of this version and renderer will do; says why not
+ * on stderr.  A context of OpenGL ES is taken whatever draws it: the
+ * system that hands one over has no other way to show the picture. */
 static int Fits(const char* version, const char* renderer, int* major, int* minor)
 {
+	const char* numbers;
+	int es = IsEs(version, &numbers);
 	*major = *minor = 0;
-	sscanf(version, "%d.%d", major, minor);
+	sscanf(numbers, "%d.%d", major, minor);
 	if(*major < 3)
 	{
 		fprintf(stderr, "openbgi: OpenGL %s of \"%s\" is older than 3.0: the picture is scaled by the processor\n", version, renderer);
 		return 0;
 	}
+	if(es)
+		return 1;
 	if(Software(renderer) && OsGl_Wanted() == OS_GL_AUTO)
 	{
 		fprintf(stderr, "openbgi: OpenGL here draws on the processor (\"%s\"): the picture is scaled without it\n", renderer);
@@ -802,7 +1017,7 @@ int OsGl_Usable(OsGlLoader_t load)
 int OsGl_Start(OsGlLoader_t load)
 {
 	OsGlProc_t found[sizeof kNames / sizeof kNames[0]];
-	const char *version, *renderer;
+	const char *version, *renderer, *numbers;
 	int major = 0, minor = 0, i;
 	OsGl_Stop();
 	if(!load || OsGl_Wanted() == OS_GL_OFF || sizeof gl != sizeof found)
@@ -821,13 +1036,22 @@ int OsGl_Start(OsGlLoader_t load)
 	snprintf(gRenderer, sizeof gRenderer, "%s", renderer);
 	if(!Fits(version, renderer, &major, &minor))
 		return 0;
+	gEs = IsEs(version, &numbers);
 	for(i = 0; i < (int)(sizeof kNames / sizeof kNames[0]); i++)
 		if(!found[i])
 		{
 			fprintf(stderr, "openbgi: OpenGL of \"%s\" has no %s: the picture is scaled by the processor\n", renderer, kNames[i]);
 			return 0;
 		}
-	gOld = (major == 3 && minor < 3) || OsGl_Wanted() == OS_GL_OLD;
+	gOld = !gEs && ((major == 3 && minor < 3) || OsGl_Wanted() == OS_GL_OLD);
+	/* a pass draws into a texture of 16-bit floats: every OpenGL from 3.0
+	 * can, OpenGL ES from 3.2, or where it names the extension for it */
+	gFloats = 1;
+	if(gEs && (major == 3 && minor < 2))
+	{
+		const char* ext = (const char*)gl.GetString(GL_EXTENSIONS);
+		gFloats = ext && (Listed(ext, "GL_EXT_color_buffer_half_float") || Listed(ext, "GL_EXT_color_buffer_float"));
+	}
 	gMaxSize = 2048;
 	gMaxUnits = 16;
 	gl.GetIntegerv(GL_MAX_TEXTURE_SIZE, &gMaxSize);
@@ -839,7 +1063,8 @@ int OsGl_Start(OsGlLoader_t load)
 	gl.GenFramebuffers(1, &gFbo);
 	gCopy = Simple(kCopy, "copy");
 	gCubic = Simple(kCubic, "bicubic");
-	if(!gVao || !gFbo || !gCopy || !gCubic)
+	gOver = Simple(kOver, "layer");
+	if(!gVao || !gFbo || !gCopy || !gCubic || !gOver)
 	{
 		gOn = 1; // (so that OsGl_Stop takes down what there is)
 		OsGl_Stop();
@@ -848,9 +1073,11 @@ int OsGl_Start(OsGlLoader_t load)
 	gCopyFlip = gl.GetUniformLocation(gCopy, "flip");
 	gCubicFlip = gl.GetUniformLocation(gCubic, "flip");
 	gCubicSize = gl.GetUniformLocation(gCubic, "size");
+	gOverFlip = gl.GetUniformLocation(gOver, "flip");
 	memset(gChainFailed, 0, sizeof gChainFailed);
 	gOn = 1;
-	fprintf(stderr, "openbgi: the picture is shown through OpenGL %d.%d (\"%s\")\n", major, minor, renderer);
+	fprintf(stderr, "openbgi: the picture is shown through OpenGL%s %d.%d (\"%s\")%s\n", gEs ? " ES" : "", major, minor, renderer,
+		gFloats ? "" : "; no filters beyond the three: it cannot draw into textures of floats");
 	return 1;
 }
 
@@ -865,6 +1092,10 @@ void OsGl_Stop(void)
 	gPic = 0;
 	gSlot[0] = 0;
 	gPicW = gPicH = 0;
+	if(gLayer)
+		gl.DeleteTextures(1, &gLayer);
+	gLayer = 0;
+	gLayerW = gLayerH = 0;
 	for(f = 0; f < FILES; f++)
 		if(gFile[f])
 		{
@@ -879,11 +1110,13 @@ void OsGl_Stop(void)
 		gl.DeleteProgram(gCopy);
 	if(gCubic)
 		gl.DeleteProgram(gCubic);
+	if(gOver)
+		gl.DeleteProgram(gOver);
 	if(gFbo)
 		gl.DeleteFramebuffers(1, &gFbo);
 	if(gVao)
 		gl.DeleteVertexArrays(1, &gVao);
-	gCopy = gCubic = gFbo = gVao = 0;
+	gCopy = gCubic = gOver = gFbo = gVao = 0;
 	gOn = 0;
 }
 
@@ -934,6 +1167,18 @@ void OsGl_Blit(const OsSurface_t* s, int dstX, int dstY, int w, int h, int srcX,
 	(void)srcY;
 	(void)picW;
 	(void)picH;
+}
+
+void OsGl_Layer(const unsigned char* pixels, int w, int h, int pitch, int x, int y, int cw, int ch)
+{
+	(void)pixels;
+	(void)w;
+	(void)h;
+	(void)pitch;
+	(void)x;
+	(void)y;
+	(void)cw;
+	(void)ch;
 }
 
 int OsGl_Draw(int targetW, int targetH, int x, int y, int w, int h, int rule)

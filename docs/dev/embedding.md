@@ -50,8 +50,8 @@ waits inside it.
 |---|---|
 | Make and start | `OpenBGI_New`, `OpenBGI_SetLauncher`, `OpenBGI_SetIcon`, `OpenBGI_Start` |
 | Questions the engine asks (boxes, dialogs, pickers) | `OpenBGI_NextRequest`, `OpenBGI_Answer` |
-| A frame | `OpenBGI_RunFrame` fills `OpenBGI_Frame_t`: the picture, the rectangles that changed, `idleMs`, where the pointer was moved |
-| Input | `OpenBGI_Key`, `OpenBGI_Text`, `OpenBGI_Button`, `OpenBGI_Wheel`, `OpenBGI_Pointer`, `OpenBGI_PointerPlace`, `OpenBGI_Focus`, `OpenBGI_Touch`, `OpenBGI_TouchScale`, `OpenBGI_Pad`, `OpenBGI_Action` |
+| A frame | `OpenBGI_RunFrame` fills `OpenBGI_Frame_t`: the picture, the rectangles that changed, `idleMs`, where the pointer was moved; for a host that said its surface, the layer drawn over everything ([input.md](input.md#on-screen-controls)) |
+| Input | `OpenBGI_Key`, `OpenBGI_Text`, `OpenBGI_Button`, `OpenBGI_Wheel`, `OpenBGI_Pointer`, `OpenBGI_PointerPlace`, `OpenBGI_Focus`, `OpenBGI_Touch`, `OpenBGI_TouchScale`, `OpenBGI_SetSurface`, `OpenBGI_SurfaceTouch`, `OpenBGI_Pad`, `OpenBGI_Action` |
 | Window events | `OpenBGI_Close`, `OpenBGI_Quit`, `OpenBGI_Minimized`, `OpenBGI_WindowSize`, `OpenBGI_DisplayChanged`, `OpenBGI_ScreenChanged`, `OpenBGI_DropFile`, `OpenBGI_PumpEvents` |
 | Sound | `OpenBGI_AudioRead` (from any thread), `OpenBGI_SetAudioLead`, `OpenBGI_RunAudio` ([sound.md](sound.md)) |
 | What a click reaches | `OpenBGI_Targets` ([input.md](input.md)) |
@@ -75,6 +75,7 @@ without or draws the thing itself.
 | `window` | The game's window | A window nobody sees |
 | `window->dpi`, `workArea`, `setAspect` | The screen's scale and work area: the engine fits the window to them, lets the player size it, and offers the display settings (F9) | The window is of the size the scripts ask for |
 | `window->filterName` | Names of scaling filters of the host's own, beyond nearest, bilinear and bicubic: the display settings list them, and the player's choice comes back in `setScaling` as `OPENBGI_SCALE_OWN + n`, with `OPENBGI_SCALE_HIGH` for the better of two qualities | The three rules alone |
+| `OpenBGI_SetSurface` with `window->setScaling` | The settings over a game offer the filter, its quality and the whole steps, without `workArea`. The player's choice comes through `setScaling` as it does for a host with `workArea` | The game's own rule alone |
 | `textEntry`, `childWindows` | Controls of the host's own | The engine draws them in the picture |
 | `debugWindow` | A second window for the debugger | The debugger draws over the picture |
 | `machine`, `shell`, `cdAudio` | Machine facts; clipboard, documents, links; CD audio | An ordinary machine; none |
@@ -98,6 +99,14 @@ may change. A host states the header it was built with
 (`OpenBGI_ApiVersion`). A host works with every library of its major
 version whose minor is not older. Structures carry their `size`, so a
 host built with an older header keeps working.
+
+| Version | Added |
+|---|---|
+| 1.0 | OpenBGI 1.0 |
+| 1.1 | `OpenBGI_Files_t.nativeRoots`: the folders a folder browser starts from where the folders above them cannot be listed |
+| 1.1 | `OpenBGI_SetSurface`, `OpenBGI_SurfaceTouch`, and the layer at the end of `OpenBGI_Frame_t` (`layer`, `layerWidth`, `layerHeight`, `layerPitch`, `layerChanges`, `layerChange`): the engine's on-screen controls, for a host whose picture does not fill what it draws on. A host that calls neither gets no layer |
+| 1.1 | `OpenBGI_Machine_t.processMemory`: the bytes of memory the process holds, for the performance display ([testing.md](testing.md#the-performance-display)). A host without it shows no memory there |
+| 1.1 | Not an addition, a change for hosts that hand over a launcher: a game the launcher started is followed by the launcher. The frames go on until the launcher ends or the host calls `OpenBGI_Quit` |
 
 What a newer library adds may reach an older host. The header says
 what the host does then: it ignores flags it does not know, answers a

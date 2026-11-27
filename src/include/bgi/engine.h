@@ -61,6 +61,8 @@ int GameChooser_End(OpenBGI_t* o, int answer, const char* gamesPath, char* profi
 int Engine_Init(OpenBGI_t* o); // 0 = failure (an error box was shown)
 void Engine_Shutdown(OpenBGI_t* o);
 int Engine_Idle(OpenBGI_t* o); // no run is up: none was started, or the last one was stopped (OpenBGI_Stop)
+// a run of a program the engine carries itself, on an engine never started (engine.c; the settings over a game, settings.h)
+int Engine_StartBuiltin(OpenBGI_t* o, const uint8_t* program, uint32_t size);
 /* What a stopped engine still holds besides its requests - the picture,
  * the fonts, what the scripts registered of them, the input layers, the
  * games table - goes (OpenBGI_Stop's last step; src/core/openbgi.c). */

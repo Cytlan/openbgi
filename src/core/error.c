@@ -83,8 +83,14 @@ int Msg_SetLanguage(const char* lang)
 
 // ---- error reporting ---------------------------------------------------
 
+// (the settings over a game run in an engine without a screen for a box: the game's engine shows it, settings.h)
 void ShowErrorBox(OpenBGI_t* o, const char* text)
 {
+	if(o->settings.game)
+	{
+		Settings_Failed(o, text);
+		return;
+	}
 	MsgBox(o, text, "Error!!", OPENBGI_MB_ICONHAND | OPENBGI_MB_SYSTEMMODAL);
 }
 

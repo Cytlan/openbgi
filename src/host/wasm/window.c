@@ -628,6 +628,19 @@ void OS_WindowPresent(void)
 {
 }
 
+// no surface is said here: no layer
+void OS_WindowLayer(const unsigned char* pixels, int w, int h, int pitch, int x, int y, int cw, int ch)
+{
+	BGI_UNUSED(pixels);
+	BGI_UNUSED(w);
+	BGI_UNUSED(h);
+	BGI_UNUSED(pitch);
+	BGI_UNUSED(x);
+	BGI_UNUSED(y);
+	BGI_UNUSED(cw);
+	BGI_UNUSED(ch);
+}
+
 // no part in the fitting of the window to its screen: the canvas's size on the page is the page's matter
 int OS_WindowFits(void)
 {

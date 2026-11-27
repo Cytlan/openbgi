@@ -15,6 +15,9 @@
  * queue) `o->input.steps.applying` says that the call is the mapper's
  * own: the engine tells its own input from a mouse or a keyboard the
  * player took up (window.c, Input_DeviceUsed).
+ *
+ * A button's step waits for a program that reads the buttons itself to
+ * have read the step before (Steps_ButtonRead, Unread; bgi/input.h).
  */
 #include <string.h>
 
@@ -111,6 +114,47 @@ void Steps_Follow(OpenBGI_t* o, int x, int y)
 	Steps_Move(o, x, y, 0, 1);
 }
 
+// the place of a step's button among the two a program reads itself: 0 left, 1 right, -1 another
+static int ReadButton(int button)
+{
+	return button == OPENBGI_BUTTON_LEFT ? 0 : button == OPENBGI_BUTTON_RIGHT ? 1 : -1;
+}
+
+void Steps_ButtonRead(OpenBGI_t* o, int button)
+{
+	InputSteps_t* q = &o->input.steps;
+	int b = ReadButton(button);
+	if(b < 0)
+		return;
+	q->reads[b] = 1;
+	q->readAt[b] = Clock_HostMs(o);
+	q->unread[b] = 0;
+}
+
+// a step changed a button: a program that read it shortly before has that to read first
+static void Changed(OpenBGI_t* o, int button)
+{
+	InputSteps_t* q = &o->input.steps;
+	int b = ReadButton(button);
+	if(b < 0)
+		return;
+	q->changedAt[b] = Clock_HostMs(o);
+	q->unread[b] = q->reads[b] && q->changedAt[b] - q->readAt[b] <= STEPS_READER_MS;
+}
+
+// whether a step of `button` has to wait: the program has not read the step before, and is given time to
+static int Unread(OpenBGI_t* o, int button)
+{
+	InputSteps_t* q = &o->input.steps;
+	int b = ReadButton(button);
+	if(b < 0 || !q->unread[b])
+		return 0;
+	if(Clock_HostMs(o) - q->changedAt[b] < STEPS_READ_MS)
+		return 1;
+	q->unread[b] = 0; // it reads the button no more
+	return 0;
+}
+
 // one step through the calls a host's devices take; the host's pointer follows a move
 static void Apply(OpenBGI_t* o, const InputStep_t* s)
 {
@@ -122,7 +166,10 @@ static void Apply(OpenBGI_t* o, const InputStep_t* s)
 			OpenBGI_Pointer(o, s->x, s->y);
 			o->input.pointerMoved = 1; // (OpenBGI_Frame_t.pointerMoved)
 			break;
-		case INPUT_STEP_BUTTON: OpenBGI_Button(o, s->a, s->down, o->input.pointerX, o->input.pointerY, 0); break;
+		case INPUT_STEP_BUTTON:
+			OpenBGI_Button(o, s->a, s->down, o->input.pointerX, o->input.pointerY, 0);
+			Changed(o, s->a);
+			break;
 		case INPUT_STEP_WHEEL: OpenBGI_Wheel(o, s->a); break;
 		case INPUT_STEP_KEY: OpenBGI_Key(o, s->a, s->down, 0); break;
 	}
@@ -171,6 +218,8 @@ void Steps_Frame(OpenBGI_t* o)
 		}
 		if(s->wait > 0 && Clock_HostMs(o) - q->lastAt < (uint32_t)s->wait)
 			break; // the game's tap delay is not over
+		if(s->kind == INPUT_STEP_BUTTON && Unread(o, s->a))
+			break; // the program has yet to read what the step before did to the button
 		step = *s;
 		q->head = (q->head + 1) % INPUT_STEPS;
 		q->count--;

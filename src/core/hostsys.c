@@ -92,6 +92,12 @@ void Host_MemoryStatusEx(OpenBGI_t* o, uint64_t* totalPhys, uint64_t* availPhys)
 		m->memoryStatusEx(o->host.user, totalPhys, availPhys);
 }
 
+uint64_t Host_ProcessMemory(OpenBGI_t* o)
+{
+	const OpenBGI_Machine_t* m = Machine(o);
+	return m && m->processMemory ? m->processMemory(o->host.user) : 0;
+}
+
 void Host_ComputerName(OpenBGI_t* o, char* buf, size_t n)
 {
 	const OpenBGI_Machine_t* m = Machine(o);

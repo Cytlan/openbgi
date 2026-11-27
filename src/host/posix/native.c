@@ -42,6 +42,14 @@ int OS_NativeWritable(const char* path)
 	return 1;
 }
 
+// every folder is reached from the root
+uint32_t OS_NativeRoots(char* buf, uint32_t n)
+{
+	BGI_UNUSED(buf);
+	BGI_UNUSED(n);
+	return 0;
+}
+
 int OS_NativeMkdir(const char* path)
 {
 	if(mkdir(path, 0777) == 0)

@@ -210,19 +210,24 @@ OpenBGI_t* OpenBGI_New(const OpenBGI_Host_t* host)
  * was never stopped; the requests only with `requests`. */
 static void FreeRest(OpenBGI_t* o, int requests)
 {
+	Settings_Close(o);   // the settings over an engine that was not stopped
 	Inframe_Free(o);     // a dialog in the frame when the engine was not stopped
 	InputMap_Stop(o);    // the on-screen keyboard and the drawn pointer then
 	InputMap_Free(o);    // the host's input settings
 	Child_DestroyAll(o); // the child windows left then (before their captions' font goes)
 	if(requests)
-		Request_Clear(o); // a request left after OpenBGI_Stop, answered or not
-	Screen_Free(o);       // a picture left when the engine never got to its end
-	Screen_NextFrame(o);  // .. and the pixels of it a frame had handed over
-	Typefaces_Free(o);    // the fonts still open, and the engine's font library
-	FontNames_Free(o);    // the faces, the font files and the fallbacks the scripts registered
-	Input_FreeLayers(o);  // the input layers (the base ones the shutdown leaves)
-	Engine_FreeGames(o);  // the games table and the input settings of openbgi.json
-	Fs_Unmount(o);        // a game's zip
+		Request_Clear(o);         // a request left after OpenBGI_Stop, answered or not
+	Screen_Free(o);               // a picture left when the engine never got to its end
+	Screen_NextFrame(o);          // .. and the pixels of it a frame had handed over
+	Overlay_Free(o);              // the layer over it
+	Perf_Stop(o);                 // the performance display's characters and picture
+	Typefaces_Free(o);            // the fonts still open, and the engine's font library
+	FontNames_Free(o);            // the faces, the font files and the fallbacks the scripts registered
+	Input_FreeLayers(o);          // the input layers (the base ones the shutdown leaves)
+	Engine_FreeGames(o);          // the games table and the input settings of openbgi.json
+	Fs_Unmount(o);                // a game's zip
+	BGI_Free(o->engine.startCmd); // the command line of the start
+	o->engine.startCmd = NULL;
 }
 
 void Engine_FreeRest(OpenBGI_t* o)
@@ -238,7 +243,9 @@ void Engine_Renew(OpenBGI_t* o)
 	int ppi = o->input.touch.ppi;
 	struct InputSettings *input = o->input.cfgHost, *inputBase = o->input.cfgHostBase;
 	uint32_t lead = o->snd.out.lead;
-	LauncherState_t launcher = o->launcher;         // (the stop closed its listings)
+	uint32_t mhz = o->util.sysInfo.mhz ? o->util.sysInfo.mhz : o->util.cpuKept;
+	LauncherState_t launcher = o->launcher; // (the stop closed its listings)
+	OpenBGI_Surface_t surface = o->overlay.surface;
 	o->input.cfgHost = o->input.cfgHostBase = NULL; // (not FreeRest's this time)
 	FreeRest(o, 1);
 	memset(o, 0, sizeof *o);
@@ -251,7 +258,10 @@ void Engine_Renew(OpenBGI_t* o)
 	o->input.touch.ppi = ppi;
 	o->input.cfgHost = input; // .. and its input settings (OpenBGI_InputSettings)
 	o->input.cfgHostBase = inputBase;
-	o->snd.out.lead = lead;  // .. and of its sound output, which goes on reading (OpenBGI_SetAudioLead)
+	o->snd.out.lead = lead;       // .. and of its sound output, which goes on reading (OpenBGI_SetAudioLead)
+	o->util.cpuKept = mhz;        // .. and the processor's clock, measured at the first start (Cpu_Detect)
+	o->overlay.surface = surface; // .. and what it draws on (OpenBGI_SetSurface); the layer is made anew
+	o->overlay.ppiSet = -1;
 	Host_TextEncoding(o, 0); // a run begins in Shift-JIS, whatever the one before it left the host with (the launcher's is UTF-8)
 }
 

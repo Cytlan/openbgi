@@ -1392,6 +1392,13 @@ int OS_NativeWritable(const char* path)
 	return 0;
 }
 
+uint32_t OS_NativeRoots(char* buf, uint32_t n)
+{
+	BGI_UNUSED(buf);
+	BGI_UNUSED(n);
+	return 0;
+}
+
 int OS_NativeMkdir(const char* path)
 {
 	BGI_UNUSED(path);

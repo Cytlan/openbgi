@@ -192,6 +192,25 @@ void OS_MemoryStatusEx(uint64_t* totalPhys, uint64_t* availPhys)
 		*totalPhys = *availPhys = 0;
 }
 
+/* What the process holds of the memory: its resident pages, from the
+ * kernel's /proc/self/statm (Linux, Android).  macOS and Haiku do not say
+ * here yet. */
+uint64_t OS_ProcessMemory(void)
+{
+#if defined(BGI_MACOS) || defined(BGI_HAIKU)
+	return 0;
+#else
+	unsigned long total = 0, resident = 0;
+	FILE* f = fopen("/proc/self/statm", "r");
+	int got;
+	if(!f)
+		return 0;
+	got = fscanf(f, "%lu %lu", &total, &resident);
+	fclose(f);
+	return got == 2 ? (uint64_t)resident * (uint64_t)sysconf(_SC_PAGESIZE) : 0;
+#endif
+}
+
 // "X11 display" (Android: "no display") with a zero driver version
 int OS_DisplayAdapter(char* desc, size_t n, uint32_t version[4])
 {

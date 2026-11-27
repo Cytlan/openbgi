@@ -54,7 +54,8 @@ typedef struct SndOut
 	int running;                     // the mixer runs (SndOut_Start .. SndOut_Stop)
 	uint32_t lastMs;                 // the host's clock at the last run
 	uint32_t carry;                  // lastMs * SNDOUT_RATE modulo 1000: the frames' grid
-	uint32_t dropped;                // frames mixed that did not fit into the ring (for the tests)
+	uint32_t dropped;                // frames mixed that did not fit into the ring (for the tests, and the performance display)
+	volatile uint32_t starved;       // frames the reader asked for while the mixer ran and the ring did not have; written by the reader
 	uint32_t noteMs;                 // BGI_SND_DEBUG: the clock at the last line about the ring,
 	uint32_t noteMin, noteMax;       // .. and the fewest and the most frames unread after a run since
 } SndOut_t;
@@ -62,5 +63,7 @@ typedef struct SndOut
 void SndOut_Start(OpenBGI_t* o); // the mixer runs from the host's clock now on (Wm_Init)
 void SndOut_Stop(OpenBGI_t* o);  // it runs no more: the ring keeps what it has, then the host reads silence (Wm_Shutdown)
 void SndOut_Run(OpenBGI_t* o);   // run the mixer up to the host's clock now (OpenBGI_RunFrame, OpenBGI_RunAudio)
+// for the performance display: the frames mixed and not yet read, those lost to a full ring so far, those asked for in vain so far
+void SndOut_Stats(OpenBGI_t* o, uint32_t* ahead, uint32_t* dropped, uint32_t* starved);
 
 #endif // BGI_SND_SNDOUT_H_

@@ -150,8 +150,20 @@ void Input_NoteProbe(OpenBGI_t* o, int what, uint32_t v);
  * time before a click's press and its release (`tapDelay`, the "tapDelay"
  * of bgi/inputcfg.h): such a step also waits that long after the one
  * before.  While `applying` is set an input call is the mapper's own, not
- * the host's. */
-#define INPUT_STEPS 64 // steps queued at most
+ * the host's.
+ *
+ * A program that reads the buttons itself ("80 11", once a turn of its own
+ * loop) would miss a press and a release that both fall between two of its
+ * readings - a pass is much shorter than such a turn.  A step that changes
+ * the left or the right button therefore waits until the program has read
+ * what the step before made of that button, as long as the program read
+ * the button shortly before that step (STEPS_READER_MS) and for no longer
+ * than STEPS_READ_MS: one that reads no more holds nothing up.  A program
+ * that counts presses or has the engine watch its targets loses none and
+ * is not waited for. */
+#define INPUT_STEPS     64  // steps queued at most
+#define STEPS_READER_MS 250 // a program that read a button this shortly before a step changed it reads it itself ..
+#define STEPS_READ_MS   250 // .. and the button's next step waits this long at most for it to read the change
 typedef struct InputStep
 {
 	int kind;   // INPUT_STEP_*
@@ -176,6 +188,11 @@ typedef struct InputSteps
 	int applying;    // an input call under way is the mapper's own
 	int tapDelay;    // milliseconds a click's press waits after the move, and its release after the press (InputMap_Configure)
 	uint32_t lastAt; // when the last step was applied (Clock_HostMs)
+	// the left and the right button as a program reads them itself ("80 11"; Steps_ButtonRead):
+	int reads[2];          // it has read the button
+	uint32_t readAt[2];    // .. last then (Clock_HostMs)
+	int unread[2];         // a step changed the button and the program, which reads it, has not read it since
+	uint32_t changedAt[2]; // when that step was applied
 } InputSteps_t;
 void Steps_Move(OpenBGI_t* o, int x, int y, int gap, int follow); // the pointer to (x, y), `gap` passes after the step before
 void Steps_Button(OpenBGI_t* o, int button, int down);            // a pass after the step before, where the pointer is then
@@ -183,6 +200,7 @@ void Steps_Wheel(OpenBGI_t* o, int delta);
 void Steps_Click(OpenBGI_t* o, int button, int x, int y); // the pointer to (x, y), a pass, the press, a pass, the release
 void Steps_Tap(OpenBGI_t* o, int button);                 // the press and the release of a click where the pointer is then
 void Steps_Follow(OpenBGI_t* o, int x, int y);            // the pointer follows to (x, y): a following move still queued last goes there instead
+void Steps_ButtonRead(OpenBGI_t* o, int button);          // the program read the state of OPENBGI_BUTTON_LEFT or _RIGHT itself ("80 11")
 void Steps_KeyNow(OpenBGI_t* o, int vk, int down);        // a key of the mapper's at once, not queued
 void Steps_KeyTap(OpenBGI_t* o, int vk);                  // its press and release at once
 void Steps_TextNow(OpenBGI_t* o, const char* utf8);       // typed text of the mapper's at once (the on-screen keyboard's)
@@ -210,21 +228,27 @@ typedef struct TouchState
 	int knob, knobDx, knobDy; // a drag from here takes hold of a knob, the thumb that much off the finger
 	int scrollRef;            // two-finger scroll: the fingers' middle when the last notch was counted
 	int ppi;                  // OpenBGI_TouchScale: the picture's pixels per inch, 0 unknown
+	int drag;                 // "EF 32": a finger is the left button held where it is (TOUCH_MODE_HOLD), for a program that scrolls under it
 	// the last tap, for the debugger: where it was, where it clicked, the target there
 	int tapValid, tapX, tapY, tapToX, tapToY, tapKind;
 	uint32_t tapOwner;
 	int tapSerial; // counts the taps
 } TouchState_t;
-void Touch_Frame(OpenBGI_t* o); // the start of a frame: the gestures' timers (a long press, a pointing finger at rest)
+void Touch_Frame(OpenBGI_t* o);           // the start of a frame: the gestures' timers (a long press, a pointing finger at rest)
+void Touch_SetDrag(OpenBGI_t* o, int on); // "EF 32": fingers as a held left button from the next one that goes down
+// a pad's state as OpenBGI_Pad takes it, for any port: the host's, or the engine's own (PAD_PORT_OWN), which is no pad that "is there"
+void Pad_Port(OpenBGI_t* o, int port, const OpenBGI_PadState_t* state);
 
 /* ---- pads and actions (src/sys/pad.c; OpenBGI_Pad, OpenBGI_Action of openbgi.h) ----
  * A pad's controls are the 36 of the games' own pad keys ("81 1B", above:
  * the buttons 0 .. 31, then up, down, left, right); each does an action
  * (`bind`) unless the game gave it a key.  `mode` is what the pad drove
  * last, which decides what CONFIRM does. */
-#define PAD_PORTS       4
-#define PAD_ARROW_MAX_W 64 // the drawn pointer at its largest
-#define PAD_ARROW_MAX_H 96
+#define PAD_HOST_PORTS  4 // the host's pads (OpenBGI_Pad)
+#define PAD_PORTS       5 // .. and the engine's own after them: its on-screen controls (overlay.c)
+#define PAD_PORT_OWN    4
+#define PAD_ARROW_MAX_W 96 // the drawn pointer at its largest
+#define PAD_ARROW_MAX_H 144
 enum
 {
 	PAD_MODE_ADVANCE, // nothing: CONFIRM goes on

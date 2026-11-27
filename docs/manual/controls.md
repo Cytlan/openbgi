@@ -7,7 +7,7 @@ Keyboard, mouse, game pad and touch screen.
 | Key | What it does |
 |---|---|
 | Alt+Enter | Full screen on and off |
-| Alt+F4 | Closes the game |
+| Alt+F4 | Closes the game, as the window's close button does. A game started from the list of games goes back to that list; closing the list ends OpenBGI |
 | F9 | Opens and closes the display settings (Windows, Linux and macOS; [below](#the-window-and-the-display-settings)) |
 | F12 | Opens and closes the debugger |
 
@@ -151,6 +151,73 @@ A pad plays the games through the mouse and keys they already know.
 | Two fingers moved up or down | The mouse wheel, step by step |
 | Drag a slider's knob | Moves the knob |
 
+### On-screen controls
+
+Where the picture does not fill the screen - on a phone - OpenBGI
+draws two small buttons at the top of the screen.
+
+| Button | Where | What it does |
+|---|---|---|
+| Cog wheel | Top left | Shows the settings over the game, and puts them away. The game goes on under them |
+| Pad | Top right | Shows or hides the on-screen pad. The app remembers the choice |
+
+| Setting | What it does |
+|---|---|
+| Filter | How the picture is scaled to the screen: The game's (what the game chooses, else bilinear), Bicubic (sharper), Bilinear (softer), Nearest (hard pixels), and Anime4K A, B, C, A+A, B+B, C+A ([above](#the-graphics-processor-and-the-anime4k-filters)). Tap the row for the next one, the arrow on the left for the one before |
+| High quality | The larger networks of the Anime4K filters. Sharper, and more work for the phone |
+| Whole steps only | On: the picture is enlarged 1, 2, 3 ... times and no size between |
+| On-screen pad | As the Pad button |
+| Touch beside the pad | Off: while the pad is shown, a touch beside its controls does nothing. For playing with the pad alone |
+| Performance display | Shows a small panel of figures over the picture: frames a second, how long a frame takes, memory, sound and file reads, with two graphs. For finding out why a game runs badly ([below](#the-performance-display)) |
+| Close the game | Ends the game, as closing its window does on a computer. A game that asks before it ends asks. The game list follows |
+
+- Tap a row to change it. With the pad: the D-pad moves, left and right
+  change, Confirm changes or presses.
+- Where the rows do not all fit, drag the list with a finger.
+- The filter, its quality and the whole steps are remembered for each
+  game. The two of the pad are remembered for all.
+- The performance display is remembered for all games too.
+- Over the game list the settings are the same, without the last row.
+
+The settings can also be closed with their Close button, with the
+phone's Back button, or with Cancel on the pad.
+
+| Control | Where | What it does |
+|---|---|---|
+| D-pad | Bottom left | Moves over buttons and menu entries, as a game pad's |
+| Stick | Over the D-pad | Moves the pointer |
+| Confirm (ring) | Bottom right | Presses what is selected, or goes on |
+| Cancel (cross) | Over Confirm | Right click |
+| Skip (double arrow) | Over Cancel | Skips text while held |
+| Forward, Backlog (arrows) | Over Skip | The mouse wheel: the backlog and back |
+
+- The controls do what a game pad's controls do: see
+  [Game pad](#game-pad) and [Changing what the pad does](#changing-what-the-pad-does).
+- With the pad shown, touches beside the controls still work as in the
+  table above, unless "Touch beside the pad" is off in the settings.
+- The buttons lie in the black bars where the bars are wide enough. The
+  D-pad and the stick cover a part of a wide picture.
+
+### The performance display
+
+| Line of the panel | Says |
+|---|---|
+| FPS, drawn | How often a second the app went round, and how often the picture changed |
+| frame | How long one round took, on average and at most. 16.7 ms is 60 a second |
+| engine | How much of that was OpenBGI's own work, and its share of the time |
+| First graph | The last 240 rounds: green is 60 a second or better, yellow 30, red slower |
+| MEM | The memory the app holds, the most it held, and how much of it is pictures |
+| Second graph | The memory over the last minute |
+| SND | Sounds playing, and how far ahead the sound is prepared. "starved" counts sound that came too late and was heard as a gap |
+| DISK | How much was read from files, in how many reads, and how long that took |
+| Last line | The game's picture size, the screen's size and its density |
+
+- The panel takes no touches: what is under it can still be tapped.
+- The same figures are written to standard error every five seconds.
+  On a computer, start OpenBGI from a terminal with `BGI_PERF=1` to
+  get them there.
+- The panel's texts are English.
+
 ## On-screen keyboard
 
 Where a game asks for a name, the on-screen keyboard types hiragana,
@@ -197,6 +264,6 @@ a button by number.
 | `"stickSpeed"` | Pointer speed of the left stick in percent, 25 to 400 |
 | `"tapDelay"` | Milliseconds between moving the pointer and clicking, 0 to 2000, for games that miss quick clicks |
 | `"pointer"` | When OpenBGI draws its own arrow: `"pad"`, `"always"`, `"never"` |
-| `"pointerSize"` | `"small"`, `"normal"`, `"large"` |
+| `"pointerSize"` | `"small"`, `"normal"`, `"large"`. Normal is a thirty-sixth of the picture's height, and at least 4.5 mm on a touch screen |
 | `"onScreenKeyboard": false` | The on-screen keyboard appears only when asked for |
 | `"settingsKey"` | The key that opens the display settings: `"F9"`, any key name of `key:NAME` above, or `"none"` |

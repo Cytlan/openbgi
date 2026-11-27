@@ -606,6 +606,12 @@ static int OwnDirections(OpenBGI_t* o)
 
 void OpenBGI_Pad(OpenBGI_t* o, int port, const OpenBGI_PadState_t* state)
 {
+	if(port >= 0 && port < PAD_HOST_PORTS)
+		Pad_Port(o, port, state);
+}
+
+void Pad_Port(OpenBGI_t* o, int port, const OpenBGI_PadState_t* state)
+{
 	PadMap_t* p = &o->input.pad;
 	OpenBGI_PadState_t none;
 	uint32_t buttons = 0, dirs = 0, was, changed;
@@ -614,7 +620,8 @@ void OpenBGI_Pad(OpenBGI_t* o, int port, const OpenBGI_PadState_t* state)
 		return;
 	memset(&none, 0, sizeof none);
 	none.size = sizeof none;
-	p->attached = state ? p->attached | 1u << port : p->attached & ~(1u << port);
+	if(port < PAD_HOST_PORTS)
+		p->attached = state ? p->attached | 1u << port : p->attached & ~(1u << port);
 	if(!state)
 		state = &none;
 	Host_Take(&p->port[port], sizeof p->port[port], state); // (what the host's state lacks is at rest)
@@ -758,12 +765,18 @@ void Pad_Frame(OpenBGI_t* o)
 #define ARROW_FIX   16 // a pixel in the units the samples are counted in
 static const int16_t kArrow[7][2] = {{0, 0}, {118, 118}, {69, 118}, {94, 176}, {70, 187}, {44, 129}, {0, 170}};
 
-// how high the arrow is drawn on a picture `picH` high
-static int ArrowHeight(const PadMap_t* p, int picH)
+/* How high the arrow is drawn on a picture `picH` high: a thirty-sixth
+ * of it, 16 pixels at least - and where the host said how many of the
+ * picture's pixels make an inch (`ppi`; a touch screen, held close),
+ * ARROW_MM tenths of a millimetre at least. */
+#define ARROW_MM 45
+static int ArrowHeight(const PadMap_t* p, int picH, int ppi)
 {
 	int h = picH / 36;
 	if(h < 16)
 		h = 16;
+	if(ppi > 0 && (int)((long long)ppi * ARROW_MM / 254) > h)
+		h = (int)((long long)ppi * ARROW_MM / 254);
 	if(p->arrowSize == INPUT_POINTER_SMALL)
 		h = h * 3 / 4;
 	else if(p->arrowSize == INPUT_POINTER_LARGE)
@@ -834,7 +847,7 @@ static void DrawArrow(PadMap_t* p, int height)
 void Pad_Shown(OpenBGI_t* o)
 {
 	PadMap_t* p = &o->input.pad;
-	int height = ArrowHeight(p, o->screen.pic.h);
+	int height = ArrowHeight(p, o->screen.pic.h, o->input.touch.ppi);
 	int byMouse = p->arrowFor == INPUT_POINTER_ALWAYS && o->input.device == INPUT_DEV_MOUSE;                       // a mouse the host shows no pointer for
 	int over = Osk_Up(o) || Inframe_Up(o);                                                                         // the keyboard or a dialog in the picture: a pad goes from key to key there, a mouse points
 	int games = o->cursor.cursorShown && Cursor_IsVisible(o) && !o->cursor.curSprite && o->cursor.cursorShape < 2; // the game shows the system's arrow

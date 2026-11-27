@@ -42,7 +42,7 @@
 #include "bgi/input.h"
 #include "bgi/core.h"
 
-#define OBGI_VERSION 2 // the level of the extension family: raised whenever instructions are added
+#define OBGI_VERSION 3 // the level of the extension family: raised whenever instructions are added (3: "EF 31", "EF 32")
 
 // raise a script error on thread t with a formatted MSG_* text; does not return
 #define GFX_ERROR(o, t, ...)        \
@@ -354,7 +354,7 @@ static int Opcode_Obgi_DirOpen(OpenBGI_t* o, Thread_t* t) // EF 20: path, flags 
 	char path[LAUNCHER_PATH * 2];
 	int r = -1;
 	FromScript(o, (const char*)PopPtr(o, t), path, sizeof path);
-	if(path[0] || Host_NativeSep(o) != '\\') // (the computer's drives are known at once)
+	if(path[0] || !Launcher_TopKnown(o)) // (the computer's drives, or the host's roots, are known at once)
 		r = JobAsk(o, t, LAUNCHER_JOB_LIST, path, flags, NULL);
 	if(r >= 0)
 		return r;
@@ -457,10 +457,14 @@ static int Opcode_Obgi_CfgGet(OpenBGI_t* o, Thread_t* t) // EF 2C: path, key, i,
 	FromScript(o, (const char*)PopPtr(o, t), key, sizeof key);
 	FromScript(o, (const char*)PopPtr(o, t), path, sizeof path);
 	value[0] = 0;
-	if(!path[0] && strcmp(key, "dropped") == 0)
+	if(!path[0] && (len = Settings_Value(o, key, i, value, sizeof value)) != 0)
+		len = len > 0 ? (int)strlen(value) : -1; // the run's mode, and in the settings over a game what they show of the game's engine
+	else if(!path[0] && strcmp(key, "dropped") == 0)
 		len = Launcher_Dropped(o, i, value, sizeof value); // what was dropped on the window
 	else if(!path[0] && strcmp(key, "previews") == 0)
 		len = i == 0 ? Launcher_PreviewCount(o, value, sizeof value) : -1; // the first pictures that came in
+	else if(!path[0] && (len = Launcher_RootValue(o, key, i, value, sizeof value)) != 0)
+		len = len > 0 ? (int)strlen(value) : -1; // the host's roots, a list
 	else if(!path[0] && Launcher_HostValue(o, key, value, sizeof value))
 		len = i == 0 ? (int)strlen(value) : -1; // what the engine says of the host
 	else
@@ -485,6 +489,11 @@ static int Opcode_Obgi_CfgSet(OpenBGI_t* o, Thread_t* t) // EF 2D: path, key, i,
 	FromScript(o, (const char*)PopPtr(o, t), path, sizeof path);
 	if(value)
 		FromScript(o, value, text, sizeof text);
+	if(!path[0] && (ok = Settings_Set(o, key, value ? text : NULL)) >= 0)
+	{ // what the settings over a game change of the game's engine
+		Thread_Push(t, (uint32_t)ok);
+		return 0;
+	}
 	if(!path[0] && strcmp(key, "dropped") == 0)
 	{ // what was dropped on the window is taken by deleting it, and nothing else
 		Thread_Push(t, (uint32_t)(!value && Launcher_DropTake(o, i)));
@@ -496,7 +505,8 @@ static int Opcode_Obgi_CfgSet(OpenBGI_t* o, Thread_t* t) // EF 2D: path, key, i,
 		return 0;
 	}
 	// (what the engine says of the host is not a setting)
-	ok = !(!path[0] && Launcher_HostValue(o, key, fixed, sizeof fixed)) && Engine_CfgSet(o, path, key, i, value ? text : NULL);
+	ok = !(!path[0] && (Launcher_HostValue(o, key, fixed, sizeof fixed) || Launcher_RootValue(o, key, 0, fixed, sizeof fixed))) &&
+		Engine_CfgSet(o, path, key, i, value ? text : NULL);
 	if(ok)
 		Launcher_SettingsChanged(o);
 	Thread_Push(t, (uint32_t)ok);
@@ -531,6 +541,46 @@ static int Opcode_Obgi_GeneratePattern(OpenBGI_t* o, Thread_t* t) // EF 30: bmp,
 	return 0;
 }
 
+// -------------------------------------------------------------------------
+// EF 31 : a see-through picture
+// -------------------------------------------------------------------------
+
+/* The picture gets an alpha channel (on 1) or loses it again (0): a
+ * 32-bit screen is made as ARGB32, no background is drawn, and what no
+ * object covers is clear.  The engine that shows the picture over
+ * another's - the settings over a running game (sub.h) - blends it by
+ * that alpha; a host shows it as ever, the fourth byte being none of its
+ * colours.  A screen that is up is made anew, so the program says it
+ * before it sets its display mode.  Not every effect draws into such a
+ * picture (docs/modding/obgi.md). */
+static int Opcode_Obgi_SeeThrough(OpenBGI_t* o, Thread_t* t) // EF 31: on →
+{
+	int on = Thread_Pop(t) != 0;
+	if(on != o->gfx.seeThrough)
+	{
+		o->gfx.seeThrough = on;
+		if(o->gfx.gfx && ScreenMode(o) != PM_RGB16 && o->screen.pic.pixels)
+			SetDisplayMode(o, o->display.sizeIndex, o->display.pixelMode, o->display.fullscreen);
+	}
+	return 0;
+}
+
+// -------------------------------------------------------------------------
+// EF 32 : the finger as a held button
+// -------------------------------------------------------------------------
+
+/* A finger on a touch screen is the left button from now on (on 1): held
+ * from when the finger goes down until it lifts, the pointer where the
+ * finger is.  The program then tells a tap from a drag itself and moves
+ * its list under the finger.  The engine's own gestures - the tap aimed
+ * at a target, the long press, the flick, two fingers - are off for as
+ * long; 0 brings them back.  A mouse and a pad are as ever. */
+static int Opcode_Obgi_TouchDrag(OpenBGI_t* o, Thread_t* t) // EF 32: on →
+{
+	Touch_SetDrag(o, Thread_Pop(t) != 0);
+	return 0;
+}
+
 void Vm_OptableEFInit(OpenBGI_t* o)
 {
 	static const OpEntry_t ops[] = {
@@ -552,6 +602,8 @@ void Vm_OptableEFInit(OpenBGI_t* o)
 		{0x2C, Opcode_Obgi_CfgGet, GEN_FIRST, GEN_LAST},
 		{0x2D, Opcode_Obgi_CfgSet, GEN_FIRST, GEN_LAST},
 		{0x30, Opcode_Obgi_GeneratePattern, GEN_FIRST, GEN_LAST},
+		{0x31, Opcode_Obgi_SeeThrough, GEN_FIRST, GEN_LAST},
+		{0x32, Opcode_Obgi_TouchDrag, GEN_FIRST, GEN_LAST},
 	};
 	Vm_FillTable(o, o->vm.optableEF, OPFAM_EF, ops, BGI_COUNTOF(ops));
 }

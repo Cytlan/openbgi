@@ -176,6 +176,8 @@ typedef OpenBGI_NativeStat_t OsNativeStat_t; // the size, the last modification
 typedef void (*OsNativeListFn)(void* ctx, const char* name, int isDir);
 int OS_NativeStat(const char* path, OsNativeStat_t* out); // OS_NATIVE_*; `out` may be NULL
 int OS_NativeWritable(const char* path);                  // 1 when the file there can be opened for writing; it is not changed
+// the folders a folder browser starts from where those above them cannot be listed (OpenBGI_Files_t.nativeRoots): 0 where every folder is reached from the root
+uint32_t OS_NativeRoots(char* buf, uint32_t n);
 int OS_NativeMkdir(const char* path);
 int OS_NativeRemove(const char* path);
 int OS_NativeList(const char* dir, OsNativeListFn fn, void* ctx);
@@ -449,6 +451,15 @@ const char* OS_WindowFilterName(int n);
  * that draws the whole picture anew for every change (through a graphics
  * processor) does it once for a frame's blits. */
 void OS_WindowPresent(void);
+/* The layer of a back end that said its surface (the `surface` handler):
+ * what the engine draws over everything on it (OpenBGI_Frame_t.layer) -
+ * w x h pixels of four bytes, blue, green, red and alpha, the colours not
+ * multiplied by the alpha, `pitch` bytes a row.  The rectangle of it
+ * changed and is to be seen at the next OS_WindowPresent, a pixel a
+ * pixel over the picture and the bars; NULL: there is no layer any more.
+ * The pixels are only read during the call.  A back end that says no
+ * surface does nothing here. */
+void OS_WindowLayer(const unsigned char* pixels, int w, int h, int pitch, int x, int y, int cw, int ch);
 
 /* The back buffer is plain memory owned by the graphics manager (the
  * original uses a top-down DIB section; see Gfx_SetupScreen).  An OsSurface
@@ -499,6 +510,9 @@ typedef struct OsHostHandlers
 	void (*focus)(void* user, int active);                                     // WM_ACTIVATE: the window gained (1) or lost (0) the focus
 	void (*text)(void* user, const char* utf8);                                // WM_CHAR: the text a key typed (the input method's too), UTF-8, no control characters
 	void (*touch)(void* user, int id, int phase, int x, int y);                // a contact of a touch screen (OPENBGI_TOUCH_*), the picture's pixels; where a back end has one
+	void (*touchScale)(void* user, int picturePixelsPerInch);                  // how many of the picture's pixels make an inch on that screen now (OpenBGI_TouchScale; 0: not known); where a back end can say
+	void (*surface)(void* user, const OpenBGI_Surface_t* surface);             // what the back end draws on, when the picture does not fill it (OpenBGI_SetSurface): at first and when it changes; NULL: no more
+	void (*surfaceTouch)(void* user, int id, int phase, int x, int y);         // a contact in that surface's pixels (OpenBGI_SurfaceTouch), from a back end that said its surface: instead of `touch`
 	void (*paint)(void* user);                                                 // WM_PAINT: the window was uncovered, all of it is to be shown again
 	void (*entryPaint)(void* user, int x, int y, int w, int h);                // the text entry's WM_PAINT: the picture under it again first
 	// the window's events
@@ -776,6 +790,8 @@ void OS_VersionEx(uint32_t out[4], char* csd, size_t n);
 int OS_UiLanguage(void);
 // "81 0D": GlobalMemoryStatusEx, the physical memory in bytes (64 bit)
 void OS_MemoryStatusEx(uint64_t* totalPhys, uint64_t* availPhys);
+// the bytes of memory this process holds now (its resident set), for the engine's performance display; 0 when the system does not say
+uint64_t OS_ProcessMemory(void);
 /* "81 0B": the display adapter (D3D adapter identifier of the original):
  * its description and driver version (four words, most significant first);
  * 1 when known */

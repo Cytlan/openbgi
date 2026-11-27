@@ -191,6 +191,12 @@ void OS_MemoryStatusEx(uint64_t* totalPhys, uint64_t* availPhys)
 	*availPhys = *totalPhys / 2;
 }
 
+// the process's memory: a page does not know
+uint64_t OS_ProcessMemory(void)
+{
+	return 0;
+}
+
 // fixed names: a page knows neither; the installer's machine key is the same for every visitor
 int OS_ComputerName(char* buf, size_t n)
 {

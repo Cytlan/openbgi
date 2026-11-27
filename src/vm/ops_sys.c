@@ -184,7 +184,15 @@ static int Opcode_Sys_KeyDown(OpenBGI_t* o, Thread_t* t) // 80 11: vk → f
 {
 	uint32_t vk = Thread_Pop(t);
 	if(vk == 1 || vk == 2)
+	{
 		Input_NoteProbe(o, PROBE_BUTTONS, vk); // a click anywhere reaches the script (OpenBGI_Targets)
+		// .. and the mapper's steps wait for these readings (Steps_ButtonRead): 1 reads the left button, and
+		// the right one too when the script exchanged them; 2 the right one, or nothing then (GetKeyStateEx)
+		if(vk == 1)
+			Steps_ButtonRead(o, OPENBGI_BUTTON_LEFT);
+		if((vk == 1) == (Input_SwapButtons(o) == 1))
+			Steps_ButtonRead(o, OPENBGI_BUTTON_RIGHT);
+	}
 	Thread_Push(t, ((uint32_t)GetKeyStateEx(o, (int)vk) >> 15) & 1);
 	return 0;
 }

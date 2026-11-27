@@ -75,6 +75,7 @@ thread. The engine starts no other program on any system.
 | Threads | Threads with a priority | For the movie decoder's pipes and the preview runs; the engine has none |
 | Machine | CPUID and the time stamp counter (x86 only), memory, names, the user's language, the display adapter | |
 | Window | Create, show, move, title, icon, display modes, full screen, the picture's size and scaling rule, the cursor, drop acceptance | `OS_WindowScales`, `OS_WindowHasIcons` say what a back end cannot do. `OS_WindowPresent` ends a frame's blits: a back end that draws once a frame draws there. `OS_WindowFilterName` names filters of the back end's own, or none |
+| The screen layer | `OS_WindowLayer`; the `surface` and `surfaceTouch` handlers | For a back end whose picture does not fill what it draws on. It says its surface (`OpenBGI_SetSurface`), sends touches in the surface's pixels, and draws the layer of each frame over everything ([input.md](input.md#on-screen-controls)). No back end of this tree says one yet: each does nothing in `OS_WindowLayer` |
 | The window's screen | `OS_WindowFits`, `OS_WindowDpi`, `OS_WindowWorkArea`, `OS_WindowSetAspect`; the `screenChanged` handler | With `OS_WindowFits` 1 the engine fits the window to its screen ([below](#fitting-the-window-to-its-screen)) |
 | Child windows | `OS_ChildWindows`, or NULL | NULL: the engine draws them in its picture |
 | Text entry | `OS_TextEntry`, or NULL | NULL: the engine draws it |
@@ -91,7 +92,9 @@ thread. The engine starts no other program on any system.
 Input goes to the engine as `OpenBGI_Key` (Windows virtual keys, with
 repeat and "system" flags), `OpenBGI_Button`, `OpenBGI_Wheel`,
 `OpenBGI_Pointer`, `OpenBGI_Focus`, `OpenBGI_Text` (UTF-8),
-`OpenBGI_Touch`. The engine keeps the key state itself.
+`OpenBGI_Touch`, `OpenBGI_TouchScale` - or, from a back end that says
+its surface, `OpenBGI_SetSurface` and `OpenBGI_SurfaceTouch`. The
+engine keeps the key state itself.
 
 ## Fitting the window to its screen
 
@@ -123,7 +126,7 @@ moves from the processor to the graphics processor.
 
 | File | Content |
 |---|---|
-| `src/host/os_gl.c` | The presenter. No OpenGL header and no library: the back end hands over how functions are found by name. The picture is a texture that the frame's blits update (`OsGl_Blit`); `OsGl_Draw` draws it once a frame, by the nearest pixel, bilinearly, bicubically (Catmull-Rom) or through a chain of shader files |
+| `src/host/os_gl.c` | The presenter. No OpenGL header and no library: the back end hands over how functions are found by name. The picture is a texture that the frame's blits update (`OsGl_Blit`); `OsGl_Draw` draws it once a frame, by the nearest pixel, bilinearly, bicubically (Catmull-Rom) or through a chain of shader files. A layer (`OsGl_Layer`) is a second texture, blended over all of the target after the picture |
 | `src/host/os_glhook.c` | Reads shader files in the format of mpv's user shaders, as far as Anime4K uses it, and plans their passes for a picture and a window size: which run, at which size, into which texture. No OpenGL in it; `tests/glhook.c` tests it |
 | `src/host/posix/glx.c` | Loads `libGL.so.1` at run time and makes a context for the window's own visual: OpenGL 3.3 core, else what the server makes |
 | `src/host/win32/wgl.c` | Loads `opengl32.dll` at run time. Asks once, on a hidden window, whether OpenGL will do, because the window's styles, the text entry and full screen depend on the answer before the game's window exists |
@@ -143,6 +146,19 @@ moves from the processor to the graphics processor.
   for the session and the picture is shown bicubically.
 - The buffers are swapped without waiting for the display. The engine
   paces its frames itself.
+- A context of OpenGL ES 3.0 or later is taken as well; its version
+  string says what it is. Differences there:
+
+  | OpenGL | OpenGL ES |
+  |---|---|
+  | `#version 330 core` (130 on OpenGL 3.0) | `#version 300 es`, with the highest precision for numbers and textures |
+  | The picture's pixels are uploaded as they are (`GL_BGRA`) | Uploaded as `GL_RGBA`; the texture is read with red and blue changed over (a swizzle) and its alpha as 1 |
+  | 15-bit pictures are uploaded as they are | Made 32-bit first |
+  | A software renderer is refused | Taken: there is no other scaler |
+  | Shader chains always | Only where the context draws into textures of floats: OpenGL ES 3.2, or `EXT_color_buffer_half_float` / `EXT_color_buffer_float` |
+
+  `tests/gl.c` draws the same pictures both ways on Mesa and compares
+  them.
 - With OpenGL the Win32 back end has no EDIT control (the engine draws
   the text entry) and switches no display mode: in full screen the
   window covers its monitor without a frame and the mode is scaled

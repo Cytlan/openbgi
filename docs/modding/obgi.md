@@ -14,7 +14,7 @@ OpenBGI.
 
 | Code | Name | Arguments -> result | Does |
 |---|---|---|---|
-| `EF 00` | `obgi.version` | -> level | The level of the extensions: 2 |
+| `EF 00` | `obgi.version` | -> level | The level of the extensions: 3 |
 | `EF 01` | `obgi.text_direction` | mode | Layout of rich text |
 | `EF 02` | `obgi.text_encoding` | mode | Encoding of every string: 0 Shift-JIS, 1 UTF-8 |
 | `EF 03` | `obgi.text_word_wrap` | on | Break lines between words |
@@ -32,10 +32,19 @@ OpenBGI.
 | `EF 2C` | `obgi.cfg_get` | path, key, i, dst, size -> len | Read a setting of `openbgi.json` |
 | `EF 2D` | `obgi.cfg_set` | path, key, i, value -> ok | Change, add or delete one |
 | `EF 30` | `obgi.generate_pattern` | bmp, kind, mode, params, count -> ok | Draw a gray pattern by rule |
+| `EF 31` | `obgi.see_through` | on | Give the picture an alpha channel, so that it can lie over another |
+| `EF 32` | `obgi.touch_drag` | on | A finger on a touch screen is the left button, held where the finger is |
 
-Arguments are in source order. Level 1 is `EF 00` to `EF 0C`; level 2
-added `EF 20` to `EF 30`. Check `obgi.version()` before using a later
-addition.
+Arguments are in source order. Check `obgi.version()` before using an
+instruction of a later level:
+
+| Level | Adds |
+|---|---|
+| 1 | `EF 00` to `EF 0C` |
+| 2 | `EF 20` to `EF 30` |
+| 3 | `EF 31`, `EF 32` |
+
+OpenBGI 1.0 is level 2.
 
 ## Text encoding
 
@@ -144,7 +153,9 @@ encoding of the program's strings.
 
 - `dir_open` returns 0 when the folder cannot be read or eight listings
   are open. Folders come first, then files, sorted by name.
-- The path `""` is the computer: its drives, or the root.
+- The path `""` is the computer: its drives; or the folders of the
+  setting `"roots"` where the system names some, each under its whole
+  path and in the system's order; or the root.
 
 | Flag | Meaning |
 |---|---|
@@ -172,6 +183,9 @@ keep the program responsive.
 
 - `launch_game` ends this program and starts the game in the same
   engine. It returns 0 only when there is no game at the path.
+- When the game ends, this program is started again from its
+  beginning. Keep what it needs to find again in its settings
+  (`cfg_set`), as the launcher keeps the selected game.
 - `profile`: `""` for detection. `patches`: strings one after the
   other, ended by an empty string; 0 for none. `options`: more
   command-line options, `""` for none.
@@ -199,8 +213,12 @@ Read-only keys of `""`:
 | `"games"` | The folder of every game the file knows |
 | `"home"` | The user's documents folder, or `""` |
 | `"separator"` | `/` or `\` |
+| `"roots"` | The folders a folder browser starts from, on a system where the folders above them cannot be listed (Android's storage volumes). A list; empty on most systems |
+| `"root_names"` | What each of them is called, in the same order |
 | `"language"` | `en` or `ja` |
 | `"previews"` | How many first pictures were made since the program began |
+| `"mode"` | `settings` when the program runs as the settings over a game ([below](#a-see-through-picture)), else `launcher` |
+| `"surface"` | Only in the settings over a game: what the host draws on. Value 0 its width, 1 its height, 2 its pixels an inch |
 
 Special keys of `""`:
 
@@ -208,6 +226,26 @@ Special keys of `""`:
 |---|---|
 | `"dropped"` | Paths dropped on the window (after `sys.dragdrop_enable(1)`). Read index 0, then set it to 0 to remove it. |
 | `"preview"` | Set to a game's path: the game is in the list; the engine finds its icon and makes a first picture if it has none |
+| `"panel"` | Only in the settings over a game: set to `close`, and the settings are put away when the turn is over |
+
+The settings over a game read and set what the player chose there. Each
+of these keys of `""` exists only in that mode, and reaches the game's
+engine at once:
+
+| Key | Values | Is |
+|---|---|---|
+| `"pad"` | `on`, `off` | The on-screen pad |
+| `"through"` | `on`, `off` | Whether a touch beside the pad reaches the game |
+| `"perf"` | `on`, `off` | The performance display |
+| `"filters"` | A list of names, read only | The filters the picture can be scaled with: `game` (what the game chose), `bicubic`, `bilinear`, `nearest`, then the host's own by their names (`Anime4K A`). No value where the host does not scale the picture |
+| `"filter"` | One name of that list | The filter in use |
+| `"quality"` | `high`, `normal` | The larger networks of a filter of the host's own |
+| `"whole"` | `on`, `off` | The picture only at whole multiples of its size |
+| `"game"` | `game`, `launcher` | Which program runs under the settings. Set it to `close`: the settings are put away, and the game is closed as the window's close button closes it |
+
+A value that is none of those listed changes nothing, and `cfg_set`
+answers 0. The filter, the quality and the steps are kept for the game
+as the display settings box (F9) keeps them.
 
     while (obgi.cfg_get("", "dropped", 0, path, 1024) > 0) {
         obgi.cfg_set("", "dropped", 0, 0);
@@ -219,6 +257,58 @@ program ends or starts a game.
 
 A game's picture is `pictures\<value of "picture">` in the program's
 game folder; load it with `gfx0.bmp_load_picture`.
+
+## A see-through picture
+
+    obgi.see_through(1);                // before the display mode is set
+    sys81.set_size_entry(0, w, h);
+    sys.set_display_mode(0, 1, 0);
+
+A picture of 32 bits is then made with an alpha channel, and no
+background is drawn. What no sprite covers is clear. The settings over
+a running game are such a picture: the game's engine lays it over the
+game, at the size of what the host draws on, and the game is seen
+around the panel.
+
+- A sprite's own alpha is kept: a half clear sprite leaves the picture
+  half clear there.
+- A host that shows the picture itself shows it as ever. The fourth
+  byte of a pixel is none of its colours.
+- `obgi.see_through(0)` gives the picture its background back.
+
+| Draws into a see-through picture | Draws nothing |
+|---|---|
+| Plain sprites with the effects 0 (alpha), 1 and 0x20 (blend), 2 and 0x21 (add), 0x40, 0x80 (copy) | The effects 3 (subtract), 4 (multiply), 6, 8, 9 and 0xC1 (tint) |
+| Cross-faded, transformed and wiped sprites (through a copy, so a little slower) | The ripple sprite |
+| The dim effects 5 and 0xC0, from a bitmap with alpha | The dim effects from a bitmap without alpha |
+| | A background picture |
+
+Text windows, effectors, filters, particles and maps were not tried.
+An additive sprite over a clear part comes out weaker than over an
+opaque one.
+
+## A list under a finger
+
+    obgi.touch_drag(1);
+
+A touch screen's gestures are then off for this program. A finger is
+the left mouse button:
+
+| The finger | The program sees |
+|---|---|
+| Goes down | The pointer there, and from the next frame the left button held |
+| Moves | The pointer with it, from the first pixel |
+| Lifts, or is taken away by the system | The button released |
+
+- No tap is snapped to a click target, a long press is no right button,
+  and a flick turns no wheel. A second finger does nothing.
+- The program tells a tap from a drag itself. A finger lifted where it
+  went down tapped. One that moved further than a finger slips drags,
+  and a list goes with it.
+- `obgi.touch_drag(0)` gives the gestures back. A finger that is down
+  goes on as it began.
+
+`settings.inc` of the launcher's program scrolls its rows that way.
 
 ## Gray patterns
 

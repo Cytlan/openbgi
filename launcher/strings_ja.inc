@@ -53,6 +53,7 @@ strings_ja() {
     TXT_ASK_REMOVE = "「%s」を一覧から削除しますか？\n\nフォルダーを削除して追加し直すまで表示されません。";
 
     TXT_COMPUTER = "コンピューター";
+    TXT_STORAGE = "ストレージ";
     TXT_NEVER_PLAYED = "未プレイ";
     TXT_LAST_PLAYED = "最終プレイ %s";
     TXT_TIME_HM = "%d時間%02d分";
@@ -71,4 +72,18 @@ strings_ja() {
 
     TXT_LAUNCH_FAILED = "「%s」を開始できませんでした。";
     TXT_NOT_A_GAME = "「%s」にゲームが見つかりません。";
+
+    TXT_SET_TITLE = "設定";
+    TXT_SET_PAD = "画面上のパッド";
+    TXT_SET_CLOSE = "閉じる";
+    TXT_SET_FILTER = "フィルター";
+    TXT_SET_QUALITY = "高品質";
+    TXT_SET_WHOLE = "整数倍のみ";
+    TXT_SET_THROUGH = "パッド以外のタッチ";
+    TXT_SET_CLOSE_GAME = "ゲームを終了";
+    TXT_FILTER_GAME = "ゲームの設定";
+    TXT_FILTER_BICUBIC = "バイキュービック";
+    TXT_FILTER_BILINEAR = "バイリニア";
+    TXT_FILTER_NEAREST = "ニアレスト";
+    TXT_SET_PERF = "パフォーマンス表示";
 }
