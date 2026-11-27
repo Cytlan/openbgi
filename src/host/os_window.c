@@ -226,6 +226,14 @@ static const char* WindowFilterName(void* user, int n)
 	return OS_WindowFilterName(n);
 }
 
+#if defined(OS_HAVE_FRAME_LIMIT)
+static void WindowSetFrameLimit(void* user, int on)
+{
+	BGI_UNUSED(user);
+	OS_WindowSetFrameLimit(on);
+}
+#endif
+
 static const OpenBGI_Window_t kWindow = {
 	sizeof(OpenBGI_Window_t),
 	WindowCreate,
@@ -254,6 +262,11 @@ static const OpenBGI_Window_t kWindow = {
 	WindowWorkArea,
 	WindowSetAspect,
 	WindowFilterName,
+#if defined(OS_HAVE_FRAME_LIMIT)
+	WindowSetFrameLimit,
+#else
+	NULL,
+#endif
 };
 
 // (a back end that scales by one rule alone leaves the member out: the engine tells the scripts so)

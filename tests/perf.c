@@ -35,6 +35,8 @@
  */
 #include "bgi/core.h"
 #include "bgi/perf.h"
+#include "bgi/release.h"
+#include "bgi/gfx/bitmap.h"
 #include "bgi/engine.h"
 #include "bgi/host.h"
 #include "bgi/overlay.h"
@@ -354,7 +356,12 @@ static void TestPanel(void)
 	HalfSecond(o);
 	// 400 pixels an inch: a cell of 31, 40 half cells and the edges wide; three lines, a graph, a line, a graph, four lines high
 	pix = Perf_Picture(o, 400, &w, &h, &changed);
-	CHECK(pix && changed && w == 40 * 15 + 2 * 15 && h == 2 * 15 + 8 * 38 + 2 * (77 + 2 * 10));
+	CHECK(pix && changed && w == 40 * 15 + 2 * 15 && h == 2 * 15 + 9 * 38 + 2 * (77 + 2 * 10));
+	{ // the engine's own line: its version, the fast rows of this build, the threads of the processors
+		char line[96];
+		Perf_Engine(o, line, sizeof line);
+		CHECK(strncmp(line, "OpenBGI " OPENBGI_VERSION "  SIMD ", 14 + strlen(OPENBGI_VERSION)) == 0 && strstr(line, kBlitRows.name) && strstr(line, "  threads 1 of "));
+	}
 	if(pix)
 	{
 		CHECK(pix[0] == 0x0c1016 && pix[(size_t)(h - 1) * (size_t)w + (size_t)(w - 1)] == 0x0c1016);
@@ -378,7 +385,7 @@ static void TestPanel(void)
 	CHECK(pix && changed);
 	// another density: another size; a small one has a cell of 12 at least
 	pix = Perf_Picture(o, 160, &w, &h, &changed);
-	CHECK(pix && changed && w == 40 * 6 + 2 * 6 && h == 2 * 6 + 8 * 15 + 2 * (30 + 2 * 4));
+	CHECK(pix && changed && w == 40 * 6 + 2 * 6 && h == 2 * 6 + 9 * 15 + 2 * (30 + 2 * 4));
 	pix = Perf_Picture(o, 96, &w, &h, &changed);
 	CHECK(pix && !changed && w == 40 * 6 + 2 * 6);
 	// off: none; the run's end frees it
@@ -439,10 +446,10 @@ static void TestLayer(void)
 	HalfSecond(o);
 	memset(&f, 0, sizeof f);
 	Overlay_Frame(o, &f);
-	CHECK(o->overlay.perfShown && o->overlay.perfX == px && o->overlay.perfY == py && o->overlay.perfW == 630 && o->overlay.perfH == 528);
+	CHECK(o->overlay.perfShown && o->overlay.perfX == px && o->overlay.perfY == py && o->overlay.perfW == 630 && o->overlay.perfH == 566);
 	CHECK(At(&f, px + 2, py + 2)[0] == 0x16 && At(&f, px + 2, py + 2)[1] == 0x10 && At(&f, px + 2, py + 2)[2] == 0x0c && At(&f, px + 2, py + 2)[3] == 0xd8);
-	CHECK(At(&f, px + 629, py + 527)[3] == 0xd8 && At(&f, px + 630, py + 527)[3] == 0 && At(&f, px + 629, py + 528)[3] == 0 && At(&f, px - 1, py + 2)[3] == 0);
-	CHECK(f.layerChanges == 1 && f.layerChange.x == px && f.layerChange.y == py && f.layerChange.w == 630 && f.layerChange.h == 528);
+	CHECK(At(&f, px + 629, py + 565)[3] == 0xd8 && At(&f, px + 630, py + 565)[3] == 0 && At(&f, px + 629, py + 566)[3] == 0 && At(&f, px - 1, py + 2)[3] == 0);
+	CHECK(f.layerChanges == 1 && f.layerChange.x == px && f.layerChange.y == py && f.layerChange.w == 630 && f.layerChange.h == 566);
 	// frames without new figures hand nothing over
 	for(i = 0; i < 10; i++)
 	{

@@ -982,11 +982,15 @@ build() {
 
 // The bars at the top and the bottom.  The top one carries the title, what the screen is,
 // and on two screens a line under that: the browser's folder, the edited game's path.
-bars_draw() { int sz; char* sub;
+bars_draw() { int sz; char* sub; int vx;
     shade(BMP_TOP, gW, gTopH, 90, COL_BAR_TOP >>> 24, COL_BAR_FADE >>> 24, COL_BAR_TOP & 0xffffff);
     box(BMP_TOP, 0, gTopH - imax(px(2), 2), gW, imax(px(2), 2), 0, argb(0xc0, gAccent));
     sz = px(34);
     text(BMP_TOP, gMargin, px(12), TXT_TITLE, sz, 1, COL_TEXT);
+    if (OBGI_CFG_GET("", "version", 0, gCfgTmp, 16) > 0) { // (an engine that says its version: small, after the title)
+        vx = text_w(TXT_TITLE, sz, 1);
+        text(BMP_TOP, gMargin + vx + px(8), px(30), gCfgTmp, px(15), 0, gAccentHi);
+    }
     if (gScreen == SCR_GAMES) {
         sub = TXT_SUB_GAMES;
     } else if (gScreen == SCR_FOLDERS) {

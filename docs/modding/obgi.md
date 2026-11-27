@@ -216,6 +216,7 @@ Read-only keys of `""`:
 | `"roots"` | The folders a folder browser starts from, on a system where the folders above them cannot be listed (Android's storage volumes). A list; empty on most systems |
 | `"root_names"` | What each of them is called, in the same order |
 | `"language"` | `en` or `ja` |
+| `"version"` | The version of OpenBGI, as text: `1.0`. No value in an engine before 1.1 |
 | `"previews"` | How many first pictures were made since the program began |
 | `"mode"` | `settings` when the program runs as the settings over a game ([below](#a-see-through-picture)), else `launcher` |
 | `"surface"` | Only in the settings over a game: what the host draws on. Value 0 its width, 1 its height, 2 its pixels an inch |
@@ -237,6 +238,7 @@ engine at once:
 | `"pad"` | `on`, `off` | The on-screen pad |
 | `"through"` | `on`, `off` | Whether a touch beside the pad reaches the game |
 | `"perf"` | `on`, `off` | The performance display |
+| `"limit"` | `on`, `off` | The frames a second are held to the screen's refresh rate. No value where the host cannot hold them: show no row then |
 | `"filters"` | A list of names, read only | The filters the picture can be scaled with: `game` (what the game chose), `bicubic`, `bilinear`, `nearest`, then the host's own by their names (`Anime4K A`). No value where the host does not scale the picture |
 | `"filter"` | One name of that list | The filter in use |
 | `"quality"` | `high`, `normal` | The larger networks of a filter of the host's own |

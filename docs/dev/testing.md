@@ -61,7 +61,6 @@ on standard error every five seconds.
 | `dropped` | Sound frames mixed that found no room in the ring |
 | `starved` | Sound frames the host asked for and the ring did not have: silence was played. A host that asks for more than it plays (the test host does) shows a large number |
 | `disk` | Read from files through the host: the rate, the reads and the time spent in them |
-| `rows` | The blitters' fast rows of this build: `SSE2`, `NEON` or `none` (below) |
 
 - The panel shows the same figures of the last half second, and two
   graphs: the last 240 frames' periods (green up to a sixtieth of a
@@ -73,6 +72,8 @@ on standard error every five seconds.
 - An engine that has it off pays one test a frame and one a read.
 - A run for a first picture of the launcher's and the settings' own
   engine never have it on.
+- The last line of the panel is the engine itself: `OpenBGI 1.0  SIMD
+  NEON  threads 1 of 8`. The log has it once, when the display comes on.
 - `tests/perf.c` runs it on clocks the test moves.
 
 ## The blitters' fast rows
@@ -85,7 +86,7 @@ call. Nothing is asked of the processor at run time.
 | Build | Fast rows |
 |---|---|
 | x86, 64-bit | SSE2 |
-| x86, 32-bit | SSE2 when built with `-msse2`. None otherwise: the Windows 32-bit build has none |
+| x86, 32-bit | SSE2. None when built with `X86_SSE2=0` ([building.md](building.md)) |
 | ARM, 64-bit | NEON |
 | ARM, 32-bit | NEON when the compiler has it on (Android's has) |
 | The browser, anything else | None |
@@ -108,7 +109,8 @@ Every other blit is a word-lane or byte loop as before.
 - `test_blitrows time` prints what a 1920 x 1080 pass of each loop
   takes in both forms.
 - `make OPT="-O2 -g -DBGI_NO_SIMD"` builds without the fast rows.
-- The performance display names the rows in its last line.
+- The performance display names the rows in its last line (`SIMD NEON`),
+  after the version and before the threads a frame is painted on.
 
 To add a fast row:
 

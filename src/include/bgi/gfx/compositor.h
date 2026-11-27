@@ -91,6 +91,7 @@ void Compositor_InvalidateAll(Compositor_t* c);
 void Compositor_SetDrawLimit(Compositor_t* c, int prio); // "90 09"
 void Compositor_SetBgType(Compositor_t* c, int type);
 void Compositor_Snapshot(OpenBGI_t* o, Compositor_t* c, const Bmp_t* dst, int prio); // "90 05": the objects up to `prio` into dst
+int Compositor_Threads(OpenBGI_t* o);                                                // the threads a frame's jobs are painted on: at least 1
 int Compositor_CanBand(OpenBGI_t* o, Compositor_t* c);                               // 0 while something reads the screen
 void Compositor_RenderAll(OpenBGI_t* o, Compositor_t* c);                            // the whole screen
 int Compositor_Render(OpenBGI_t* o, Compositor_t* c, Rect_t* outRects);              // one frame; the repainted rectangles' count, -1 = everything

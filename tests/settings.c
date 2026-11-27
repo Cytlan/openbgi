@@ -95,6 +95,14 @@ static void SetScaling(void* user, int rule)
 	gRule = rule;
 }
 
+static int gLimit = -1; // what the host was last told about holding its frames to the screen
+
+static void SetFrameLimit(void* user, int on)
+{
+	(void)user;
+	gLimit = on;
+}
+
 static const char* FilterName(void* user, int n)
 {
 	(void)user;
@@ -104,7 +112,8 @@ static const char* FilterName(void* user, int n)
 
 // a window table of a host that scales the picture and has two filters of its own, and nothing else
 // (no work area: it does not fit a window to a screen, as a phone's does not)
-static const OpenBGI_Window_t kScales = {.size = sizeof(OpenBGI_Window_t), .setScaling = SetScaling, .filterName = FilterName};
+// .. and it can hold its frames to its screen's refresh rate
+static const OpenBGI_Window_t kScales = {.size = sizeof(OpenBGI_Window_t), .setScaling = SetScaling, .filterName = FilterName, .setFrameLimit = SetFrameLimit};
 
 // where the program keeps what the test looks at (its global memory)
 #define AT_MODE   0x1000
@@ -549,7 +558,7 @@ static void TestOptions(void)
 	OpenBGI_t* p;
 	char v[32];
 	uint32_t ev[3];
-	int x, y;
+	int x, y, stage;
 	printf("options\n");
 	if(!o)
 		return;
@@ -585,6 +594,8 @@ static void TestOptions(void)
 	CHECK(Settings_Set(p, "perf", "off") == 1 && !Perf_On(o) && Engine_CfgGet(o, "", "perf", 0, v, sizeof v) < 0);
 	Frames(o, 1);
 	CHECK(!o->overlay.perfShown && At(x, y)[3] == 0 && Is(250, 125, 0xe0, 0x40, 0x20, 255));
+	// this host cannot hold its frames to a screen: no such setting
+	CHECK(Perf_Limit(o) == -1 && Settings_Value(p, "limit", 0, v, sizeof v) == -1 && Settings_Set(p, "limit", "off") == 0);
 	// this host does not scale the picture: no filters, nothing to set
 	CHECK(!MainWin_ViewScales(o));
 	CHECK(Settings_Value(p, "filters", 0, v, sizeof v) == -1 && Settings_Value(p, "filter", 0, v, sizeof v) == -1);
@@ -623,6 +634,26 @@ static void TestOptions(void)
 		EngineDown(o);
 		return;
 	}
+	// the frames are held to the screen until the player says otherwise; the host is told at each change ..
+	gLimit = -1;
+	CHECK(Perf_Limit(o) == 1 && Reads(p, "limit", 0, "on") && Settings_Value(p, "limit", 1, v, sizeof v) == -1);
+	CHECK(Settings_Set(p, "limit", "maybe") == 0 && gLimit == -1);
+	CHECK(Settings_Set(p, "limit", "off") == 1 && gLimit == 0 && Reads(p, "limit", 0, "off") && Perf_Limit(o) == 0);
+	CHECK(Engine_CfgGet(o, "", "frames", 0, v, sizeof v) == 4 && strcmp(v, "free") == 0);
+	// .. and when a run's programs are up: what was kept, and "held" again after a run that was free
+	gLimit = -1;
+	o->perf.loaded = 0;
+	o->perf.freeRun = 0;
+	stage = o->engine.stage;
+	o->engine.stage = ENGINE_STAGE_VM;
+	Perf_Begin(o); // (a frame's start)
+	CHECK(gLimit == 0 && Perf_Limit(o) == 0);
+	CHECK(Settings_Set(p, "limit", "on") == 1 && gLimit == 1 && Engine_CfgGet(o, "", "frames", 0, v, sizeof v) < 0);
+	gLimit = -1;
+	o->perf.loaded = 0;
+	Perf_Begin(o);
+	CHECK(gLimit == 1 && Perf_Limit(o) == 1);
+	o->engine.stage = stage;
 	CHECK(MainWin_ViewScales(o) && !MainWin_ViewOn(o));
 	CHECK(Reads(p, "filters", 0, "game") && Reads(p, "filters", 1, "bicubic") && Reads(p, "filters", 2, "bilinear"));
 	CHECK(Reads(p, "filters", 3, "nearest") && Reads(p, "filters", 4, "Sharp") && Reads(p, "filters", 5, "Soft"));

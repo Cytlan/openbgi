@@ -12,6 +12,7 @@
  *              launcher_src.c's)
  */
 #include "bgi/launcher.h"
+#include "bgi/release.h"
 #include "bgi/msg.h"
 #include "bgi/engine.h"
 #include "bgi/version.h"
@@ -349,6 +350,11 @@ int Launcher_HostValue(OpenBGI_t* o, const char* key, char* dst, size_t size)
 	if(strcmp(key, "language") == 0)
 	{
 		CopyText(dst, size, gMsgEnglish ? "en" : "ja");
+		return 1;
+	}
+	if(strcmp(key, "version") == 0)
+	{ // OpenBGI's own, as --version says it
+		CopyText(dst, size, OPENBGI_VERSION);
 		return 1;
 	}
 	if(strcmp(key, "home") != 0)

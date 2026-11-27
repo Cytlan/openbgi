@@ -674,6 +674,12 @@ $(OBJDIR)/movie/%.o: CFLAGS += $(FF_CFLAGS)
 # -O of a command line counts)
 PRESENT_OPT := $(if $(filter -O0 -O1 -Og,$(OPT)),,-O3)
 $(OBJDIR)/host/os_present.o: CFLAGS += $(PRESENT_OPT)
+# A 32-bit x86 build is made for processors with SSE2 (a Pentium 4 or an Athlon 64 at least): the blitters'
+# fast rows need it (src/gfx/blit_simd.h).  X86_SSE2=0 builds for the processors before them, without the fast
+# rows.  A 64-bit x86 build always has SSE2.
+X86_SSE2 ?= 1
+X86_OPT := $(if $(filter x861,$(ARCH)$(X86_SSE2)),-msse2)
+CFLAGS += $(X86_OPT)
 # so are the blitters, where most of a game's processor time goes: in every build of the core (HOT_OPT in the
 # compile rules of the program, the library and the libretro core)
 HOT_OPT = $(if $(filter %/gfx/blit.o %/gfx/blit_rows.o %/gfx/blit_modes.o %/gfx/blit_xform.o,$@),$(PRESENT_OPT))
@@ -880,7 +886,7 @@ check-wasm:
 # programs run here (natively; under wine for Windows).  The objects go to
 # obj/core-<platform>-<arch>/.
 CORE_DIR    := obj/core-$(PLATFORM)-$(ARCH)$(if $(SAN),-san)
-CORE_CFLAGS := $(CSTD) $(WARN) $(filter-out $(WARN),$(filter -Wno-%,$(CFLAGS))) -Werror $(OPT) -U_FORTIFY_SOURCE $(INC) \
+CORE_CFLAGS := $(CSTD) $(WARN) $(filter-out $(WARN),$(filter -Wno-%,$(CFLAGS))) -Werror $(OPT) $(X86_OPT) -U_FORTIFY_SOURCE $(INC) \
                $(sort $(filter -DBGI_HAVE_FREETYPE -DBGI_HAVE_VORBISFILE -DBGI_USE_STB_VORBIS -DBGI_NO_DEBUGGER -m% --sysroot% -isystem%,$(CFLAGS))) \
                $(sort $(filter-out -Iinclude -Isrc/include -I. -Itools/%,$(filter -I%,$(CFLAGS))))
 CORE_LIBS   := $(filter -L% -lfreetype -lvorbisfile -lvorbis -logg -lm,$(LDLIBS))
@@ -890,7 +896,7 @@ CORE_OBJ    := $(patsubst src/%.c,$(CORE_DIR)/%.o,$(filter-out src/snd/stb_vorbi
 CORE_RUNS   := $(if $(filter posix headless wasmsim,$(PLATFORM)),yes,$(if $(filter win32,$(PLATFORM)),$(if $(shell command -v wine 2>/dev/null),yes)))
 
 check-core:
-	@python3 tools/checkcore.py $(filter-out src/snd/stb_vorbis.c,$(ENGINE_SRC)) $(wildcard src/include/bgi/*.h src/include/bgi/*/*.h) tests/core.c
+	@python3 tools/checkcore.py $(filter-out src/snd/stb_vorbis.c,$(ENGINE_SRC)) $(wildcard src/include/bgi/*.h src/include/bgi/*/*.h src/gfx/*.h) tests/core.c
 	@$(MAKE) --no-print-directory $(CORE_DIR)/test_core$(EXE)
 	@if [ "$(CORE_RUNS)" = yes ]; then echo "  RUN $(CORE_DIR)/test_core$(EXE)"; $(TEST_RUN) $(CORE_DIR)/test_core$(EXE) || exit 1; \
 	else echo "  $(CORE_DIR)/test_core$(EXE) built; programs of $(PLATFORM) do not run here"; fi

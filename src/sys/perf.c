@@ -26,6 +26,7 @@
  */
 #include "bgi/perf.h"
 #include "bgi/engine.h"
+#include "bgi/display.h"
 #include "bgi/host.h"
 #include "bgi/sys.h"
 #include "bgi/ui.h"
@@ -34,6 +35,8 @@
 #include "bgi/gfx/typeface.h"
 #include "bgi/gfx/bmpmgr.h"
 #include "bgi/gfx/bitmap.h"
+#include "bgi/gfx/compositor.h"
+#include "bgi/release.h"
 #include "bgi/snd/sndout.h"
 #include "bgi/snd/wavemaster.h"
 #include "bgi/core.h"
@@ -73,6 +76,16 @@ int Perf_On(OpenBGI_t* o)
 	return o->perf.on;
 }
 
+// a setting of the "launcher" object, written with the others
+static void Keep(OpenBGI_t* o, const char* key, const char* value)
+{
+	Engine_CfgSet(o, "", key, 0, value);
+	if(o->launcher.running)
+		Launcher_SettingsChanged(o); // (its frames write them)
+	else
+		Engine_SaveGames(o);
+}
+
 void Perf_Set(OpenBGI_t* o, int on, int keep)
 {
 	PerfState_t* p = &o->perf;
@@ -80,6 +93,12 @@ void Perf_Set(OpenBGI_t* o, int on, int keep)
 	if(p->on != on)
 	{ // nothing of an earlier time in the figures
 		p->on = on;
+		if(on)
+		{ // what runs, once, before the figures
+			char line[96];
+			Perf_Engine(o, line, sizeof line);
+			fprintf(stderr, "openbgi: perf: %s\n", line);
+		}
 		p->begin = p->last = 0;
 		p->at = p->count = 0;
 		p->memAt = p->memCount = 0;
@@ -90,13 +109,20 @@ void Perf_Set(OpenBGI_t* o, int on, int keep)
 		p->changed = 1;
 	}
 	if(keep)
-	{
-		Engine_CfgSet(o, "", "perf", 0, on ? "on" : NULL);
-		if(o->launcher.running)
-			Launcher_SettingsChanged(o); // (its frames write them)
-		else
-			Engine_SaveGames(o);
-	}
+		Keep(o, "perf", on ? "on" : NULL);
+}
+
+int Perf_Limit(OpenBGI_t* o)
+{
+	return MainWin_FrameLimits(o) ? !o->perf.freeRun : -1;
+}
+
+void Perf_SetLimit(OpenBGI_t* o, int on, int keep)
+{
+	o->perf.freeRun = !on;
+	MainWin_SetFrameLimit(o, on);
+	if(keep)
+		Keep(o, "frames", on ? NULL : "free");
 }
 
 /* What the settings say, once they are read: the run's programs are up.
@@ -112,6 +138,7 @@ static void Load(OpenBGI_t* o)
 		return;
 	p->forced = env && env[0] && strcmp(env, "0") != 0;
 	Perf_Set(o, p->forced || (Engine_CfgGet(o, "", "perf", 0, value, sizeof value) > 0 && strcmp(value, "on") == 0), 0);
+	Perf_SetLimit(o, !(Engine_CfgGet(o, "", "frames", 0, value, sizeof value) > 0 && strcmp(value, "free") == 0), 0); // (a run before may have left the host free)
 }
 
 void Perf_Stop(OpenBGI_t* o)
@@ -200,6 +227,15 @@ static void Figures(OpenBGI_t* o, const PerfSpan_t* s, int64_t now, PerfFigures_
 	g->diskUs = (int)((p->diskNs - s->diskNs) / 1000);
 }
 
+/* The engine itself: its version, the blitters' fast rows of this build
+ * (SSE2, NEON or none) and the threads a frame is painted on, of the
+ * processors the machine has. */
+void Perf_Engine(OpenBGI_t* o, char* out, size_t n)
+{
+	int cpus = Host_CpuCount(o);
+	snprintf(out, n, "OpenBGI %s  SIMD %s  threads %d of %d", OPENBGI_VERSION, kBlitRows.name, Compositor_Threads(o), cpus < 1 ? 1 : cpus);
+}
+
 void Perf_Line(const PerfFigures_t* g, char* out, size_t n)
 {
 	char mem[48];
@@ -278,7 +314,7 @@ void Perf_End(OpenBGI_t* o, const OpenBGI_Frame_t* f)
 		if(g.valid)
 		{
 			Perf_Line(&g, line, sizeof line);
-			fprintf(stderr, "openbgi: perf: %s; rows %s\n", line, kBlitRows.name);
+			fprintf(stderr, "openbgi: perf: %s\n", line);
 		}
 		SpanOpen(o, &p->log, now);
 	}
@@ -402,7 +438,7 @@ static void Paint(OpenBGI_t* o, int dpi)
 	gh = cell * 5 / 2;
 	gap = cell / 3;
 	w = PERF_COLS * (cell / 2) + 2 * pad;
-	h = 2 * pad + 8 * line + 2 * (gh + 2 * gap);
+	h = 2 * pad + 9 * line + 2 * (gh + 2 * gap);
 	if(cell != p->cell || !p->pix)
 	{
 		Perf_Stop(o);
@@ -445,7 +481,10 @@ static void Paint(OpenBGI_t* o, int dpi)
 		g->diskUs / 1000, g->diskUs % 1000 / 100);
 	Text(p, x, y, t, COL_TEXT);
 	y += line;
-	snprintf(t, sizeof t, "%dx%d on %dx%d %d dpi %s", o->screen.pic.w, o->screen.pic.h, s->width, s->height, dpi, kBlitRows.name);
+	snprintf(t, sizeof t, "%dx%d on %dx%d  %d dpi", o->screen.pic.w, o->screen.pic.h, s->width, s->height, dpi);
+	Text(p, x, y, t, COL_DIM);
+	y += line;
+	Perf_Engine(o, t, sizeof t);
 	Text(p, x, y, t, COL_DIM);
 }
 

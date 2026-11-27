@@ -19,6 +19,7 @@
 //   On-screen pad         the pad of the on-screen controls ("pad")
 //   Touch beside the pad  whether a touch beside the pad reaches the game ("through")
 //   Performance display   the engine's figures of its own run, over everything ("perf")
+//   Frame limiter         no more frames a second than the screen shows; off to measure ("limit"; where the host can)
 //   Close the game        as the window's close button: the game asks, the launcher follows
 //                         ("game")
 //
@@ -65,6 +66,7 @@
 #define ROW_THROUGH     4
 #define ROW_CLOSE_GAME  5
 #define ROW_PERF        6
+#define ROW_LIMIT       7
 
 // what a finger went down on, or the keys' focus is on: a row's number, or
 #define SET_NOTHING     -2
@@ -109,6 +111,8 @@ global int gSetListAt @ G_VARS + 0x48c;     // the list as it was drawn into the
 global int gSetPanelKey @ G_VARS + 0x490;   // what the panel was drawn for (settings_panel; -1: it is to be drawn),
 global int gSetListKey @ G_VARS + 0x494;    // .. and the rows (settings_list)
 global int gSetPerf @ G_VARS + 0x498;       // what the performance display's row shows
+global int gSetLimit @ G_VARS + 0x49c;      // what the frame limit's row shows
+global int gSetLimits @ G_VARS + 0x4a0;     // the host can hold its frames to the screen: there is such a row
 global int gSetRow[SET_MAX_ROWS] @ G_VARS + 0x500;              // the rows, top to bottom: ROW_...
 global char gSetFilters[SET_MAX_FILTERS][32] @ G_VARS + 0x600;  // the filters' names as the engine has them
 
@@ -168,6 +172,8 @@ settings_read() { int i; int n;
     gSetPad = settings_is("pad", "on");
     gSetThrough = settings_is("through", "on");
     gSetPerf = settings_is("perf", "on");
+    gSetLimits = OBGI_CFG_GET("", "limit", 0, gCfgTmp, 16) > 0;
+    gSetLimit = gSetLimits && streq(gCfgTmp, "on");
     gSetWhole = settings_is("whole", "on");
     gSetHigh = settings_is("quality", "high");
     gSetIsGame = settings_is("game", "game");
@@ -192,6 +198,10 @@ settings_read() { int i; int n;
     gSetRow[n + 1] = ROW_THROUGH;
     gSetRow[n + 2] = ROW_PERF;
     n = n + 3;
+    if (gSetLimits) {
+        gSetRow[n] = ROW_LIMIT;
+        n = n + 1;
+    }
     if (gSetIsGame) {
         gSetRow[n] = ROW_CLOSE_GAME;
         n = n + 1;
@@ -286,6 +296,7 @@ settings_label(row) {
     if (row == ROW_PAD) return TXT_SET_PAD;
     if (row == ROW_THROUGH) return TXT_SET_THROUGH;
     if (row == ROW_PERF) return TXT_SET_PERF;
+    if (row == ROW_LIMIT) return TXT_SET_LIMIT;
     return TXT_SET_CLOSE_GAME;
 }
 
@@ -313,6 +324,7 @@ settings_on(row) {
     if (row == ROW_WHOLE) return gSetWhole;
     if (row == ROW_PAD) return gSetPad;
     if (row == ROW_PERF) return gSetPerf;
+    if (row == ROW_LIMIT) return gSetLimit;
     return gSetThrough;
 }
 
@@ -340,7 +352,7 @@ settings_value_w() { return px(210); }
 // All the rows into their bitmap, and the part of it that is seen into the view - when
 // a row looks another way than it was drawn: its value, the focus, the finger on it.
 settings_list() { int i; int row; int y; int m; int sz; int col; int sw; int sh; int sx; int sy; int k; int vw; int tw; int usable;
-    k = gSetFilter * 32 + gSetPad + gSetThrough * 2 + gSetWhole * 4 + gSetHigh * 8 + gSetPerf * 16;
+    k = gSetFilter * 32 + gSetPad + gSetThrough * 2 + gSetWhole * 4 + gSetHigh * 8 + gSetPerf * 16 + gSetLimit * 1024;
     if (gKeyMode) k = k + (gSetFocus + 2) * 4096;
     if (gSetPress >= 0 && !gSetDrag) k = k + (gSetPress + 1) * 65536;
     if (k == gSetListKey) return;
@@ -458,6 +470,9 @@ settings_switch(row, on) {
     } else if (row == ROW_PERF) {
         gSetPerf = on;
         if (on) { OBGI_CFG_SET("", "perf", 0, "on"); } else { OBGI_CFG_SET("", "perf", 0, "off"); }
+    } else if (row == ROW_LIMIT) {
+        gSetLimit = on;
+        if (on) { OBGI_CFG_SET("", "limit", 0, "on"); } else { OBGI_CFG_SET("", "limit", 0, "off"); }
     }
 }
 

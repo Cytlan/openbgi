@@ -101,7 +101,8 @@
 #define TXT_FILTER_NEAREST      gT[76]
 #define TXT_SET_PERF            gT[77]
 
-#define TXT_COUNT               78
+#define TXT_SET_LIMIT           gT[78]
+#define TXT_COUNT               79
 
 strings_en() {
     TXT_WINDOW_TITLE = "OpenBGI - Select game";
@@ -189,4 +190,5 @@ strings_en() {
     TXT_FILTER_BILINEAR = "Bilinear";
     TXT_FILTER_NEAREST = "Nearest";
     TXT_SET_PERF = "Performance display";
+    TXT_SET_LIMIT = "Frame limiter";
 }

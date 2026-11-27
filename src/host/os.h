@@ -421,6 +421,13 @@ void OS_WindowSetResizable(int on);
  * a way of its own (0: the call does nothing). */
 void OS_WindowSetScaling(int rule);
 int OS_WindowScales(void);
+/* A back end that can hold its frames to its screen's refresh rate says
+ * so with OS_HAVE_FRAME_LIMIT and has this (OpenBGI_Window_t.
+ * setFrameLimit): 1 held, which is how it starts, 0 as many frames as
+ * there are. */
+#if defined(OS_HAVE_FRAME_LIMIT)
+void OS_WindowSetFrameLimit(int on);
+#endif
 /* The window's icon: one picture at `count` sizes, the largest first
  * (OpenBGI_Icon_t of openbgi.h), kept until the next call; the window to
  * come takes it when there is none yet.  OS_WindowHasIcons tells whether

@@ -461,6 +461,14 @@ typedef struct OpenBGI_Window
 	 * + n.  The names may differ from run to run (a filter that needs the
 	 * graphics processor is not there without one). */
 	const char* (*filterName)(void* user, int n);
+	/* The frames a second (interface 1.1 on).  A host that can hold its
+	 * frames to its screen's refresh rate does so until told otherwise,
+	 * and says with this member that it can.  The player's choice in the
+	 * settings over a game comes through it: 1 no more frames a second
+	 * than the screen shows, 0 as many as there are (to measure with).
+	 * The engine calls it once its programs are up, and when the choice
+	 * changes.  A host without it shows its frames as it always did. */
+	void (*setFrameLimit)(void* user, int on);
 } OpenBGI_Window_t;
 
 // a picture of an icon (OpenBGI_Window_t.setIcon)

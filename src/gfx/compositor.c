@@ -78,6 +78,13 @@ void WorkerPool_Unlock(WorkerPool_t* p, int locked)
  * instead; `screen` is the back buffer with its rectangle; `bandPixels`
  * the pixel budget of one band; `sharedPool` a pool to paint with, or NULL
  * for a private single-threaded one. */
+// (WorkerPool_Run paints every job on the engine's own thread)
+int Compositor_Threads(OpenBGI_t* o)
+{
+	(void)o;
+	return 1;
+}
+
 void Compositor_Ctor(Compositor_t* c, int maxDirty, ScreenBmp_t* screen, uint32_t bandPixels, WorkerPool_t* sharedPool)
 {
 	c->maxDirty = maxDirty;

@@ -169,6 +169,7 @@ draws two small buttons at the top of the screen.
 | On-screen pad | As the Pad button |
 | Touch beside the pad | Off: while the pad is shown, a touch beside its controls does nothing. For playing with the pad alone |
 | Performance display | Shows a small panel of figures over the picture: frames a second, how long a frame takes, memory, sound and file reads, with two graphs. For finding out why a game runs badly ([below](#the-performance-display)) |
+| Frame limiter | On: the app shows no more frames a second than the screen does, and rests between them. Off: as many as it can, which uses more battery. Turn it off to measure with the performance display |
 | Close the game | Ends the game, as closing its window does on a computer. A game that asks before it ends asks. The game list follows |
 
 - Tap a row to change it. With the pad: the D-pad moves, left and right
@@ -210,7 +211,8 @@ phone's Back button, or with Cancel on the pad.
 | Second graph | The memory over the last minute |
 | SND | Sounds playing, and how far ahead the sound is prepared. "starved" counts sound that came too late and was heard as a gap |
 | DISK | How much was read from files, in how many reads, and how long that took |
-| Last line | The game's picture size, the screen's size and its density. Then the fast drawing loops this build has: `NEON`, `SSE2` or `none` |
+| The line under it | The game's picture size, the screen's size and its density |
+| Last line | The version of OpenBGI. `SIMD`: the fast drawing loops this build has (`NEON`, `SSE2` or `none`). `threads`: how many threads draw a frame, of how many processors the device has |
 
 - The panel takes no touches: what is under it can still be tapped.
 - The same figures are written to standard error every five seconds.

@@ -282,6 +282,12 @@ int Settings_Value(OpenBGI_t* o, const char* key, int i, char* dst, size_t size)
 		Text(dst, size, Perf_On(g) ? "on" : "off");
 		return i == 0 ? 1 : -1;
 	}
+	if(strcmp(key, "limit") == 0)
+	{ // (no value where the host cannot hold its frames: the row is not shown)
+		int limit = Perf_Limit(g);
+		Text(dst, size, limit < 0 ? "" : limit ? "on" : "off");
+		return limit >= 0 && i == 0 ? 1 : -1;
+	}
 	if(strcmp(key, "filters") == 0)
 	{
 		const char* name = FilterName(g, i);
@@ -340,6 +346,13 @@ int Settings_Set(OpenBGI_t* o, const char* key, const char* value)
 		if(!OnOff(value, &on))
 			return 0;
 		Perf_Set(g, on, 1);
+		return 1;
+	}
+	if(strcmp(key, "limit") == 0)
+	{
+		if(!OnOff(value, &on) || Perf_Limit(g) < 0)
+			return 0;
+		Perf_SetLimit(g, on, 1);
 		return 1;
 	}
 	if(strcmp(key, "filter") == 0 || strcmp(key, "quality") == 0 || strcmp(key, "whole") == 0)

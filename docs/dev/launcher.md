@@ -89,6 +89,7 @@ under it.
 |---|---|
 | `"pad"`, `"through"` | The on-screen controls: `Overlay_SetPad`, `Overlay_SetThrough` |
 | `"perf"` | The performance display: `Perf_Set` ([testing.md](testing.md#the-performance-display)) |
+| `"limit"` | The frames held to the screen's rate: `Perf_SetLimit`, which tells the host (`OpenBGI_Window_t.setFrameLimit`) and keeps `"frames": "free"` in the settings file. No value where the host has no such function |
 | `"filters"`, `"filter"`, `"quality"`, `"whole"` | The display settings of `mainwin.c`: `MainWin_ViewSettings`, `MainWin_ViewApply`, `MainWin_ViewSetHigh`. They are on where `MainWin_ViewScales` says so: the host fits a window to its screen (`workArea`), or it said a surface and scales the picture (`setScaling`) |
 | `"game"` set to `close` | `OpenBGI_Close` of the game's engine, after the panel is gone (`closeGame`). The game asks what it asks at the window's close button. When it ends, the launcher follows |
 | `"panel"` set to `close` | `Settings_Close` when the panel's frame is over |

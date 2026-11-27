@@ -86,4 +86,5 @@ strings_ja() {
     TXT_FILTER_BILINEAR = "バイリニア";
     TXT_FILTER_NEAREST = "ニアレスト";
     TXT_SET_PERF = "パフォーマンス表示";
+    TXT_SET_LIMIT = "フレームリミッター";
 }

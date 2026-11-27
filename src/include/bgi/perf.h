@@ -82,6 +82,7 @@ typedef struct PerfState
 	int on;                       // it measures, shows and writes
 	int loaded;                   // the setting was read for this run
 	int forced;                   // BGI_PERF: on whatever the setting says
+	int freeRun;                  // "frames": "free" - the host was told not to hold its frames to the screen's rate
 	int64_t begin, last;          // this frame's start and the one's before (ns); 0: none yet
 	uint16_t period[PERF_FRAMES]; // the last frames' periods in tenths of a millisecond (0xffff: longer), a ring
 	int at, count;
@@ -112,6 +113,14 @@ void Perf_Stop(OpenBGI_t* o);
 int Perf_On(OpenBGI_t* o);
 // on or off, kept in the settings ("perf") when `keep`
 void Perf_Set(OpenBGI_t* o, int on, int keep);
+/* The frames a second, for a host that can hold them to its screen's
+ * refresh rate (MainWin_FrameLimits): 1 held (the start), 0 as many as
+ * there are; -1 where the host cannot.  Kept in the settings ("frames":
+ * "free") when `keep`. */
+int Perf_Limit(OpenBGI_t* o);
+// "OpenBGI 1.0  SIMD NEON  threads 1 of 8": the panel's last line, and a line of the log when the display comes on
+void Perf_Engine(OpenBGI_t* o, char* out, size_t n);
+void Perf_SetLimit(OpenBGI_t* o, int on, int keep);
 
 /* The panel for a surface of `dpi` pixels an inch: its pixels (0x00RRGGBB,
  * *w x *h, the pitch *w), *changed when they are others than at the last

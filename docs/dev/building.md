@@ -59,6 +59,7 @@ Optional, found with pkg-config:
 | `ARCH=` | `x86`, `x86_64`, `arm`, `arm64` (table below) |
 | `CC=`, `CROSS=` | The compiler; the prefix of a cross toolchain |
 | `OPT=` | Optimisation flags (default `-O2 -g`) |
+| `X86_SSE2=0` | A 32-bit x86 build for processors without SSE2 (before the Pentium 4 and the Athlon 64). Such a build has no fast rows in the blitters ([testing.md](testing.md#the-blitters-fast-rows)). Without it a 32-bit x86 build is made with `-msse2` |
 | `SAN=address` | Builds with a sanitizer (native targets) |
 | `MOVIES=system` / `bundled` / `none` | Where FFmpeg comes from |
 | `VORBIS=auto` / `vorbisfile` / `stb` / `none` | The Vorbis decoder |

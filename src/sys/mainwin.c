@@ -53,6 +53,20 @@ static const OpenBGI_Window_t* Host(OpenBGI_t* o)
 	return o->host.window;
 }
 
+// ---- the frames a second ----------------------------------------------------------------------
+
+int MainWin_FrameLimits(OpenBGI_t* o)
+{
+	const OpenBGI_Window_t* t = Host(o);
+	return t && t->setFrameLimit;
+}
+
+void MainWin_SetFrameLimit(OpenBGI_t* o, int on)
+{
+	if(MainWin_FrameLimits(o))
+		Host(o)->setFrameLimit(o->host.user, on != 0);
+}
+
 // ---- the view ---------------------------------------------------------------------------------
 
 int MainWin_ViewOn(OpenBGI_t* o)

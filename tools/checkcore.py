@@ -11,7 +11,10 @@ core's too or the ISO C library's.  A quoted name is looked for in include/ (the
 and beside the file (any other place - src/host/, src/tools/ - is a
 host's); a name in angle brackets must be one of the ISO C99 headers, or
 FreeType's and Vorbis's (the libraries the core may use; FreeType's own
-FT_* header macros included).  The lines inside #if blocks count as well:
+FT_* header macros included).  One file may name more: src/gfx/blit_simd.h
+includes the compiler's own vector headers (emmintrin.h, arm_neon.h),
+which belong to no system and are there or not by the processor the
+build is for.  The lines inside #if blocks count as well:
 every configuration's includes are checked.  Nor may the core's #if
 lines ask for a platform (_WIN32, __linux__, BGI_POSIX, ...) or a
 feature macro of a system (_POSIX_C_SOURCE, _GNU_SOURCE, ...): the core
@@ -37,6 +40,9 @@ ISO_C99 = {
     "stdlib.h", "string.h", "tgmath.h", "time.h", "wchar.h", "wctype.h",
 }
 LIBRARIES = {"ft2build.h", "vorbis/vorbisfile.h", "vorbis/codec.h"}
+# the compiler's vector headers, and the one file that may include them
+VECTOR = {"emmintrin.h", "arm_neon.h"}
+VECTOR_FILE = os.path.join("src", "gfx", "blit_simd.h")
 
 INCLUDE = re.compile(r'^\s*#\s*include\s*(?:"([^"]+)"|<([^>]+)>|([A-Za-z_][A-Za-z0-9_]*))')
 CONDITION = re.compile(r'^\s*#\s*(?:if|ifdef|ifndef|elif)\b(.*)')
@@ -112,7 +118,8 @@ def check(path):
                     if rel.startswith(("src" + os.sep + "host", "src" + os.sep + "tools")):
                         problems.append('%s:%d: "%s" is a host\'s header' % (path, n, quoted))
             elif system:
-                if system not in ISO_C99 and system not in LIBRARIES:
+                vector = system in VECTOR and os.path.relpath(os.path.realpath(path), ROOT) == VECTOR_FILE
+                if system not in ISO_C99 and system not in LIBRARIES and not vector:
                     problems.append("%s:%d: <%s> is neither an ISO C header nor one of the core's libraries" % (path, n, system))
             elif macro and not macro.startswith("FT_"):
                 problems.append("%s:%d: #include %s: a header named by a macro" % (path, n, macro))
