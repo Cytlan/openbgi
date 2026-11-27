@@ -143,14 +143,75 @@ int CbgBuildTree(CbgNode_t* nodes, const uint32_t* weights, uint32_t leaves)
 	}
 }
 
+/* The stream's codes through a table: the next CBG_FAST_BITS bits of the
+ * stream say which leaf they reach and after how many bits (most codes are
+ * shorter than that), or which parent they lead to, from where the tree is
+ * walked on.  The table loop reads up to three bytes ahead of the bit it is
+ * at; the stream has them while more than CBG_FAST_TAIL symbols are still
+ * to come (each takes a bit at least), and the last symbols are taken bit
+ * by bit, so nothing behind the stream is read. */
+#define CBG_FAST_BITS 12
+#define CBG_FAST_TAIL 32
+
 /* decode `count` symbols from the bit stream at src into dst, bits taken MSB
  * first; a symbol is the index of the leaf reached, i.e. the byte value */
 static void CbgHuffDecode(uint8_t* dst, const uint8_t* src, const CbgNode_t* nodes,
 	uint32_t root, uint32_t count)
 {
 	uint8_t mask = 0x80;
-	uint32_t i;
-	for(i = 0; i < count; i++)
+	uint32_t i = 0;
+	if(nodes[root].isParent == 1 && count > CBG_FAST_TAIL)
+	{
+		uint16_t* tab = (uint16_t*)BGI_Alloc(sizeof(uint16_t) << CBG_FAST_BITS); // the bits taken << 12 | the leaf; or the parent, with 0 for the bits
+		uint32_t p, fast = count - CBG_FAST_TAIL;
+		uint64_t acc = 0; // the bytes read, the stream's next bit at bit `cnt` - 1
+		int cnt = 0;
+		for(p = 0; p < 1u << CBG_FAST_BITS; p++)
+		{
+			uint32_t node = root, len = 0;
+			while(nodes[node].isParent == 1 && len < CBG_FAST_BITS)
+			{
+				node = (p >> (CBG_FAST_BITS - 1 - len)) & 1 ? nodes[node].right : nodes[node].left;
+				len++;
+			}
+			tab[p] = (uint16_t)((nodes[node].isParent == 1 ? 0 : len << 12) | node);
+		}
+		for(; i < fast; i++)
+		{
+			uint32_t e, node;
+			while(cnt < CBG_FAST_BITS)
+			{
+				acc = (acc << 8) | *src++;
+				cnt += 8;
+			}
+			e = tab[(acc >> (cnt - CBG_FAST_BITS)) & ((1u << CBG_FAST_BITS) - 1)];
+			node = e & 0xfff;
+			if(e >> 12)
+				cnt -= (int)(e >> 12);
+			else
+			{ // a code longer than the table's bits: on through the tree
+				cnt -= CBG_FAST_BITS;
+				do
+				{
+					if(cnt == 0)
+					{
+						acc = (acc << 8) | *src++;
+						cnt = 8;
+					}
+					cnt--;
+					node = (acc >> cnt) & 1 ? nodes[node].right : nodes[node].left;
+				} while(nodes[node].isParent == 1);
+			}
+			dst[i] = (uint8_t)node;
+		}
+		BGI_Free(tab);
+		if(cnt)
+		{ // back to the byte and the bit that come next
+			src -= 1 + (cnt - 1) / 8;
+			mask = (uint8_t)(1u << ((cnt - 1) & 7));
+		}
+	}
+	for(; i < count; i++)
 	{
 		uint32_t node = root;
 		while(nodes[node].isParent == 1)
@@ -203,29 +264,24 @@ static void CbgUnfilter(uint8_t* pix, const RawImageHeader_t* h)
 	uint32_t w = h->width, hgt = h->height;
 	uint32_t bpp = (h->bpp & 0xffff) >> 3; // bytes per pixel
 	uint32_t stride = w * bpp;
-	uint32_t x, y, c;
+	uint32_t i, y;
+	uint8_t* d = pix;
 
-	for(y = 0; y < hgt; y++)
+	/* (a neighbour is read only where it exists: the original forms the
+	 * index of a missing one with a 32-bit wrap-around, which would be an
+	 * out-of-bounds read with 64-bit pointers) */
+	if(!stride || !hgt)
+		return;
+	for(i = bpp; i < stride; i++) // the first row: the left neighbour alone
+		d[i] = (uint8_t)(d[i] + d[i - bpp]);
+	for(y = 1; y < hgt; y++)
 	{
-		uint8_t* row = pix + y * stride;
-		for(x = 0; x < w; x++)
-		{
-			for(c = 0; c < bpp; c++)
-			{
-				uint8_t* d = row + x * bpp + c;
-				// a neighbour is read only where it exists: the original forms the
-				// index of a missing one with a 32-bit wrap-around, which would be an
-				// out-of-bounds read with 64-bit pointers
-				int up = y ? *(d - stride) : -1;
-				int left = x ? *(d - bpp) : -1;
-				int pred;
-				if(up >= 0)
-					pred = left >= 0 ? (left + up) >> 1 : up;
-				else
-					pred = left >= 0 ? left : 0;
-				*d = (uint8_t)(*d + pred);
-			}
-		}
+		const uint8_t* up = d;
+		d += stride;
+		for(i = 0; i < bpp; i++) // the first pixel: the upper neighbour alone
+			d[i] = (uint8_t)(d[i] + up[i]);
+		for(; i < stride; i++)
+			d[i] = (uint8_t)(d[i] + ((d[i - bpp] + up[i]) >> 1));
 	}
 }
 

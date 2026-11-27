@@ -859,6 +859,50 @@ typedef struct OpenBGI_MovieDecoder
 	void (*close)(void* user, void* movie);
 } OpenBGI_MovieDecoder_t;
 
+/* Threads (interface 1.1 on).  The engine paints a frame's bands on
+ * several threads when the host gives it these: threads that it starts
+ * and ends itself, locks, and signals to wait for.  Its own thread - the
+ * one that calls OpenBGI_RunFrame - stays the only one that calls
+ * anything else of the host's, and the only one the host calls the
+ * engine on (but for what this file says of other threads elsewhere);
+ * the engine's threads call these ten functions and nothing more.  A
+ * host without the table (NULL) has everything painted on the engine's
+ * thread, as in 1.0.
+ *
+ * `start` runs fn(arg) on a new thread and returns a handle, NULL when
+ * no thread could be made (the engine then goes on with fewer); `join`
+ * waits until fn has returned and frees the handle.  A lock is held by
+ * one thread at a time and is not taken twice by the same thread.
+ * `wait` gives up the lock, sleeps until the signal is woken, and takes
+ * the lock again before it returns; it may return without a wake, so
+ * the engine looks again at what it waited for.  `wake` wakes one of the
+ * threads that wait for the signal (all of them with `all`); the engine
+ * calls it with the lock held that those threads waited with.  NULL
+ * from lockNew or signalNew: the engine uses no threads.
+ *
+ * With the table the sound no longer waits for the engine's thread: an
+ * OpenBGI_AudioRead that finds the ring short mixes the missing frames
+ * on the thread it is called on, whatever the engine's thread is at - a
+ * load, a picture, a slow frame.  It takes a lock of this table for that
+ * (lock, unlock), which the engine's thread holds while it changes a
+ * sound, and may ask the host's clock (ticksMs).  A movie's sound is not
+ * in what is mixed there: its decoder (OpenBGI_MovieDecoder_t) is asked
+ * on the engine's thread only. */
+typedef struct OpenBGI_Threads
+{
+	uint32_t size; // sizeof(OpenBGI_Threads_t) as the host was compiled
+	void* (*start)(void* user, void (*fn)(void* arg), void* arg);
+	void (*join)(void* user, void* thread);
+	void* (*lockNew)(void* user);
+	void (*lockFree)(void* user, void* lock);
+	void (*lock)(void* user, void* lock);
+	void (*unlock)(void* user, void* lock);
+	void* (*signalNew)(void* user);
+	void (*signalFree)(void* user, void* signal);
+	void (*wait)(void* user, void* signal, void* lock);
+	void (*wake)(void* user, void* signal, int all);
+} OpenBGI_Threads_t;
+
 /* The services a host provides.  The engine copies the struct and the
  * tables it points at (OpenBGI_New), so they need not stay; `user` is
  * handed back to every call, always on the thread that runs the engine.
@@ -893,6 +937,7 @@ typedef struct OpenBGI_Host
 	const OpenBGI_CdAudio_t* cdAudio;           // CD audio; NULL: none
 	const OpenBGI_MoviePlayer_t* moviePlayer;   // a movie player of the host's own; NULL: none
 	const OpenBGI_MovieDecoder_t* movieDecoder; // a movie decoder for the engine to show and mix; NULL: none
+	const OpenBGI_Threads_t* threads;           // threads, locks and signals for the engine's own use (interface 1.1 on); NULL: one thread, as in 1.0
 } OpenBGI_Host_t;
 
 // a rectangle of the window's picture: its top left pixel and its size
@@ -1747,7 +1792,11 @@ OPENBGI_API void OpenBGI_DebugClose(OpenBGI_t* o);
  * `frames` frames into `out`, from any thread, one reader at a time
  * (typically the sound device's callback), from OpenBGI_New until
  * OpenBGI_Delete, which the reader must not outlive.  It returns how many
- * frames there were; the rest of `out` is silence.  It never waits.
+ * frames there were; the rest of `out` is silence.  It does not wait for
+ * the engine to mix: with the host's threads table (OpenBGI_Threads_t) it
+ * mixes what the ring lacks itself, and waits only for the engine's
+ * thread to finish a change to a sound, which is short; without the
+ * table it never waits and never mixes.
  *
  * OpenBGI_SetAudioLead says how much the host's output needs mixed ahead
  * of what it read: at least the most it reads at once plus the longest

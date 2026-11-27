@@ -32,8 +32,10 @@ uint32_t BGI_HashUpdate(uint32_t* key);
 /* The same generator on the engine's state (o->util.hashKey), used by
  * DSC, the save scrambler and the SDC/DCFS encoders: a seed and the steps
  * that follow it.  (The original holds a lock around each such sequence
- * because its loader thread decodes DSC data too; the engine runs on one
- * thread.) */
+ * because its loader thread decodes DSC data too.  Here the engine's
+ * thread alone uses this state; a load that is unpacked beside it calls
+ * BGI_DscDecode without an engine, which then keeps a state of its
+ * own.) */
 void BGI_HashSeed(OpenBGI_t* o, uint32_t key);
 uint32_t BGI_HashNext(OpenBGI_t* o);
 

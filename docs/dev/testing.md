@@ -79,6 +79,22 @@ on standard error every five seconds.
   priority, the rectangle's size and where it was last. `the whole
   picture` counts the full repaints; `others` what found no room among
   16 lines.
+- `BGI_PERF=2` also says where the engine's time went in those five
+  seconds, for all passes together and for the longest one:
+
+  | Part | What it is |
+  |---|---|
+  | `loading` | `LoadFile` on the engine's thread: a file read and unpacked. The count is the files. |
+  | `painting` | The compositor painting what changed. The count is the paintings. |
+  | `mixing` | The mixer run on the engine's thread. |
+  | `waiting for helpers` | The engine's thread waiting for a job of the helper threads. |
+  | `the rest` | The programs, text drawn into windows, pictures made from loaded files, everything else. |
+
+- `sound: N frames mixed by the reader` is the sound the host's audio
+  thread mixed itself because the engine's thread was busy. 44100
+  frames are a second.
+- `file cache: N of M MB` is the game's own cache of loaded files. It is
+  part of the process's memory and grows until it is full.
 - `tests/perf.c` runs it on clocks the test moves.
 
 ## The blitters' fast rows
@@ -136,6 +152,69 @@ aarch64-linux-gnu-gcc -std=c99 -O3 -static -Iinclude -Isrc/include -Isrc/gfx \
     -D_POSIX_C_SOURCE=200809L -o test_blitrows_arm64 tests/blitrows.c src/gfx/blit_rows.c
 qemu-aarch64 ./test_blitrows_arm64
 ```
+
+## Threads
+
+`src/gfx/compositor.c` (`WorkerPool_t`). A frame is cut into bands, and
+the bands are jobs. With threads from the host
+(`OpenBGI_Host_t.threads`) the jobs are shared: the engine's thread and
+its helpers each take the next job until none is left.
+
+| Setting | Threads |
+|---|---|
+| Nothing | One for each processor (`OpenBGI_Machine_t.cpuCount`), 32 at most |
+| `BGI_THREADS=N` in the environment | N |
+| `--threads=N` on the command line | N. It wins over the environment |
+| A host without the table; the browser; a run for a first picture; the settings' own engine | 1 |
+
+- The core starts no thread of its own: it may include only ISO C
+  headers. The POSIX and Win32 back ends give the table (pthreads;
+  critical sections and semaphores).
+- A run wakes as many helpers as it has jobs to share. A frame of one
+  job wakes none.
+- The count of threads changes no pixel: jobs never overlap, and each
+  paints the same whoever takes it. The band size does change a few
+  pixels of a turned or scaled sprite, as it did in the original.
+- A machine that names no cache sizes (every ARM machine) has bands of
+  32 768 pixels where there are threads, and one job a rectangle on one
+  thread, as before.
+- A draw method must write nothing but its band. The map's cache is the
+  one thing that was written at a first draw: it is brought up to date
+  before the jobs start (`Map_Prepare`).
+- An effector, and a background that reads the screen, still make the
+  frame one job (`Compositor_CanBand`).
+- The performance display shows the count: `threads 8 of 8`.
+- `tests/pool.c` runs the pool with 1 to 8 threads. The test host uses
+  threads only when `BGI_THREADS` is set, so its pictures can be
+  compared: `BGI_THREADS=1` against `BGI_THREADS=8`.
+- The sound does not wait for the engine's thread. A read that finds
+  the ring short mixes the missing frames itself, on the host's audio
+  thread (`OpenBGI_AudioRead`), whatever the engine's thread is at. The
+  engine's next run mixes that much less.
+- The voices and their streams are behind a lock of the host's. The
+  engine's thread holds it wherever it touches one (`SndOut_Enter`,
+  `SndOut_Leave`: the sound library's calls, the fade timer, the mixer's
+  own run, a movie's decoder). Long work stays outside the lock: a
+  file is read and a sound effect decoded before the lock is taken.
+- The mixer reads no file: every sound is in memory. A host without the
+  threads table only reads, as in 1.0.
+- A movie's sound is the exception. Its decoder is asked on the engine's
+  thread only, so the reader leaves it out of what it mixes: a movie's
+  sound still waits for the engine's thread.
+- `tests/sndout.c` checks that the reader mixes sample for sample, that
+  it waits while the engine's thread is at a voice, and that the lock
+  is let go when an error leaves such work.
+- A background load (the wait objects of `src/wait/wait_load.c`: a
+  picture, a sound effect, a movie sequence) reads its file on the
+  engine's thread and has it unpacked on a helper (`bgi/async.h`, two
+  threads of the host's). The program waits on its wait object
+  meanwhile and the machine goes on, as with the original's loader
+  thread. `LoadFile_Unpack` knows no engine; the DSC unpacker takes a
+  generator state of its own there. A host without threads unpacks at
+  once, as in 1.0.
+- `make test SAN=thread` runs the tests under the thread sanitizer.
+  `test_gl` reports races inside Mesa's own threads there; they are not
+  the engine's.
 
 ## The test host
 

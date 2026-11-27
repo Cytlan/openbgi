@@ -1321,6 +1321,8 @@ int main(int argc, char** argv)
 	gMachine = *OsCommon_Machine(); // (the language of the system it runs on is not the test's business)
 	gMachine.uiLanguage = FixedUiLanguage;
 	gHost.machine = &gMachine;
+	if(getenv("BGI_THREADS")) // (asked for: the frames' bands on several threads, which paint the same pictures)
+		gHost.threads = OS_Threads();
 	gHost.shell = OsCommon_Shell();
 	gHost.movieDecoder = OsCommon_MovieDecoder();
 	o = NewEngine();

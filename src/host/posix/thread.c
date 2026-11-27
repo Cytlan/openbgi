@@ -71,6 +71,96 @@ void OS_ThreadJoin(OsThread_t* t)
 	free(t);
 }
 
+// ---- the engine's own threads (OpenBGI_Host_t.threads) --------------------------------------------
+
+static void* ThreadsStart(void* user, void (*fn)(void* arg), void* arg)
+{
+	(void)user;
+	return OS_ThreadStart(fn, arg, OS_PRIO_NORMAL);
+}
+
+static void ThreadsJoin(void* user, void* thread)
+{
+	(void)user;
+	OS_ThreadJoin((OsThread_t*)thread);
+}
+
+static void* ThreadsLockNew(void* user)
+{
+	pthread_mutex_t* m = (pthread_mutex_t*)malloc(sizeof *m);
+	(void)user;
+	if(m && pthread_mutex_init(m, NULL) != 0)
+	{
+		free(m);
+		m = NULL;
+	}
+	return m;
+}
+
+static void ThreadsLockFree(void* user, void* lock)
+{
+	(void)user;
+	if(!lock)
+		return;
+	pthread_mutex_destroy((pthread_mutex_t*)lock);
+	free(lock);
+}
+
+static void ThreadsLock(void* user, void* lock)
+{
+	(void)user;
+	pthread_mutex_lock((pthread_mutex_t*)lock);
+}
+
+static void ThreadsUnlock(void* user, void* lock)
+{
+	(void)user;
+	pthread_mutex_unlock((pthread_mutex_t*)lock);
+}
+
+static void* ThreadsSignalNew(void* user)
+{
+	pthread_cond_t* c = (pthread_cond_t*)malloc(sizeof *c);
+	(void)user;
+	if(c && pthread_cond_init(c, NULL) != 0)
+	{
+		free(c);
+		c = NULL;
+	}
+	return c;
+}
+
+static void ThreadsSignalFree(void* user, void* signal)
+{
+	(void)user;
+	if(!signal)
+		return;
+	pthread_cond_destroy((pthread_cond_t*)signal);
+	free(signal);
+}
+
+static void ThreadsWait(void* user, void* signal, void* lock)
+{
+	(void)user;
+	pthread_cond_wait((pthread_cond_t*)signal, (pthread_mutex_t*)lock);
+}
+
+static void ThreadsWake(void* user, void* signal, int all)
+{
+	(void)user;
+	if(all)
+		pthread_cond_broadcast((pthread_cond_t*)signal);
+	else
+		pthread_cond_signal((pthread_cond_t*)signal);
+}
+
+const OpenBGI_Threads_t* OS_Threads(void)
+{
+	static const OpenBGI_Threads_t table = {sizeof(OpenBGI_Threads_t), ThreadsStart, ThreadsJoin, ThreadsLockNew, ThreadsLockFree, ThreadsLock, ThreadsUnlock,
+		ThreadsSignalNew, ThreadsSignalFree, ThreadsWait, ThreadsWake};
+	return &table;
+}
+
 // the processors online, at least 1
 int OS_CpuCount(void)
 {

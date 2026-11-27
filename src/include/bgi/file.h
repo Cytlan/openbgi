@@ -127,6 +127,7 @@ int FileSetList_SetList(OpenBGI_t* o, FileSet_t* s, char** names);     // NULL-t
 typedef struct FileCache FileCache_t;
 FileCache_t* FileCache_New(uint32_t capacity); // capacity in bytes
 void FileCache_Delete(FileCache_t* c);
+void FileCache_Usage(const FileCache_t* c, uint32_t* used, uint32_t* capacity); // bytes held, and the most it may hold (the performance log)
 int FileCache_Add(OpenBGI_t* o, FileCache_t* c, const char* arc, const char* name, const void* data, uint32_t size); // 1 stored, 0 too large or empty
 int FileCache_Lookup(OpenBGI_t* o, FileCache_t* c, void* dst, uint32_t* size, const char* arc, const char* name);    // 1 on a hit (data copied to dst)
 
@@ -225,6 +226,29 @@ void Loader_Stop(OpenBGI_t* o);
  * CompressedBG.  Returns the size in buf.  Prompts for the disc while the
  * file is missing; throws when the user gives up (or without a disc). */
 uint32_t LoadFile(OpenBGI_t* o, void* buf, const char* arc, const char* name);
+/* LoadFile keeps the packed files of archives as it unpacked them, the
+ * least recently used ones going first, and answers a load of one it has
+ * with a copy: programs load the same pictures again and again, and the
+ * unpacking is most of a load.  --unpack-cache=MB sets its size, 0 for
+ * none.  Loose files are not kept (a program may write them), nor files
+ * that are stored as they are (reading those is cheap). */
+#define UNPACK_CACHE_MB 128
+void LoadFile_FreeCache(OpenBGI_t* o);
+/* A background load's split of LoadFile (src/wait/wait_load.c): while
+ * o->files.defer points at one of these, a LoadFile that finds the file
+ * packed (DSC, CompressedBG) reads it and stops there - `pending` set,
+ * the stored bytes kept - and the caller has them unpacked beside the
+ * engine's thread: LoadFile_Unpack touches nothing but the two buffers
+ * and gives the size LoadFile would have given (0: the file does not
+ * unpack). */
+typedef struct LoadDefer
+{
+	int pending;      // the file was read and is still to be unpacked
+	uint8_t* raw;     // its stored bytes, in a block of their own; NULL: they lie in the load's buffer itself
+	uint32_t rawSize; // how many
+	uint32_t limit;   // the most a file may unpack to (the load buffers' size)
+} LoadDefer_t;
+uint32_t LoadFile_Unpack(LoadDefer_t* d, void* buf);
 /* The bytes a buffer for LoadFile needs when the file's size is not asked
  * for first: the largest file the build loads (32 MB up to 1.69 build
  * 451, then 40, 48 and, from 1.529 on, 64 MB).  The original's own load

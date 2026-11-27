@@ -352,7 +352,7 @@ void Gfx_Create(OpenBGI_t* o, uint32_t bandPixels, int cpus)
 {
 	Gfx_t* g;
 
-	o->gfx.workerPool = WorkerPool_New(cpus);
+	o->gfx.workerPool = WorkerPool_New(o, cpus);
 	g = (Gfx_t*)BGI_Calloc(sizeof(Gfx_t));
 	Gfx_Ctor(o, g, NULL, bandPixels, o->gfx.workerPool); // the HWND stays the host's
 	o->gfx.gfx = g;

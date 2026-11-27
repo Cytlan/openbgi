@@ -107,6 +107,7 @@ host built with an older header keeps working.
 | 1.1 | `OpenBGI_SetSurface`, `OpenBGI_SurfaceTouch`, and the layer at the end of `OpenBGI_Frame_t` (`layer`, `layerWidth`, `layerHeight`, `layerPitch`, `layerChanges`, `layerChange`): the engine's on-screen controls, for a host whose picture does not fill what it draws on. A host that calls neither gets no layer |
 | 1.1 | `OpenBGI_Machine_t.processMemory`: the bytes of memory the process holds, for the performance display ([testing.md](testing.md#the-performance-display)). A host without it shows no memory there |
 | 1.1 | `OpenBGI_Window_t.setFrameLimit`: a host that can hold its frames to its screen's refresh rate has it, and holds them until told otherwise. The row "Frame limiter" of the settings over a game comes through it. A host without it has no such row |
+| 1.1 | `OpenBGI_Host_t.threads` (`OpenBGI_Threads_t`): threads, locks and signals of the host's, for the engine's own use. With them a frame's bands are painted on several threads ([testing.md](testing.md#threads)). The engine's threads call these ten functions and nothing else of the host's. A host without the table paints on one thread, as in 1.0 |
 | 1.1 | Not an addition, a change for hosts that hand over a launcher: a game the launcher started is followed by the launcher. The frames go on until the launcher ends or the host calls `OpenBGI_Quit` |
 
 What a newer library adds may reach an older host. The header says

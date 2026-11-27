@@ -96,7 +96,9 @@ int Wm_PlayWave(OpenBGI_t* o, const void* file, uint32_t size)
 	s = WmStream_Open(o, src, 1.0, 1, &err);
 	if(!s)
 		return 0;
+	SndOut_Enter(o);
 	Voice_Attach(&o->snd.waveVoice, s); // the wave before stops
 	Voice_Play(&o->snd.waveVoice, 0);
+	SndOut_Leave(o);
 	return 1;
 }

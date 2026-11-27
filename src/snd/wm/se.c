@@ -44,6 +44,7 @@ uint32_t Wm_SeLoad(OpenBGI_t* o, int slot, const void* bwFile, int fadeInMs, dou
 			WmStream_FadeIn(s, (uint32_t)fadeInMs); // the result is ignored: a fade longer than the sound changes nothing
 			if(rate != 1.0)
 				WmStream_TimeStretch(s, rate);
+			SndOut_Enter(o); // (the sound was decoded outside: the reader waits for the slot's change only)
 			Voice_Attach(r->voice, s);
 			r->stream = s;
 			r->fadeVol.active = 0;
@@ -52,6 +53,7 @@ uint32_t Wm_SeLoad(OpenBGI_t* o, int slot, const void* bwFile, int fadeInMs, dou
 			r->fade.active = 0;
 			r->active = 1;
 			Voice_SetVolume(r->voice, Record_Level(o, r));
+			SndOut_Leave(o);
 		}
 	}
 	return res;
@@ -61,6 +63,7 @@ uint32_t Wm_SeLoad(OpenBGI_t* o, int slot, const void* bwFile, int fadeInMs, dou
 int Wm_SeUnload(OpenBGI_t* o, int slot)
 {
 	int res = 0;
+	SndOut_Enter(o);
 	if(!Wm_Running(o))
 		res = WM_E_NOT_RUNNING;
 	else if((uint32_t)slot >= WM_SE_SLOTS)
@@ -71,6 +74,7 @@ int Wm_SeUnload(OpenBGI_t* o, int slot)
 		o->snd.se[slot].stream = NULL;
 		o->snd.se[slot].active = 0;
 	}
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -86,6 +90,7 @@ static void Se_SetPan(Voice_t* v, int pan)
 int Wm_SePlay(OpenBGI_t* o, int slot, int volume, int pan)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_SeCheck(o, slot);
 	if(res == 0)
 	{
@@ -97,6 +102,7 @@ int Wm_SePlay(OpenBGI_t* o, int slot, int volume, int pan)
 		Voice_Stop(r->voice);
 		Voice_Play(r->voice, Record_Level(o, r));
 	}
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -104,9 +110,11 @@ int Wm_SePlay(OpenBGI_t* o, int slot, int volume, int pan)
 int Wm_SeStop(OpenBGI_t* o, int slot)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_SeCheck(o, slot);
 	if(res == 0)
 		Voice_Stop(o->snd.se[slot].voice);
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -114,6 +122,7 @@ int Wm_SeStop(OpenBGI_t* o, int slot)
 int Wm_SeSetMasterVolume(OpenBGI_t* o, int slot, uint32_t vol)
 {
 	int res = 0;
+	SndOut_Enter(o);
 	if(!Wm_Running(o))
 		res = WM_E_NOT_RUNNING;
 	else if((uint32_t)slot >= WM_SE_SLOTS)
@@ -125,6 +134,7 @@ int Wm_SeSetMasterVolume(OpenBGI_t* o, int slot, uint32_t vol)
 		o->snd.se[slot].master = (int32_t)vol;
 		Voice_SetVolume(o->snd.se[slot].voice, Record_Level(o, &o->snd.se[slot]));
 	}
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -134,6 +144,7 @@ int Wm_SeSetMasterVolume(OpenBGI_t* o, int slot, uint32_t vol)
 int Wm_SeSetChannelVolume(OpenBGI_t* o, int slot, uint32_t vol)
 {
 	int res = 0;
+	SndOut_Enter(o);
 	if(!Wm_Running(o))
 		res = WM_E_NOT_RUNNING;
 	else if((uint32_t)slot >= WM_SE_SLOTS)
@@ -143,6 +154,7 @@ int Wm_SeSetChannelVolume(OpenBGI_t* o, int slot, uint32_t vol)
 		o->snd.se[slot].aux = (int32_t)(vol > 0x80 ? 0x80 : vol);
 		Voice_SetVolume(o->snd.se[slot].voice, Record_Level(o, &o->snd.se[slot]));
 	}
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -150,8 +162,10 @@ int Wm_SeSetChannelVolume(OpenBGI_t* o, int slot, uint32_t vol)
 int Wm_SeFadeOut(OpenBGI_t* o, int slot, int ms)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_SeCheck(o, slot);
 	if(res == 0)
 		Fade_Start(&o->snd.se[slot].fade, Clock_HostMs(o), ms, o->snd.se[slot].fadeLevel, 0);
+	SndOut_Leave(o);
 	return res;
 }

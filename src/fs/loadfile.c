@@ -71,7 +71,81 @@ static uint32_t GetFileSizeDecoded(OpenBGI_t* o, const char* arc, const char* na
  * DSC / CompressedBG data in place - from 1.69 build 472 on through a
  * buffer of its own (LoadFileDecoded).  The bytes in buf.  Throws when the
  * file is missing and there is no disc to ask for, or the user aborts. */
+/* What LoadFile does to a file it has read, up to 1.69 build 444: a DSC
+ * or CompressedBG file is unpacked over itself; `n` is the size as stored,
+ * and the result the size it has then.  Nothing of an engine is touched. */
+static uint32_t UnpackInPlace(void* buf, uint32_t n)
+{
+	if(BGI_IsDsc(buf))
+	{
+		PixBuf_t tmp;
+		uint8_t* out;
+		PixBuf_Ctor(&tmp);
+		out = PixBuf_Alloc(&tmp, BGI_DscOutSize(buf));
+		n = BGI_DscDecode(NULL, buf, out);
+		memcpy(buf, out, n);
+		PixBuf_Dtor(&tmp);
+	}
+	else if(BGI_IsCbg(buf))
+	{
+		uint32_t size = BGI_CbgOutSize(buf);
+		uint8_t* out = (uint8_t*)BGI_Alloc(size);
+		if(BGI_CbgDecode(buf, out) == 0)
+		{
+			memcpy(buf, out, size);
+			n = size;
+		}
+		BGI_Free(out); // a CompressedBG that does not decode is left as stored
+	}
+	return n;
+}
+
+static uint32_t LoadFileNow(OpenBGI_t* o, void* buf, const char* arc, const char* name);
+
+// the cache of unpacked files, made at the first use; NULL when there is to be none
+static FileCache_t* UnpackCache(OpenBGI_t* o)
+{
+	if(!o->files.unpackCache && !o->files.unpackCacheOff)
+	{
+		uint32_t mb = o->engine.optUnpackCache > 0 ? (uint32_t)o->engine.optUnpackCache - 1 : UNPACK_CACHE_MB;
+		if(mb > 2047)
+			mb = 2047; // (the capacity is a 32-bit count of bytes)
+		if(mb)
+			o->files.unpackCache = FileCache_New(mb << 20);
+		if(!o->files.unpackCache)
+			o->files.unpackCacheOff = 1;
+	}
+	return o->files.unpackCache;
+}
+
+void LoadFile_FreeCache(OpenBGI_t* o)
+{
+	if(o->files.unpackCache)
+		FileCache_Delete(o->files.unpackCache);
+	o->files.unpackCache = NULL;
+	o->files.unpackCacheOff = 0;
+}
+
 uint32_t LoadFile(OpenBGI_t* o, void* buf, const char* arc, const char* name)
+{
+	FileCache_t* c = arc && name ? UnpackCache(o) : NULL;
+	uint32_t n = 0;
+	Perf_PartBegin(o, PERF_PART_LOAD);
+	if(c && FileCache_Lookup(o, c, buf, &n, arc, name) && n)
+	{ // unpacked before: the copy is the load (also for a background load, which then has nothing left to unpack)
+		o->files.unpackHits++;
+		Perf_PartEnd(o, PERF_PART_LOAD);
+		return n;
+	}
+	o->files.packed = 0;
+	n = LoadFileNow(o, buf, arc, name);
+	if(c && o->files.packed && n && !(o->files.defer && o->files.defer->pending))
+		FileCache_Add(o, c, arc, name, buf, n);
+	Perf_PartEnd(o, PERF_PART_LOAD);
+	return n;
+}
+
+static uint32_t LoadFileNow(OpenBGI_t* o, void* buf, const char* arc, const char* name)
 {
 	uint32_t n;
 	char msg[0x200];
@@ -112,28 +186,15 @@ uint32_t LoadFile(OpenBGI_t* o, void* buf, const char* arc, const char* name)
 		}
 	}
 
-	if(BGI_IsDsc(buf))
-	{
-		PixBuf_t tmp;
-		uint8_t* out;
-		PixBuf_Ctor(&tmp);
-		out = PixBuf_Alloc(&tmp, BGI_DscOutSize(buf));
-		n = BGI_DscDecode(o, buf, out);
-		memcpy(buf, out, n);
-		PixBuf_Dtor(&tmp);
+	if(o->files.defer && !o->files.defer->pending && (BGI_IsDsc(buf) || BGI_IsCbg(buf)))
+	{ // a background load: read, and unpacked beside this thread
+		o->files.defer->pending = 1;
+		o->files.defer->raw = NULL;
+		o->files.defer->rawSize = n;
+		return n;
 	}
-	else if(BGI_IsCbg(buf))
-	{
-		uint32_t size = BGI_CbgOutSize(buf);
-		uint8_t* out = (uint8_t*)BGI_Alloc(size);
-		if(BGI_CbgDecode(buf, out) == 0)
-		{
-			memcpy(buf, out, size);
-			n = size;
-		}
-		BGI_Free(out); // a CompressedBG that does not decode is left as stored
-	}
-	return n;
+	o->files.packed = BGI_IsDsc(buf) || BGI_IsCbg(buf);
+	return UnpackInPlace(buf, n);
 }
 
 /* "80 31" up to 1.69 build 444, "81 30" of 1.529 on: [off, off + size) of
@@ -197,6 +258,30 @@ static uint8_t* RawAlloc(uint32_t n)
 	return raw;
 }
 
+static int DecodeWhole(void* dst, const uint8_t* src, uint32_t srcSize, uint32_t limit, uint32_t* out);
+
+/* A background load that takes the unpacking on itself (o->files.defer):
+ * a whole packed file that would fit keeps its stored bytes - they are
+ * the load's from here on, *raw is NULL - and 1 is the answer, with a
+ * size of 1 for now.  0: nothing of the kind, the caller unpacks. */
+static int Defer(OpenBGI_t* o, void* dst, uint8_t** raw, uint32_t srcSize, uint32_t off, uint32_t size, uint32_t* out)
+{
+	LoadDefer_t* d = o->files.defer;
+	uint32_t n = 0;
+	if(!d || d->pending || !dst || off || size || !(BGI_IsDsc(*raw) || BGI_IsCbg(*raw)))
+		return 0;
+	if(DecodeWhole(NULL, *raw, srcSize, DecodedLimit(o), &n) != 0)
+		return 0; // (too large, or no picture: the caller's errors)
+	d->pending = 1;
+	d->raw = *raw;
+	d->rawSize = srcSize;
+	d->limit = DecodedLimit(o);
+	*raw = NULL;
+	if(out)
+		*out = 1;
+	return 1;
+}
+
 /* A range of the decoded form of `src` (srcSize bytes as stored) into
  * dst, its size into *out (when not NULL); off = size = 0 asks for
  * everything, dst NULL for the size only.  A whole CompressedBG is decoded
@@ -223,6 +308,7 @@ static int DecodeRange(OpenBGI_t* o, void* dst, const uint8_t* src, uint32_t src
 			BGI_Free(tmp);
 			return 5;
 		}
+		o->files.packed = 1;
 		data = tmp;
 	}
 	else if(BGI_IsCbg(src))
@@ -241,6 +327,7 @@ static int DecodeRange(OpenBGI_t* o, void* dst, const uint8_t* src, uint32_t src
 			BGI_Free(tmp);
 			return 5;
 		}
+		o->files.packed = 1;
 		data = to;
 	}
 	if(off == 0 && size == 0)
@@ -259,6 +346,61 @@ static int DecodeRange(OpenBGI_t* o, void* dst, const uint8_t* src, uint32_t src
 	}
 	BGI_Free(tmp);
 	return r;
+}
+
+/* The whole of a packed file into dst, without an engine - the limit is
+ * handed in - as DecodeRange gives it; dst NULL: only whether it would
+ * fit, and its size.  0 ok, 3 not packed or empty, 5 it does not unpack,
+ * 6 too large. */
+static int DecodeWhole(void* dst, const uint8_t* src, uint32_t srcSize, uint32_t limit, uint32_t* out)
+{
+	(void)srcSize;
+	if(BGI_IsDsc(src))
+	{
+		uint32_t total = BGI_DscOutSize(src);
+		if(total > limit)
+			return 6;
+		if(total == 0)
+			return 3;
+		if(dst)
+		{
+			uint8_t* tmp = (uint8_t*)BGI_Alloc(total);
+			if(BGI_DscDecode(NULL, src, tmp) != total)
+			{
+				BGI_Free(tmp);
+				return 5;
+			}
+			memcpy(dst, tmp, total);
+			BGI_Free(tmp);
+		}
+		*out = total;
+		return 0;
+	}
+	if(BGI_IsCbg(src))
+	{
+		const CbgHeader_t* h = (const CbgHeader_t*)src;
+		uint32_t bpp = h->bpp & 0xffffu;
+		uint64_t pixels = (uint64_t)h->width * h->height * (bpp == 24 ? 4 : bpp >> 3);
+		if(0x10u + pixels > limit)
+			return 6;
+		if(dst && BGI_CbgDecode(src, dst) != 0)
+			return 5;
+		*out = 0x10u + (uint32_t)pixels;
+		return 0;
+	}
+	return 3;
+}
+
+uint32_t LoadFile_Unpack(LoadDefer_t* d, void* buf)
+{
+	uint32_t n = 0;
+	if(!d->raw)
+		return UnpackInPlace(buf, d->rawSize);
+	if(DecodeWhole(buf, d->raw, d->rawSize, d->limit, &n) != 0)
+		n = 0;
+	BGI_Free(d->raw);
+	d->raw = NULL;
+	return n;
 }
 
 /* one loose file, read whole and decoded for the range; 1 when it cannot
@@ -284,6 +426,8 @@ static int LoadLooseDecoded(OpenBGI_t* o, void* buf, const char* path, uint32_t 
 		raw = RawAlloc(total);
 		if(File_Read(&f, raw, total) != total)
 			r = 5;
+		else if(Defer(o, buf, &raw, total, off, size, out))
+			r = 0;
 		else
 			r = DecodeRange(o, buf, raw, total, off, size, out);
 		BGI_Free(raw);
@@ -339,7 +483,12 @@ static uint32_t ArcReadDecoded(OpenBGI_t* o, void* dst, const char* path, const 
 	if(n > DecodedLimit(o))
 		return LOAD_ERR_TOO_LARGE;
 	raw = RawAlloc(n);
-	r = ArcMgr_Read(o, o->files.arcMgr, raw, path, name) == n ? DecodeRange(o, dst, raw, n, off, size, &out) : 5;
+	if(ArcMgr_Read(o, o->files.arcMgr, raw, path, name) != n)
+		r = 5;
+	else if(Defer(o, dst, &raw, n, off, size, &out))
+		r = 0;
+	else
+		r = DecodeRange(o, dst, raw, n, off, size, &out);
 	BGI_Free(raw);
 	return r == 0 ? out : kCodes[r];
 }

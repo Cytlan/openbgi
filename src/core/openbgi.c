@@ -18,6 +18,7 @@
 #include "bgi/fs.h"
 #include "bgi/host.h"
 #include "bgi/version.h"
+#include "bgi/async.h"
 #include "bgi/core.h"
 #include "bgi/engine.h" // PRODUCT_NAME_DEFAULT
 
@@ -184,6 +185,7 @@ static int TakeHost(OpenBGI_t* o, const OpenBGI_Host_t* host)
 	TAKE_TABLE(shell);
 	TAKE_TABLE(cdAudio);
 	TAKE_TABLE(moviePlayer);
+	TAKE_TABLE(threads);
 	TAKE_TABLE(movieDecoder);
 	return ok;
 }
@@ -211,6 +213,7 @@ OpenBGI_t* OpenBGI_New(const OpenBGI_Host_t* host)
 static void FreeRest(OpenBGI_t* o, int requests)
 {
 	Settings_Close(o);   // the settings over an engine that was not stopped
+	LoadFile_FreeCache(o); // the unpacked files kept for the run
 	Inframe_Free(o);     // a dialog in the frame when the engine was not stopped
 	InputMap_Stop(o);    // the on-screen keyboard and the drawn pointer then
 	InputMap_Free(o);    // the host's input settings
@@ -243,14 +246,20 @@ void Engine_Renew(OpenBGI_t* o)
 	int ppi = o->input.touch.ppi;
 	struct InputSettings *input = o->input.cfgHost, *inputBase = o->input.cfgHostBase;
 	uint32_t lead = o->snd.out.lead;
+	void* soundLock;
+	struct Async* async;
 	uint32_t mhz = o->util.sysInfo.mhz ? o->util.sysInfo.mhz : o->util.cpuKept;
 	LauncherState_t launcher = o->launcher; // (the stop closed its listings)
 	OpenBGI_Surface_t surface = o->overlay.surface;
 	o->input.cfgHost = o->input.cfgHostBase = NULL; // (not FreeRest's this time)
 	FreeRest(o, 1);
+	soundLock = SndOut_Renew(o); // (the reader goes on reading: it stays out while the state is cleared)
+	async = o->async;
 	memset(o, 0, sizeof *o);
+	o->async = async; // (the helpers sleep: every job of the run was finished when its wait went)
 	o->host = host;
 	o->hostTables = tables;
+	SndOut_Renewed(o, soundLock);
 	o->launcher = launcher; // the host's launcher, and the game it started
 	o->launcher.running = 0;
 	StartingValues(o);
@@ -272,6 +281,8 @@ void OpenBGI_Delete(OpenBGI_t* o)
 	if(!Engine_Idle(o))
 		OpenBGI_Stop(o); // (a host that did not stop the run: nothing of it is left behind either)
 	FreeRest(o, 1);
+	SndOut_Free(o);
+	Async_Free(o);
 	Launcher_Free(o);
 	free(o);
 }

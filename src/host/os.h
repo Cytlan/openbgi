@@ -320,6 +320,8 @@ typedef void (*OsThreadFn_t)(void* arg);
 #define OS_PRIO_HIGHEST 2                                             // THREAD_PRIORITY_HIGHEST
 OsThread_t* OS_ThreadStart(OsThreadFn_t fn, void* arg, int priority); // NULL when the thread could not be created
 void OS_ThreadJoin(OsThread_t* t);                                    // wait for the thread, free it; accepts NULL
+// threads, locks and signals for the engine's own threads (OpenBGI_Host_t.threads): pthreads, or Win32's critical sections and semaphores
+const OpenBGI_Threads_t* OS_Threads(void);
 #endif
 int OS_CpuCount(void); // processors online, at least 1
 

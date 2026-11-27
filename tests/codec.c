@@ -555,6 +555,84 @@ static void TestCbg(void)
 	TestCbgImage(16, 2, 8, 2); // a single symbol in the stream: the one-leaf tree
 }
 
+/* The unpackers' table loops and their bit-by-bit ends: streams of every
+ * small size and some large ones, plain, repetitive and with byte values
+ * so unevenly spread that codes grow longer than the tables' 12 bits, each
+ * unpacked from a block of exactly the stream's size - a build watched for
+ * memory errors (SAN=address) then sees a read behind the stream. */
+static uint32_t gFastSeed;
+
+static uint32_t FastRnd(void)
+{
+	gFastSeed = gFastSeed * 1103515245u + 12345u;
+	return gFastSeed >> 8;
+}
+
+static void FastFill(uint8_t* p, uint32_t n, int kind)
+{
+	uint32_t i;
+	for(i = 0; i < n; i++)
+		if(kind == 0)
+			p[i] = (uint8_t)FastRnd(); // plain
+		else if(kind == 1)
+			p[i] = (uint8_t)(i % 7 == 0 ? FastRnd() : i / 5); // runs and repeats
+		else
+		{ // value k about half as often as k - 1: long codes for the rare ones
+			uint32_t r = FastRnd() | 0x800000u, k = 0;
+			while(!(r & 1))
+			{
+				r >>= 1;
+				k++;
+			}
+			p[i] = (uint8_t)(k * 11 + (FastRnd() % 23 == 0 ? FastRnd() % 200 : 0));
+		}
+}
+
+static void TestFastOne(uint32_t n, int kind)
+{
+	uint8_t *in = (uint8_t*)malloc(0x10 + n + 1), *out = (uint8_t*)malloc(0x10 + n + 1), *enc, *own;
+	uint32_t size, w = n < 64 ? n : 64, h = n < 64 ? 1 : n / 64;
+	FastFill(in + 0x10, n, kind);
+	// DSC: the bytes as they are
+	enc = BGI_DscEncode(in + 0x10, n, 0x77 + n, &size);
+	own = (uint8_t*)malloc(size);
+	memcpy(own, enc, size);
+	out[n] = 0x5a;
+	CHECK(BGI_DscDecode(NULL, own, out) == n && memcmp(out, in + 0x10, n) == 0 && out[n] == 0x5a);
+	free(own);
+	BGI_Free(enc);
+	// CompressedBG: the bytes as an 8-bit picture
+	memset(in, 0, 0x10);
+	in[0] = (uint8_t)w;
+	in[2] = (uint8_t)h;
+	in[3] = (uint8_t)(h >> 8);
+	in[4] = 8;
+	enc = BGI_CbgEncode(in, 0x99 + n, &size);
+	own = (uint8_t*)malloc(size);
+	memcpy(own, enc, size);
+	out[0x10 + w * h] = 0x5a;
+	CHECK(BGI_CbgDecode(own, out) == 0 && memcmp(out, in, 0x10 + w * h) == 0 && out[0x10 + w * h] == 0x5a);
+	free(own);
+	BGI_Free(enc);
+	free(in);
+	free(out);
+}
+
+static void TestFast(void)
+{
+	uint32_t n;
+	int kind;
+	printf("fast\n");
+	gFastSeed = 4711;
+	for(kind = 0; kind < 3; kind++)
+	{
+		for(n = 1; n <= 200; n++)
+			TestFastOne(n, kind);
+		for(n = 1000; n <= 300000; n = n * 7 / 2 + 13)
+			TestFastOne(n, kind);
+	}
+}
+
 // ---- the archive reader --------------------------------------------------
 
 /* Write a PackFile with three entries of mixed-case names and sizes 100,
@@ -719,6 +797,7 @@ int main(void)
 	TestHash(o);
 	TestDsc(o);
 	TestCbg();
+	TestFast();
 	TestArc(o);
 	TestGameData(o);
 	OS_Shutdown();

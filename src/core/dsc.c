@@ -20,6 +20,7 @@
  * distance; the copy starts at  out - distance - 2.
  */
 #include "bgi/codec.h"
+#include "bgi/core.h"
 #include "bgi/sys.h"
 
 int BGI_IsDsc(const void* data)
@@ -38,6 +39,16 @@ typedef struct DscNode
 
 #define DSC_MAX_NODES 0x3ff // enough for 512 leaves
 
+/* The stream's codes through a table: the next DSC_FAST_BITS bits say
+ * which leaf they reach and after how many bits, or which node they lead
+ * to, from where the tree is walked on.  The table loop reads up to four
+ * bytes ahead of the bit it is at; the stream has them while more than
+ * DSC_FAST_TAIL symbols are still to come (each takes a bit at least),
+ * and the last symbols are taken bit by bit as before, so nothing behind
+ * the stream is read. */
+#define DSC_FAST_BITS 12
+#define DSC_FAST_TAIL 48
+
 /*
  * Build the tree from the 512 obfuscated code lengths behind the header:
  * collect the non-zero code lengths as (length << 16 | symbol), sort them
@@ -52,10 +63,13 @@ static void DscBuildTree(OpenBGI_t* o, DscNode_t* nodes, const uint8_t* src)
 	uint32_t level[2][0x200];
 	uint32_t count = 0, i, j;
 
-	BGI_HashSeed(o, ((const DscHeader_t*)src)->key);
+	// the engine's own state, as ever - or, without an engine (a load unpacked beside its thread), a state of this call's own:
+	// every user of the generator seeds it first, so the two give the same lengths
+	uint32_t own = 0, *state = o ? &o->util.hashKey : &own;
+	*state = ((const DscHeader_t*)src)->key;
 	for(i = 0; i < 512; i++)
 	{
-		uint8_t len = (uint8_t)(src[0x20 + i] - (uint8_t)BGI_HashNext(o));
+		uint8_t len = (uint8_t)(src[0x20 + i] - (uint8_t)BGI_HashUpdate(state));
 		if(len != 0)
 			list[count++] = ((uint32_t)len << 16) | i;
 	}
@@ -129,9 +143,84 @@ static uint32_t DscDecodeStream(uint8_t* dst, const uint8_t* src, const DscNode_
 	uint8_t* out = dst;
 	uint32_t bits = 0; // current byte, consumed MSB first
 	int nbits = 0;
-	uint32_t n;
+	uint32_t n = 0;
 
-	for(n = 0; n < h->decCount; n++)
+	if(nodes[0].isNode != 0 && h->decCount > DSC_FAST_TAIL)
+	{
+		uint32_t* tab = (uint32_t*)BGI_Alloc(sizeof(uint32_t) << DSC_FAST_BITS); // the bits taken << 16 | the leaf's code; or the node, with 0 for the bits
+		uint32_t p, fast = h->decCount - DSC_FAST_TAIL;
+		uint64_t acc = 0; // the bytes read, the stream's next bit at bit `cnt` - 1
+		int cnt = 0;
+		for(p = 0; p < 1u << DSC_FAST_BITS; p++)
+		{
+			uint32_t node = 0, len = 0;
+			while(nodes[node].isNode != 0 && len < DSC_FAST_BITS)
+			{
+				node = nodes[node].child[(p >> (DSC_FAST_BITS - 1 - len)) & 1];
+				len++;
+			}
+			tab[p] = nodes[node].isNode != 0 ? node : len << 16 | (nodes[node].value & 0xffff);
+		}
+		for(; n < fast; n++)
+		{
+			uint32_t e, code;
+			while(cnt < DSC_FAST_BITS)
+			{
+				acc = (acc << 8) | *in++;
+				cnt += 8;
+			}
+			e = tab[(acc >> (cnt - DSC_FAST_BITS)) & ((1u << DSC_FAST_BITS) - 1)];
+			if(e >> 16)
+			{
+				cnt -= (int)(e >> 16);
+				code = e & 0xffff;
+			}
+			else
+			{ // a code longer than the table's bits: on through the tree
+				uint32_t node = e;
+				cnt -= DSC_FAST_BITS;
+				do
+				{
+					if(cnt == 0)
+					{
+						acc = (acc << 8) | *in++;
+						cnt = 8;
+					}
+					cnt--;
+					node = nodes[node].child[(acc >> cnt) & 1];
+				} while(nodes[node].isNode != 0);
+				code = nodes[node].value & 0xffff;
+			}
+			if((code >> 8) == 1)
+			{ // back reference: the next 12 bits are the distance
+				uint32_t offset, count, k;
+				const uint8_t* from;
+				while(cnt < 12)
+				{
+					acc = (acc << 8) | *in++;
+					cnt += 8;
+				}
+				cnt -= 12;
+				offset = (uint32_t)(acc >> cnt) & 0xfff;
+				count = (code & 0xff) + 2;
+				from = out - offset - 2;
+				if(offset + 2 >= count)
+					memcpy(out, from, count); // (apart)
+				else
+					for(k = 0; k < count; k++) // byte-wise: the source runs into what is being written
+						out[k] = from[k];
+				out += count;
+			}
+			else
+				*out++ = (uint8_t)code;
+		}
+		BGI_Free(tab);
+		// back to the byte and the bits that come next
+		in -= cnt >> 3;
+		nbits = cnt & 7;
+		bits = nbits ? (uint32_t)((acc >> (cnt - nbits)) << (8 - nbits)) & 0xff : 0;
+	}
+	for(; n < h->decCount; n++)
 	{
 		uint32_t node = 0, code;
 		do

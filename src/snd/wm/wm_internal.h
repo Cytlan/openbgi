@@ -18,6 +18,7 @@
 
 #include "bgi/snd/wavemaster.h"
 #include "bgi/snd/bw.h"
+#include "bgi/snd/sndout.h" // SndOut_Enter .. SndOut_Leave around whatever touches a voice or a stream it plays
 #include "bgi/error.h"
 
 #include <math.h>

@@ -55,6 +55,7 @@ void BGI_ThrowInt(OpenBGI_t* o, int value)
 	}
 	o->err.tryTop = f->prev;
 	f->value = value;
+	SndOut_LeaveAll(o); // (the sound's lock does not stay held by work that is left this way)
 	longjmp(f->jb, 1);
 }
 

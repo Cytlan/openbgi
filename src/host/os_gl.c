@@ -552,9 +552,10 @@ static GLuint Texture(int w, int h, int floats)
 	if(!t)
 		return 0;
 	gl.BindTexture(GL_TEXTURE_2D, t);
-	gl.TexImage2D(GL_TEXTURE_2D, 0, floats ? GL_RGBA16F : gEs ? GL_RGBA8
-															  : GL_RGB8,
-		w, h, 0, GL_RGBA, floats ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, NULL);
+	/* (four bytes a pixel inside as well: the picture comes as four, and a
+	 * driver that has to drop the fourth converts every pixel of every
+	 * upload; the shaders never read it) */
+	gl.TexImage2D(GL_TEXTURE_2D, 0, floats ? GL_RGBA16F : GL_RGBA8, w, h, 0, GL_RGBA, floats ? GL_HALF_FLOAT : GL_UNSIGNED_BYTE, NULL);
 	if(gEs && !floats)
 	{
 		gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_BLUE);

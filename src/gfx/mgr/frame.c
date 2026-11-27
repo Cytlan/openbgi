@@ -214,7 +214,7 @@ void Gfx_UpdateScaled(OpenBGI_t* o, Gfx_t* g, int count, const Rect_t* rects)
 		p += Gfx_SplitCopyJobs(p, &mapped[i], ppj);
 
 	WorkerPool_SetCallback(g->pool, CopyJobThunk, g);
-	WorkerPool_Run(o, g->pool, 1);
+	WorkerPool_Run(o, g->pool, 1, g->copyJobCount);
 	WorkerPool_SetCallback(g->pool, NULL, NULL);
 	BGI_Free(g->copyJobs);
 	BGI_Free(mapped);

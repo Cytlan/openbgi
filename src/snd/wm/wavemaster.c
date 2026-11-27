@@ -26,6 +26,7 @@
 int Wm_Init(OpenBGI_t* o)
 {
 	int i, r = 0;
+	SndOut_Enter(o);
 	o->snd.sndDebug = getenv("BGI_SND_DEBUG") != NULL; // music opens, the pump's restarts and ends on stderr
 	if(o->snd.wmFlags & 1)
 		r = WM_E_ALREADY_INIT;
@@ -55,6 +56,7 @@ int Wm_Init(OpenBGI_t* o)
 			o->snd.wmFlags |= 1;
 		}
 	}
+	SndOut_Leave(o);
 	return r;
 }
 
@@ -90,9 +92,11 @@ int Wm_BgmRelease(OpenBGI_t* o, int ch)
 		return WM_E_NOT_RUNNING;
 	if((uint32_t)ch >= WM_BGM_CHANNELS)
 		return WM_E_BAD_CHANNEL;
+	SndOut_Enter(o);
 	Voice_Detach(o->snd.bgm[ch].voice);
 	o->snd.bgm[ch].stream = NULL;
 	o->snd.bgm[ch].active = 0;
+	SndOut_Leave(o);
 	return 0;
 }
 
@@ -104,6 +108,7 @@ int Wm_BgmRelease(OpenBGI_t* o, int ch)
 int Wm_Shutdown(OpenBGI_t* o)
 {
 	int i;
+	SndOut_Enter(o);
 	if(o->snd.wmFlags & 1)
 	{
 		if((o->snd.wmFlags & 3) == 3)
@@ -131,6 +136,7 @@ int Wm_Shutdown(OpenBGI_t* o)
 		Voice_Detach(&o->snd.waveVoice);
 		o->snd.audioRunning = 0;
 	}
+	SndOut_Leave(o);
 	return 0;
 }
 
@@ -148,8 +154,10 @@ int Wm_TimerPoll(OpenBGI_t* o)
 	if((int32_t)(now - o->snd.wmNextTick) < 0)
 		return 0;
 	o->snd.wmNextTick = now + 20;
+	SndOut_Enter(o);
 	Records_Tick(o, o->snd.bgm, WM_BGM_CHANNELS, now);
 	Records_Tick(o, o->snd.se, WM_SE_SLOTS, now);
+	SndOut_Leave(o);
 	return 1;
 }
 
@@ -163,6 +171,7 @@ int Wm_DebugVoice(OpenBGI_t* o, int bgm, int index, WmVoiceInfo_t* out)
 	if(bgm ? (index < 0 || index >= WM_BGM_CHANNELS) : (index < 0 || index >= WM_SE_SLOTS))
 		return 0;
 	v = bgm ? &o->snd.bgmVoices[index] : &o->snd.seVoices[index];
+	SndOut_Enter(o);
 	out->loaded = v->stream != NULL;
 	out->playing = v->playing;
 	out->paused = v->paused;
@@ -173,5 +182,6 @@ int Wm_DebugVoice(OpenBGI_t* o, int bgm, int index, WmVoiceInfo_t* out)
 	out->dsVolume = v->dsVolume;
 	out->pan = v->pan;
 	out->loops = v->stream && bgm ? WmStream_LoopCount(o, v->stream) : 0;
+	SndOut_Leave(o);
 	return 1;
 }

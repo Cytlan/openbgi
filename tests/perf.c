@@ -274,7 +274,12 @@ static void TestCounts(void)
 	CHECK(OpenBGI_AudioRead(o, out, 64) == 0);
 	SndOut_Stats(o, &ahead, &dropped, &starved);
 	CHECK(ahead == 0 && dropped == 0 && starved == 0);
-	SndOut_Start(o);
+	{ // (with a host that has no locks: with them the reader would mix what it lacks itself)
+		const OpenBGI_Threads_t* threads = o->host.threads;
+		o->host.threads = NULL;
+		SndOut_Start(o);
+		o->host.threads = threads;
+	}
 	CHECK(OpenBGI_AudioRead(o, out, 64) == 0);
 	SndOut_Stats(o, &ahead, &dropped, &starved);
 	CHECK(ahead == 0 && dropped == 0 && starved == 64);
@@ -286,6 +291,40 @@ static void TestCounts(void)
 		Frame(o, 10000, 2000, 1);
 	CHECK(g->valid && g->diskReads == 0 && g->diskUs == 0 && g->diskKbs == 0 && g->starved == 0);
 	SndOut_Stop(o);
+	{ // BGI_PERF=2: the parts of a pass - told apart, summed over the passes, and kept for the longest one
+		OpenBGI_Frame_t f;
+		memset(&f, 0, sizeof f);
+		f.size = sizeof f;
+		Perf_PartBegin(o, PERF_PART_LOAD); // (nothing without the log's second level)
+		Perf_PartEnd(o, PERF_PART_LOAD);
+		CHECK(o->perf.pass.n[PERF_PART_LOAD] == 0);
+		o->perf.watch = 1;
+		memset(&o->perf.sum, 0, sizeof o->perf.sum);
+		memset(&o->perf.worst, 0, sizeof o->perf.worst);
+		for(i = 0; i < 2; i++)
+		{ // 1 ms of the programs, 3 (then 5) ms of loading in two files, 2 ms of painting, one part left open
+			Perf_Begin(o);
+			gNs += 1000000;
+			Perf_PartBegin(o, PERF_PART_LOAD);
+			gNs += 1000000 + (int64_t)i * 2000000;
+			Perf_PartEnd(o, PERF_PART_LOAD);
+			Perf_PartBegin(o, PERF_PART_LOAD);
+			gNs += 2000000;
+			Perf_PartEnd(o, PERF_PART_LOAD);
+			Perf_PartBegin(o, PERF_PART_PAINT);
+			gNs += 2000000;
+			Perf_PartEnd(o, PERF_PART_PAINT);
+			Perf_PartEnd(o, PERF_PART_SOUND); // (an end without a beginning counts nothing)
+			Perf_PartBegin(o, PERF_PART_JOB); // (left open: an error jumped out of it)
+			Perf_End(o, &f);
+			gNs += 1000000;
+		}
+		CHECK(o->perf.sum.all == 14000000 && o->perf.sum.ns[PERF_PART_LOAD] == 8000000 && o->perf.sum.n[PERF_PART_LOAD] == 4);
+		CHECK(o->perf.sum.ns[PERF_PART_PAINT] == 4000000 && o->perf.sum.n[PERF_PART_PAINT] == 2 && o->perf.sum.n[PERF_PART_SOUND] == 0);
+		CHECK(o->perf.sum.n[PERF_PART_JOB] == 0 && o->perf.partT0[PERF_PART_JOB] == 0);
+		CHECK(o->perf.worst.all == 8000000 && o->perf.worst.ns[PERF_PART_LOAD] == 5000000 && o->perf.worst.n[PERF_PART_LOAD] == 2);
+		o->perf.watch = 0;
+	}
 	// the bitmaps' pixels
 	m = BmpMgr_New(4);
 	CHECK(m && BmpMgr_Bytes(m) == 0);

@@ -25,6 +25,7 @@
 static int Bgm_Start(OpenBGI_t* o, int ch, WmStream_t* s, int volume, int pan)
 {
 	WmRecord_t* r = &o->snd.bgm[ch];
+	SndOut_Enter(o);
 	Voice_Attach(r->voice, s);
 	r->stream = s;
 	r->fadeVol.active = 0;
@@ -40,6 +41,7 @@ static int Bgm_Start(OpenBGI_t* o, int ch, WmStream_t* s, int volume, int pan)
 		pan = 0;
 	Voice_SetPan(r->voice, BGI_Ftol((double)(pan - 0x40) * 0.015625 * 128.0));
 	r->voice->playing = 1; // the streaming buffer starts with its first fill
+	SndOut_Leave(o);
 	return 0;
 }
 
@@ -181,9 +183,11 @@ int Wm_BgmOpenArcPair(OpenBGI_t* o, int ch, const char* arcPath, const char* int
 int Wm_BgmStop(OpenBGI_t* o, int ch)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_BgmCheck(o, ch);
 	if(res == 0)
 		Voice_Stop(o->snd.bgm[ch].voice);
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -191,6 +195,7 @@ int Wm_BgmStop(OpenBGI_t* o, int ch)
 int Wm_BgmSetMasterVolume(OpenBGI_t* o, int ch, uint32_t vol)
 {
 	int res = 0;
+	SndOut_Enter(o);
 	if(!Wm_Running(o))
 		res = WM_E_NOT_RUNNING;
 	else if((uint32_t)ch >= WM_BGM_CHANNELS)
@@ -201,6 +206,7 @@ int Wm_BgmSetMasterVolume(OpenBGI_t* o, int ch, uint32_t vol)
 		o->snd.bgm[ch].master = (int32_t)vol;
 		Voice_SetVolume(o->snd.bgm[ch].voice, Record_Level(o, &o->snd.bgm[ch]));
 	}
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -210,6 +216,7 @@ int Wm_BgmSetMasterVolume(OpenBGI_t* o, int ch, uint32_t vol)
 int Wm_BgmSetChannelVolume(OpenBGI_t* o, int ch, uint32_t vol)
 {
 	int res = 0;
+	SndOut_Enter(o);
 	if(!Wm_Running(o))
 		res = WM_E_NOT_RUNNING;
 	else if((uint32_t)ch >= WM_BGM_CHANNELS)
@@ -219,6 +226,7 @@ int Wm_BgmSetChannelVolume(OpenBGI_t* o, int ch, uint32_t vol)
 		o->snd.bgm[ch].aux = (int32_t)(vol > 0x80 ? 0x80 : vol);
 		Voice_SetVolume(o->snd.bgm[ch].voice, Record_Level(o, &o->snd.bgm[ch]));
 	}
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -226,9 +234,11 @@ int Wm_BgmSetChannelVolume(OpenBGI_t* o, int ch, uint32_t vol)
 int Wm_BgmFadeOut(OpenBGI_t* o, int ch, int ms)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_BgmCheck(o, ch);
 	if(res == 0)
 		Fade_Start(&o->snd.bgm[ch].fade, Clock_HostMs(o), ms, o->snd.bgm[ch].fadeLevel, 0);
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -236,9 +246,11 @@ int Wm_BgmFadeOut(OpenBGI_t* o, int ch, int ms)
 int Wm_BgmFadeIn(OpenBGI_t* o, int ch, int ms)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_BgmCheck(o, ch);
 	if(res == 0)
 		Fade_Start(&o->snd.bgm[ch].fade, Clock_HostMs(o), ms, o->snd.bgm[ch].fadeLevel, 0x80);
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -246,9 +258,11 @@ int Wm_BgmFadeIn(OpenBGI_t* o, int ch, int ms)
 int Wm_BgmPause(OpenBGI_t* o, int ch, int paused)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_BgmCheck(o, ch);
 	if(res == 0)
 		Voice_Pause(o->snd.bgm[ch].voice, paused);
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -257,6 +271,7 @@ int Wm_BgmPause(OpenBGI_t* o, int ch, int paused)
 int Wm_BgmFadeVolume(OpenBGI_t* o, int ch, int volume, int ms)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_BgmCheck(o, ch);
 	if(res == 0)
 	{
@@ -264,6 +279,7 @@ int Wm_BgmFadeVolume(OpenBGI_t* o, int ch, int volume, int ms)
 			volume = 0x80;
 		Fade_Start(&o->snd.bgm[ch].fadeVol, Clock_HostMs(o), ms, o->snd.bgm[ch].volume, volume);
 	}
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -272,6 +288,7 @@ int Wm_BgmFadeVolume(OpenBGI_t* o, int ch, int volume, int ms)
 int Wm_BgmSetPan(OpenBGI_t* o, int ch, int pan)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_BgmCheck(o, ch);
 	if(res == 0)
 	{
@@ -281,6 +298,7 @@ int Wm_BgmSetPan(OpenBGI_t* o, int ch, int pan)
 			pan = 0;
 		Voice_SetPan(o->snd.bgm[ch].voice, BGI_Ftol((double)(pan - 0x40) * 0.015625 * 128.0));
 	}
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -288,9 +306,11 @@ int Wm_BgmSetPan(OpenBGI_t* o, int ch, int pan)
 int Wm_BgmIsPlaying(OpenBGI_t* o, int ch, uint32_t* out)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_BgmCheck(o, ch);
 	if(res == 0)
 		*out = (uint32_t)Voice_IsPlaying(o->snd.bgm[ch].voice);
+	SndOut_Leave(o);
 	return res;
 }
 
@@ -298,8 +318,10 @@ int Wm_BgmIsPlaying(OpenBGI_t* o, int ch, uint32_t* out)
 int Wm_BgmLoopCount(OpenBGI_t* o, int ch, uint32_t* out)
 {
 	int res;
+	SndOut_Enter(o);
 	res = Wm_BgmCheck(o, ch);
 	if(res == 0)
 		*out = (uint32_t)WmStream_LoopCount(o, o->snd.bgm[ch].stream);
+	SndOut_Leave(o);
 	return res;
 }

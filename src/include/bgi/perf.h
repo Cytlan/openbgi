@@ -77,6 +77,26 @@ typedef struct PerfFigures
 	int diskUs;                    // .. and the time they took
 } PerfFigures_t;
 
+/* What a pass of the engine spends its time on, as far as it is told
+ * apart (BGI_PERF=2): the log says how long the span's passes, and its
+ * longest one, were at each.  What is left is the programs and everything
+ * else. */
+enum
+{
+	PERF_PART_LOAD,  // LoadFile: a file read and unpacked on the engine's thread (the count is the files)
+	PERF_PART_PAINT, // the compositor painting what changed (the count is the paintings)
+	PERF_PART_SOUND, // the mixer run on the engine's thread
+	PERF_PART_JOB,   // waiting for a job of the helpers to end (Async_Finish)
+	PERF_PARTS
+};
+
+typedef struct PerfParts
+{
+	int64_t ns[PERF_PARTS];
+	uint32_t n[PERF_PARTS];
+	int64_t all; // the pass, or the passes
+} PerfParts_t;
+
 typedef struct PerfState
 {
 	int on;                       // it measures, shows and writes
@@ -96,6 +116,10 @@ typedef struct PerfState
 	uint64_t diskBytes;
 	uint32_t diskReads;
 	int64_t diskNs;
+	// BGI_PERF=2: where the time goes - this pass, the span's passes together and its longest one
+	int64_t partT0[PERF_PARTS]; // when the part began; 0: it is not running
+	PerfParts_t pass, sum, worst;
+	uint32_t helped; // the frames the sound's reader had mixed itself at the span's start
 	// the panel's picture: 0x00RRGGBB, w x h; NULL until it was made
 	int cell;                     // the text's cell height the picture was made for
 	uint8_t* glyphs;              // the characters ' ' .. '~' at that height, rendered once: PERF_GLYPHS cells of cell x cell coverage (NULL: no font)
@@ -110,6 +134,10 @@ void Perf_Begin(OpenBGI_t* o);
 void Perf_End(OpenBGI_t* o, const OpenBGI_Frame_t* f);
 // the run's end: the panel's characters and picture go (the figures stay until the engine starts again)
 void Perf_Stop(OpenBGI_t* o);
+
+// a part of the pass begins and ends (PERF_PART_*; the engine's thread only, and nothing unless BGI_PERF=2)
+void Perf_PartBegin(OpenBGI_t* o, int part);
+void Perf_PartEnd(OpenBGI_t* o, int part);
 
 int Perf_On(OpenBGI_t* o);
 // on or off, kept in the settings ("perf") when `keep`

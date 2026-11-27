@@ -18,23 +18,98 @@
  * processes the screen): the frame is then painted as one job.
  */
 #include "bgi/gfx/compositor.h"
+#include "bgi/gfx/map.h"
+#include "bgi/core.h"
 
 // ========================================================================
 // worker pool
 // ========================================================================
 
-WorkerPool_t* WorkerPool_New(int threads)
+/* The helpers' threads come from the host (OpenBGI_Host_t.threads): the
+ * core starts none of its own.  Each sleeps on `wake` until a run hands
+ * out tickets, takes one, calls the job callback until it returns 0 -
+ * as the caller does meanwhile - and says so on `done`.  A run hands out
+ * as many tickets as it has jobs to share, so a frame of two bands wakes
+ * one helper and not fifteen. */
+static const OpenBGI_Threads_t* Threads(const WorkerPool_t* p)
 {
-	WorkerPool_t* p = (WorkerPool_t*)BGI_Alloc(sizeof *p);
-	p->threads = threads;
-	p->fn = NULL;
-	p->arg = NULL;
-	p->running = 0;
+	return p->o ? p->o->host.threads : NULL;
+}
+
+static void Helper(void* arg)
+{
+	WorkerPool_t* p = (WorkerPool_t*)arg;
+	const OpenBGI_Threads_t* t = Threads(p);
+	void* user = p->o->host.user;
+	t->lock(user, p->lock);
+	for(;;)
+	{
+		PoolFn_t fn;
+		void* a;
+		while(!p->quit && !p->tickets)
+			t->wait(user, p->wake, p->lock);
+		if(p->quit)
+			break;
+		p->tickets--;
+		fn = p->fn;
+		a = p->arg;
+		t->unlock(user, p->lock);
+		while(fn(p->o, a))
+			;
+		t->lock(user, p->lock);
+		if(--p->busy == 0)
+			t->wake(user, p->done, 1);
+	}
+	t->unlock(user, p->lock);
+}
+
+WorkerPool_t* WorkerPool_New(OpenBGI_t* o, int threads)
+{
+	WorkerPool_t* p = (WorkerPool_t*)BGI_Calloc(sizeof *p);
+	const OpenBGI_Threads_t* t;
+	p->threads = 1;
+	p->o = o;
+	t = Threads(p);
+	if(threads > POOL_THREADS_MAX)
+		threads = POOL_THREADS_MAX;
+	if(threads < 2 || !t || !t->start || !t->join || !t->lockNew || !t->lockFree || !t->lock || !t->unlock || !t->signalNew || !t->signalFree || !t->wait ||
+		!t->wake)
+		return p;
+	p->lock = t->lockNew(o->host.user);
+	p->wake = t->signalNew(o->host.user);
+	p->done = t->signalNew(o->host.user);
+	if(!p->lock || !p->wake || !p->done)
+		return p; // (WorkerPool_Delete frees what there is)
+	while(p->helpers < threads - 1)
+	{
+		void* h = t->start(o->host.user, Helper, p);
+		if(!h)
+			break;
+		p->helper[p->helpers++] = h;
+	}
+	p->threads = 1 + p->helpers;
 	return p;
 }
 
 void WorkerPool_Delete(WorkerPool_t* p)
 {
+	const OpenBGI_Threads_t* t = Threads(p);
+	int i;
+	if(p->helpers)
+	{
+		t->lock(p->o->host.user, p->lock);
+		p->quit = 1;
+		t->wake(p->o->host.user, p->wake, 1);
+		t->unlock(p->o->host.user, p->lock);
+		for(i = 0; i < p->helpers; i++)
+			t->join(p->o->host.user, p->helper[i]);
+	}
+	if(t && t->lockFree && p->lock)
+		t->lockFree(p->o->host.user, p->lock);
+	if(t && t->signalFree && p->wake)
+		t->signalFree(p->o->host.user, p->wake);
+	if(t && t->signalFree && p->done)
+		t->signalFree(p->o->host.user, p->done);
 	BGI_Free(p);
 }
 
@@ -46,28 +121,54 @@ void WorkerPool_SetCallback(WorkerPool_t* p, PoolFn_t fn, void* arg)
 
 /* Run the callback until it returns 0.  The original wakes its threads and
  * lets every one of them, including the caller, call fn(o, arg) until it
- * returns 0; running them one after another on this thread consumes the
- * same job queue in order and paints the same pixels, because jobs never
- * overlap.  `parallel` is only recorded in `running`. */
-void WorkerPool_Run(OpenBGI_t* o, WorkerPool_t* p, int parallel)
+ * returns 0.  So it is here where there are helpers and the run is
+ * `parallel` with more than one job; else the caller alone consumes the
+ * queue in order.  Either way the same pixels are painted, because jobs
+ * never overlap. */
+void WorkerPool_Run(OpenBGI_t* o, WorkerPool_t* p, int parallel, int jobs)
 {
-	p->running = parallel;
-	if(p->fn)
+	const OpenBGI_Threads_t* t = Threads(p);
+	int share = jobs - 1 < p->helpers ? jobs - 1 : p->helpers;
+	if(!p->fn)
+		return;
+	if(!parallel || share < 1)
+	{
 		while(p->fn(o, p->arg))
 			;
+		return;
+	}
+	t->lock(o->host.user, p->lock);
+	p->running = 1;
+	p->tickets = share;
+	p->busy = share;
+	if(share == p->helpers)
+		t->wake(o->host.user, p->wake, 1);
+	else
+		for(; share > 0; share--)
+			t->wake(o->host.user, p->wake, 0);
+	t->unlock(o->host.user, p->lock);
+	while(p->fn(o, p->arg))
+		;
+	t->lock(o->host.user, p->lock);
+	while(p->busy)
+		t->wait(o->host.user, p->done, p->lock);
 	p->running = 0;
+	t->unlock(o->host.user, p->lock);
 }
 
 // take the job-queue lock; returns whether one was taken (nothing to lock on one thread)
 int WorkerPool_Lock(WorkerPool_t* p)
 {
-	return p->threads > 1 && p->running;
+	if(!p->running)
+		return 0;
+	Threads(p)->lock(p->o->host.user, p->lock);
+	return 1;
 }
 
 void WorkerPool_Unlock(WorkerPool_t* p, int locked)
 {
-	(void)p;
-	(void)locked;
+	if(locked)
+		Threads(p)->unlock(p->o->host.user, p->lock);
 }
 
 // ========================================================================
@@ -78,11 +179,10 @@ void WorkerPool_Unlock(WorkerPool_t* p, int locked)
  * instead; `screen` is the back buffer with its rectangle; `bandPixels`
  * the pixel budget of one band; `sharedPool` a pool to paint with, or NULL
  * for a private single-threaded one. */
-// (WorkerPool_Run paints every job on the engine's own thread)
+// the threads the pool of the engine's graphics manager paints a frame's jobs on
 int Compositor_Threads(OpenBGI_t* o)
 {
-	(void)o;
-	return 1;
+	return o->gfx.workerPool ? o->gfx.workerPool->threads : 1;
 }
 
 void Compositor_Ctor(Compositor_t* c, int maxDirty, ScreenBmp_t* screen, uint32_t bandPixels, WorkerPool_t* sharedPool)
@@ -100,7 +200,7 @@ void Compositor_Ctor(Compositor_t* c, int maxDirty, ScreenBmp_t* screen, uint32_
 	}
 	else
 	{
-		c->pool = WorkerPool_New(1);
+		c->pool = WorkerPool_New(NULL, 1);
 		c->ownsPool = 1;
 	}
 	c->objects = NULL;
@@ -520,9 +620,18 @@ static int Compositor_Worker(OpenBGI_t* o, void* arg)
 // paint the queued jobs through the pool
 static void Compositor_RunJobs(OpenBGI_t* o, Compositor_t* c, int parallel)
 {
+	Perf_PartBegin(o, PERF_PART_PAINT);
+	if(parallel && c->jobCount > 1 && c->pool->threads > 1)
+	{ // what a draw method would write for all of its bands is written first (the map's cache: class order 1)
+		ObjNode_t* n;
+		for(n = c->objects; n; n = n->next)
+			if(n->obj->classOrder == 1)
+				Map_Prepare(o, n->obj);
+	}
 	WorkerPool_SetCallback(c->pool, Compositor_Worker, c);
-	WorkerPool_Run(o, c->pool, parallel);
+	WorkerPool_Run(o, c->pool, parallel, c->jobCount);
 	WorkerPool_SetCallback(c->pool, NULL, NULL);
+	Perf_PartEnd(o, PERF_PART_PAINT);
 }
 
 /* Paint the whole screen: in bands when banding is possible, else as one

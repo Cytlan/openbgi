@@ -41,6 +41,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "check.h"
 
@@ -410,6 +411,147 @@ static void TestThreads(void)
 	OpenBGI_Delete(o);
 }
 
+// a read on a thread of its own, for the check that it waits while the engine's thread is at a voice
+#if defined(__GNUC__)
+#define FLAG_GET(p)    __atomic_load_n((p), __ATOMIC_ACQUIRE)
+#define FLAG_SET(p, v) __atomic_store_n((p), (v), __ATOMIC_RELEASE)
+#else
+#define FLAG_GET(p)    (*(p))
+#define FLAG_SET(p, v) (*(p) = (v))
+#endif
+static volatile int gReadBegan, gReadEnded, gReadGot;
+static int16_t gReadOut[2000 * 2];
+
+static void ReadThread(void* arg)
+{
+	FLAG_SET(&gReadBegan, 1);
+	gReadGot = OpenBGI_AudioRead((OpenBGI_t*)arg, gReadOut, 2000);
+	FLAG_SET(&gReadEnded, 1);
+}
+
+// an external source (a movie's sound): how often the mixer asked it
+static int gTaps;
+
+static void CountTap(void* user, int32_t* acc, int frames)
+{
+	BGI_UNUSED(user);
+	BGI_UNUSED(acc);
+	BGI_UNUSED(frames);
+	gTaps++;
+}
+
+/* The reader's own mixing: a read that finds the ring short mixes the
+ * rest itself, whatever the engine's thread is at - the sound goes on,
+ * sample for sample - and the engine's next run does not mix that time a
+ * second time.  While the engine's thread is at a voice (SndOut_Enter ..
+ * SndOut_Leave) such a read waits.  For a host without locks the reader
+ * only reads. */
+static void TestHelp(void)
+{
+	enum
+	{
+		N = 30000
+	};
+	static OpenBGI_Host_t host;
+	static int16_t pcm[N * 2], out[N * 2], whole[SNDOUT_RING * 2];
+	OpenBGI_t* o;
+	uint8_t* w;
+	uint32_t size, i, starved, written;
+	int same = 1, pass;
+	printf("help\n");
+	for(i = 0; i < N; i++)
+	{
+		pcm[i * 2] = (int16_t)(i * 7 - 9000);
+		pcm[i * 2 + 1] = (int16_t)(12000 - i * 5);
+	}
+	w = MakeWave(pcm, N, 2, 16, 44100, 1, &size);
+	for(pass = 0; pass < 2; pass++)
+	{ // with the host's locks, and without
+		host = kTestHost;
+		host.threads = pass == 0 ? OS_Threads() : NULL;
+		o = OpenBGI_New(&host);
+		gMs = 0;
+		CHECK(Wm_Init(o) == 0 && Wm_StartTimer(o) == 0);
+		CHECK((o->snd.out.gate != NULL) == (pass == 0) && o->snd.out.held == 0);
+		OpenBGI_SetAudioLead(o, 60);
+		CHECK(Wm_PlayWave(o, w, size) == 1);
+		gMs = 1;
+		OpenBGI_RunAudio(o); // the lead: 60 ms of the wave are in the ring
+		CHECK(OpenBGI_AudioRead(o, out, 2000) == 2000);
+		// an external source is asked by the engine's own mixing, never by the reader's
+		gTaps = 0;
+		Wm_SetExternalMix(o, CountTap, NULL);
+		gMs = 2;
+		OpenBGI_RunAudio(o);
+		CHECK(gTaps > 0);
+		gTaps = 0;
+		// the engine's thread goes away for 400 ms; the reader asks for its sound as ever
+		gMs = 401;
+		starved = o->snd.out.starved;
+		for(i = 2000; i + 441 <= 2000 + 17640; i += 441)
+		{
+			int n = OpenBGI_AudioRead(o, out + (size_t)i * 2, 441);
+			if(pass == 0)
+				CHECK(n == 441);
+		}
+		if(pass == 0)
+		{ // the wave went on without a gap, and nothing was missed
+			for(i = 0; i < (2000 + 17640) * 2; i++)
+				same &= out[i] == pcm[i];
+			CHECK(same && o->snd.out.starved == starved && o->snd.out.helped > 0 && gTaps == 0);
+		}
+		else
+			CHECK(o->snd.out.starved > starved && o->snd.out.helped == 0);
+		Wm_SetExternalMix(o, NULL, NULL);
+		CHECK(SndOut_Helped(o) == o->snd.out.helped);
+		// back: the time the reader mixed is not mixed again - the ring holds no more than twice the lead
+		written = o->snd.out.written;
+		OpenBGI_RunAudio(o);
+		CHECK(o->snd.out.written - o->snd.out.taken <= 2 * o->snd.out.lead && o->snd.out.extra == 0);
+		CHECK(pass != 0 || o->snd.out.written - written <= 2 * o->snd.out.lead);
+		// a read of more than the ring holds: mixed with the locks, what there is without
+		starved = o->snd.out.starved;
+		if(pass == 0)
+			CHECK(OpenBGI_AudioRead(o, whole, SNDOUT_RING) == SNDOUT_RING && o->snd.out.starved == starved);
+		else
+			CHECK(OpenBGI_AudioRead(o, whole, SNDOUT_RING) < SNDOUT_RING && o->snd.out.starved > starved);
+		if(pass == 0)
+		{ // while the engine's thread is at a voice, a read that needs frames waits for it
+			OsThread_t* th;
+			clock_t c0;
+			SndOut_Enter(o);
+			SndOut_Enter(o); // (nested)
+			SndOut_Leave(o);
+			FLAG_SET(&gReadBegan, 0);
+			FLAG_SET(&gReadEnded, 0);
+			th = OS_ThreadStart(ReadThread, o, 0);
+			CHECK(th != NULL);
+			while(th && !FLAG_GET(&gReadBegan))
+				;
+			for(c0 = clock(); clock() - c0 < CLOCKS_PER_SEC / 20;)
+				;
+			CHECK(!FLAG_GET(&gReadEnded));
+			SndOut_Leave(o);
+			OS_ThreadJoin(th);
+			CHECK(FLAG_GET(&gReadEnded) && gReadGot == 2000 && o->snd.out.held == 0);
+		}
+		// an error that jumps out of such work lets the lock go as well
+		SndOut_Enter(o);
+		SndOut_Enter(o);
+		SndOut_LeaveAll(o);
+		CHECK(o->snd.out.held == 0);
+		CHECK(OpenBGI_AudioRead(o, out, 100) == (pass == 0 ? 100 : 0) || pass != 0);
+		// the mixer stopped: the reader mixes nothing any more
+		Wm_Shutdown(o);
+		i = o->snd.out.helped;
+		OpenBGI_AudioRead(o, whole, SNDOUT_RING);
+		OpenBGI_AudioRead(o, whole, SNDOUT_RING);
+		CHECK(o->snd.out.helped == i);
+		OpenBGI_Delete(o);
+	}
+	free(w);
+}
+
 int main(void)
 {
 	OS_Init();
@@ -418,6 +560,7 @@ int main(void)
 	TestRestart();
 	TestWave();
 	TestThreads();
+	TestHelp();
 	OS_Shutdown();
 	if(gFails)
 	{

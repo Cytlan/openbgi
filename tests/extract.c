@@ -271,6 +271,8 @@ int main(void)
 		CHECK(Engine_SelectProfile(o, "1.636"));
 		SetBaseDir(o, NULL); // "C:\", the scratch directory: the loose readers want a drive
 		o->files.arcMgr = FileSet_New();
+		o->engine.optUnpackCache = 0 + 1; // (the loads below are looked at one by one: without the cache of unpacked files)
+		LoadFile_FreeCache(o);
 		CHECK(dscSize > 40);
 		WriteOneEntryArc("d.arc", "d.txt", dsc, dscSize);
 		f = fopen("l.txt", "wb");
@@ -304,6 +306,75 @@ int main(void)
 		CHECK(LoadFileRangeDecoded(o, out, "c.arc", "c.cbg", 0, 0) == 0 && memcmp(out, pic, sizeof pic) == 0);
 		memset(out, 0xcc, sizeof out);
 		CHECK(LoadFile(o, out, "c.arc", "c.cbg") == 16 + 2 * 2 * 4 && memcmp(out, pic, sizeof pic) == 0 && out[32] == 0xcc);
+		{ /* A background load's split (o->files.defer): a packed file is
+		   * read and left packed, and LoadFile_Unpack - which knows no
+		   * engine - gives the bytes and the size LoadFile gives.  A file
+		   * that is not packed is loaded at once. */
+			LoadDefer_t d;
+			uint8_t big[2048]; // (a stored DSC file has its 0x220 bytes of header and tree before the stream)
+			memset(&d, 0, sizeof d);
+			o->files.defer = &d;
+			memset(guard, 0xcc, sizeof guard);
+			CHECK(LoadFile(o, guard, "d.arc", "d.txt") == 1 && d.pending && d.raw && guard[0] == 0xcc);
+			CHECK(LoadFile_Unpack(&d, guard) == 40 && memcmp(guard, plain, 40) == 0 && guard[40] == 0xcc && !d.raw);
+			memset(&d, 0, sizeof d);
+			memset(guard, 0xcc, sizeof guard);
+			CHECK(LoadFile(o, guard, NULL, "l.txt") == 1 && d.pending && d.raw);
+			CHECK(LoadFile_Unpack(&d, guard) == 40 && memcmp(guard, plain, 40) == 0 && guard[40] == 0xcc);
+			memset(&d, 0, sizeof d);
+			memset(out, 0xcc, sizeof out);
+			CHECK(LoadFile(o, out, "c.arc", "c.cbg") == 1 && d.pending && d.raw);
+			CHECK(LoadFile_Unpack(&d, out) == 16 + 2 * 2 * 4 && memcmp(out, pic, sizeof pic) == 0 && out[32] == 0xcc);
+			memset(&d, 0, sizeof d);
+			f = fopen("p.txt", "wb");
+			fwrite(plain, 1, 40, f);
+			fclose(f);
+			memset(guard, 0xcc, sizeof guard);
+			CHECK(LoadFile(o, guard, NULL, "p.txt") == 40 && !d.pending && !d.raw && memcmp(guard, plain, 40) == 0);
+			// the generations before 1.69 build 472 unpack a file over itself: the stored bytes wait in the load's own buffer
+			CHECK(Engine_SelectProfile(o, "1.66"));
+			memset(&d, 0, sizeof d);
+			memset(big, 0xcc, sizeof big);
+			CHECK(LoadFile(o, big, "d.arc", "d.txt") == dscSize && d.pending && !d.raw && d.rawSize == dscSize && memcmp(big, dsc, dscSize) == 0);
+			CHECK(LoadFile_Unpack(&d, big) == 40 && memcmp(big, plain, 40) == 0);
+			memset(&d, 0, sizeof d);
+			o->files.defer = NULL;
+			memset(big, 0xcc, sizeof big);
+			CHECK(LoadFile(o, big, "d.arc", "d.txt") == 40 && memcmp(big, plain, 40) == 0); // (and without the split, as ever)
+			CHECK(Engine_SelectProfile(o, "1.636"));
+		}
+		{ /* The cache of unpacked files: a packed file of an archive is
+		   * unpacked once and copied from then on - also for a background
+		   * load, which then has nothing left to unpack; a loose file is
+		   * never kept; --unpack-cache=0 keeps nothing.  In both loader
+		   * generations. */
+			static const char* const kProfiles[2] = {"1.636", "1.66"};
+			uint8_t big[2048];
+			LoadDefer_t d;
+			uint32_t hits;
+			int g;
+			for(g = 0; g < 2; g++)
+			{
+				CHECK(Engine_SelectProfile(o, kProfiles[g]));
+				LoadFile_FreeCache(o);
+				o->engine.optUnpackCache = 1 + 1; // a megabyte
+				hits = o->files.unpackHits;
+				memset(big, 0xcc, sizeof big);
+				CHECK(LoadFile(o, big, "d.arc", "d.txt") == 40 && memcmp(big, plain, 40) == 0 && o->files.unpackHits == hits && o->files.unpackCache);
+				memset(big, 0xcc, sizeof big);
+				CHECK(LoadFile(o, big, "d.arc", "d.txt") == 40 && memcmp(big, plain, 40) == 0 && big[40] == 0xcc && o->files.unpackHits == hits + 1);
+				memset(&d, 0, sizeof d);
+				o->files.defer = &d;
+				memset(big, 0xcc, sizeof big);
+				CHECK(LoadFile(o, big, "d.arc", "d.txt") == 40 && memcmp(big, plain, 40) == 0 && !d.pending && !d.raw && o->files.unpackHits == hits + 2);
+				o->files.defer = NULL;
+				CHECK(LoadFile(o, guard, NULL, "p.txt") == 40 && LoadFile(o, guard, NULL, "p.txt") == 40 && o->files.unpackHits == hits + 2);
+				LoadFile_FreeCache(o);
+				o->engine.optUnpackCache = 0 + 1;
+				CHECK(LoadFile(o, big, "d.arc", "d.txt") == 40 && LoadFile(o, big, "d.arc", "d.txt") == 40 && o->files.unpackHits == hits + 2 && !o->files.unpackCache);
+			}
+			CHECK(Engine_SelectProfile(o, "1.636"));
+		}
 		memset(out, 0, sizeof out);
 		CHECK(LoadFileRangeDecoded(o, out, "c.arc", "c.cbg", 16, 6) == 0 && memcmp(out, pic + 16, 6) == 0);
 		// "90 C0": a zero-filled bitmap shaped like the picture file, from its stored header

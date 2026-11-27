@@ -267,8 +267,10 @@ static void Voice_Mix(OpenBGI_t* o, Voice_t* v, int32_t* acc, int frames)
 
 void Wm_SetExternalMix(OpenBGI_t* o, WmExternalMix_t fn, void* user)
 {
+	SndOut_Enter(o);
 	o->snd.externalMix = fn;
 	o->snd.externalMixUser = user;
+	SndOut_Leave(o);
 }
 
 int Wm_MixRunning(OpenBGI_t* o)
@@ -282,6 +284,7 @@ int Wm_MixRunning(OpenBGI_t* o)
 void Wm_HoldAll(OpenBGI_t* o, int hold)
 {
 	int i;
+	SndOut_Enter(o);
 	for(i = 0; i < WM_BGM_CHANNELS + WM_SE_SLOTS; i++)
 	{
 		Voice_t* v = i < WM_BGM_CHANNELS ? &o->snd.bgmVoices[i] : &o->snd.seVoices[i - WM_BGM_CHANNELS];
@@ -296,11 +299,14 @@ void Wm_HoldAll(OpenBGI_t* o, int hold)
 			v->held = 0;
 		}
 	}
+	SndOut_Leave(o);
 }
 
 /* every voice summed into `frames` stereo frames of `out`, clamped to 16
  * bits, 4096 frames at a time (the music channels, the effect slots, the
- * wave of Wm_PlayWave, then the external source) */
+ * wave of Wm_PlayWave, then the external source - a movie's sound, which
+ * is left out when the host's reader mixes: the movie's decoder is asked
+ * on the engine's thread only) */
 void Wm_Mix(OpenBGI_t* o, int16_t* out, int frames)
 {
 	int32_t* acc = o->snd.mixAcc;
@@ -314,7 +320,7 @@ void Wm_Mix(OpenBGI_t* o, int16_t* out, int frames)
 		for(i = 0; i < WM_SE_SLOTS; i++)
 			Voice_Mix(o, &o->snd.seVoices[i], acc, n);
 		Voice_Mix(o, &o->snd.waveVoice, acc, n);
-		if(o->snd.externalMix)
+		if(o->snd.externalMix && !o->snd.out.reader)
 			o->snd.externalMix(o->snd.externalMixUser, acc, n);
 		for(i = 0; i < n * 2; i++)
 		{

@@ -13,6 +13,8 @@ On Windows, use `openbgi.com` in a console to see the output.
 | Option | Meaning |
 |---|---|
 | `--overlay` | Play a folder without writing into it; saves go to your data folder |
+| `--unpack-cache=MB` | Keep up to MB megabytes of unpacked archive files, so that a file loaded again is not unpacked again. Without it: 128. `--unpack-cache=0` keeps none, as version 1.0 |
+| `--threads=N` | Paint the picture on N threads. Without it: one for each processor. `--threads=1` is the way of version 1.0 |
 | `--patch=FILE` | Lay a zip archive or a folder of files over the game; may be repeated, a later one wins |
 | `--lang=en` / `--lang=ja` | Language of OpenBGI's own messages (also `BGI_LANG`) |
 | `--no-disc-check` | Treat the game as registered; skips the disc check of older games |

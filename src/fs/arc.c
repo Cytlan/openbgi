@@ -620,6 +620,12 @@ struct FileCache
 	CacheEntry_t* head; // most recently used entry first
 };
 
+void FileCache_Usage(const FileCache_t* c, uint32_t* used, uint32_t* capacity)
+{
+	*used = c->used;
+	*capacity = c->capacity;
+}
+
 // a cache that holds up to `capacity` bytes of file data
 FileCache_t* FileCache_New(uint32_t capacity)
 {

@@ -31,6 +31,7 @@
 #include "bgi/error.h"
 #include "bgi/msg.h"
 #include "bgi/file.h"
+#include "bgi/async.h"
 #include "bgi/strutil.h"
 #include "bgi/gfx/bmpops.h"
 #include "bgi/gfx/bmseq.h"
@@ -46,6 +47,13 @@ typedef struct WaitLoader // 0x238 bytes
 	uint32_t status;  // loader status: 0 pending, -1 failed, else the size in bytes
 	int useCache;     // the file cache is consulted / fed
 	int cacheHit;     // the lookup succeeded (nothing was queued)
+	/* the unpacking, beside the engine's thread (bgi/async.h): the loader
+	 * read the file and left it packed; `status` stays 0 until the job is
+	 * done, so the program waits as it does for the original's loader
+	 * thread, and the machine goes on */
+	LoadDefer_t defer;
+	AsyncJob_t* job;
+	uint32_t unpacked; // the size the job found (0: the file does not unpack)
 } WaitLoader_t;
 
 typedef struct WaitBmpLoad // 0x23c bytes
@@ -74,6 +82,13 @@ typedef struct LoaderVtbl
 // the archive argument of the file functions: "0" means a loose file
 #define ARC_ARG(l) ((l)->arc[0] != '0' ? (l)->arc : NULL)
 
+// the job: the packed file into the load's buffer (nothing else is touched)
+static void WaitLoader_Unpack(void* arg)
+{
+	WaitLoader_t* w = (WaitLoader_t*)arg;
+	w->unpacked = LoadFile_Unpack(&w->defer, w->buf);
+}
+
 /* the shared start: copy the names lower-cased, allocate the buffer and
  * either satisfy the read from the file cache (useCache, and the cache
  * exists) or queue it with the loader thread.  A NULL name is a script
@@ -81,6 +96,9 @@ typedef struct LoaderVtbl
 static void WaitLoader_Ctor(OpenBGI_t* o, WaitLoader_t* w, Thread_t* t, const char* arc, const char* name, int useCache)
 {
 	WaitCounted_Ctor(o, &w->w, t);
+	memset(&w->defer, 0, sizeof w->defer);
+	w->job = NULL;
+	w->unpacked = 0;
 	if(!name)
 	{
 		w->buf = NULL;
@@ -104,11 +122,28 @@ static void WaitLoader_Ctor(OpenBGI_t* o, WaitLoader_t* w, Thread_t* t, const ch
 		if(w->cacheHit)
 			return;
 	}
+	o->files.defer = &w->defer; // (a packed file is read now and unpacked beside this thread)
 	Loader_QueueFile(o, &w->status, w->buf, ARC_ARG(w), w->name);
+	o->files.defer = NULL;
+	if(w->defer.pending)
+	{
+		w->status = 0;
+		w->job = Async_Start(o, WaitLoader_Unpack, w);
+		if(!w->job)
+		{ // (no memory for the job: here and now)
+			WaitLoader_Unpack(w);
+			w->status = w->unpacked;
+			w->defer.pending = 0;
+		}
+	}
 }
 
 static void WaitLoader_Dtor(OpenBGI_t* o, WaitLoader_t* w)
 {
+	Async_Finish(o, w->job); // (a job that is unpacking into the buffer finishes first)
+	w->job = NULL;
+	BGI_Free(w->defer.raw);
+	w->defer.raw = NULL;
 	Loader_Cancel(o, &w->status); // a job still waiting for its disc
 	BGI_Free(w->buf);
 	WaitCount_Dec(o);
@@ -125,6 +160,15 @@ static int WaitLoader_Poll(OpenBGI_t* o, Wait_t* base)
 	if(!w->buf)
 		return -1;
 	Wait_Tick(o, base);
+	if(w->job)
+	{ // the file is read; its unpacking is done or not
+		if(!Async_Done(o, w->job))
+			return 0;
+		Async_Finish(o, w->job);
+		w->job = NULL;
+		w->defer.pending = 0;
+		w->status = w->unpacked;
+	}
 	if(w->status == 0)
 		return 0;
 	if(w->status == 0xffffffffu)

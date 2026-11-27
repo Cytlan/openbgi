@@ -54,6 +54,7 @@ int Map_SetTerrain(Map_t* m, int w, int h, const uint16_t* data);          // "9
 int Map_SetView(Map_t* m, int col, int row, int offX, int offY, int wrap); // "90 79"; 1 ok
 int Map_InvalidateChip(Map_t* m, int tile);                                // "90 7A": re-blit cells showing `tile`; 1 ok
 int Map_InvalidateAllCells(Map_t* m);                                      // 1 ok
+void Map_Prepare(OpenBGI_t* o, DispObj_t* obj);                           // a map object before its draws are shared among threads: the cache refreshed
 int Map_Refresh(OpenBGI_t* o, Map_t* m);                                   // 1 if the cache was updated
 int Map_SetChipset(OpenBGI_t* o, Map_t* m, int bmp);                       // 1 ok
 int Map_FreeChips(Map_t* m);                                               // 1 if there was a chip table

@@ -259,6 +259,83 @@ static void Redraws(OpenBGI_t* o)
 	c->watchOn = 1;
 }
 
+void Perf_PartBegin(OpenBGI_t* o, int part)
+{
+	PerfState_t* p = &o->perf;
+	if(p->watch && p->on && !p->partT0[part])
+		p->partT0[part] = Now(o);
+}
+
+void Perf_PartEnd(OpenBGI_t* o, int part)
+{
+	PerfState_t* p = &o->perf;
+	if(p->watch && p->partT0[part])
+	{
+		p->pass.ns[part] += Now(o) - p->partT0[part];
+		p->pass.n[part]++;
+		p->partT0[part] = 0;
+	}
+}
+
+// the pass that just ended into the span's sums, and into its longest one if it is that
+static void PartsAdd(PerfState_t* p, int64_t engine)
+{
+	int i;
+	p->pass.all = engine;
+	for(i = 0; i < PERF_PARTS; i++)
+	{
+		p->partT0[i] = 0; // (a part that an error left open)
+		p->sum.ns[i] += p->pass.ns[i];
+		p->sum.n[i] += p->pass.n[i];
+	}
+	p->sum.all += engine;
+	if(engine > p->worst.all)
+		p->worst = p->pass;
+	memset(&p->pass, 0, sizeof p->pass);
+}
+
+static void PartsLine(const char* what, const PerfParts_t* s)
+{
+	int64_t rest = s->all;
+	int t[PERF_PARTS + 2], i;
+	for(i = 0; i < PERF_PARTS; i++)
+	{
+		rest -= s->ns[i];
+		t[i] = (int)(s->ns[i] / (NS_MS / 10));
+	}
+	t[PERF_PARTS] = (int)((rest > 0 ? rest : 0) / (NS_MS / 10));
+	t[PERF_PARTS + 1] = (int)(s->all / (NS_MS / 10));
+	fprintf(stderr,
+		"openbgi: perf: %s: %d.%d ms: loading %d.%d (%u files), painting %d.%d (%u times), mixing %d.%d, waiting for helpers %d.%d, the rest %d.%d\n", what,
+		t[5] / 10, t[5] % 10, t[0] / 10, t[0] % 10, (unsigned)s->n[PERF_PART_LOAD], t[1] / 10, t[1] % 10, (unsigned)s->n[PERF_PART_PAINT], t[2] / 10, t[2] % 10,
+		t[3] / 10, t[3] % 10, t[4] / 10, t[4] % 10);
+}
+
+/* Where the engine's time went since the last time (BGI_PERF=2): all
+ * passes together, the longest one, and how much sound the host's reader
+ * mixed itself because the engine's thread did not come round to it. */
+static void Parts(OpenBGI_t* o)
+{
+	PerfState_t* p = &o->perf;
+	uint32_t helped = SndOut_Helped(o);
+	if(p->sum.all)
+	{
+		PartsLine("all passes", &p->sum);
+		PartsLine("the longest pass", &p->worst);
+	}
+	if(helped != p->helped)
+		fprintf(stderr, "openbgi: perf: sound: %u frames mixed by the reader\n", (unsigned)(helped - p->helped));
+	p->helped = helped;
+	if(o->files.fileCache)
+	{ // the game's own cache of loaded files: a part of the memory that grows until it is full
+		uint32_t used, capacity;
+		FileCache_Usage(o->files.fileCache, &used, &capacity);
+		fprintf(stderr, "openbgi: perf: file cache: %u of %u MB\n", (unsigned)(used >> 20), (unsigned)(capacity >> 20));
+	}
+	memset(&p->sum, 0, sizeof p->sum);
+	memset(&p->worst, 0, sizeof p->worst);
+}
+
 /* The engine itself: its version, the blitters' fast rows of this build
  * (SSE2, NEON or none) and the threads a frame is painted on, of the
  * processors the machine has. */
@@ -325,6 +402,8 @@ void Perf_End(OpenBGI_t* o, const OpenBGI_Frame_t* f)
 		SpanOpen(o, &p->panel, p->begin);
 		SpanOpen(o, &p->log, p->begin);
 	}
+	if(p->watch)
+		PartsAdd(p, engine);
 	SndOut_Stats(o, &ahead, &dropped, &starved);
 	SpanAdd(&p->panel, period, engine, f->changes != 0, ahead);
 	SpanAdd(&p->log, period, engine, f->changes != 0, ahead);
@@ -349,7 +428,10 @@ void Perf_End(OpenBGI_t* o, const OpenBGI_Frame_t* f)
 			fprintf(stderr, "openbgi: perf: %s\n", line);
 		}
 		if(p->watch)
+		{
+			Parts(o);
 			Redraws(o);
+		}
 		SpanOpen(o, &p->log, now);
 	}
 }

@@ -50,6 +50,16 @@ static void Map_Destroy(OpenBGI_t* o, DispObj_t* obj, int flags)
 }
 
 // refresh stale cells, then copy the dirty piece of the visible window of the cache; nothing before the view and chipset are set
+/* Before a frame's jobs are shared among threads: the cache as the
+ * first draw would bring it up to date.  The draws that follow, on any
+ * thread, then only read it. */
+void Map_Prepare(OpenBGI_t* o, DispObj_t* obj)
+{
+	Map_t* m = (Map_t*)obj;
+	if(m->viewValid && m->hasChipset && m->dirty && obj->vt->isVisible(o, obj))
+		Map_Refresh(o, m);
+}
+
 static void Map_Draw(OpenBGI_t* o, DispObj_t* obj, Bmp_t* dst, const Rect_t* local, uint32_t minKey)
 {
 	Map_t* m = (Map_t*)obj;

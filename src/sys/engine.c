@@ -314,11 +314,20 @@ static void Mem_SetSysAreaSize(OpenBGI_t* o)
  * manager.  The band size of the compositor (in pixels) follows the CPU
  * caches: L2 size in KB * 64; an L1 data cache of 64 KB or more overrides
  * that with L1 KB * 76.8, a smaller one on a multi-processor machine with
- * 0x2ee0; 0xffffffff when no cache size is known. */
+ * 0x2ee0.  When no cache size is known: 0xffffffff on one thread, as in
+ * the original, and 0x8000 where there are threads to share the bands. */
 static void Engine_CreateCore(OpenBGI_t* o)
 {
 	uint32_t band = 0xffffffffu;
-	int cpus = Host_CpuCount(o);
+	int cpus = Host_CpuCount(o), threads = cpus;
+	const char* env = getenv("BGI_THREADS");
+	// the threads a frame is painted on: one for each processor, unless the command line or BGI_THREADS says a number
+	if(o->engine.optThreads > 0)
+		threads = o->engine.optThreads;
+	else if(env && atoi(env) > 0)
+		threads = atoi(env);
+	if(o->engine.optPreview || o->settings.game)
+		threads = 1; // (a first picture for the launcher, the settings' own engine: small work beside a game's)
 	if(o->util.sysInfo.l2)
 		band = ((o->util.sysInfo.l2 & 0xffffu) << 8) >> 2;
 	if(o->util.sysInfo.l1)
@@ -329,7 +338,9 @@ static void Engine_CreateCore(OpenBGI_t* o)
 		else if(cpus > 1)
 			band = 0x2ee0;
 	}
-	Gfx_Create(o, band, cpus); // o->gfx.gfx, o->gfx.bmpMgr
+	if(band == 0xffffffffu && threads > 1)
+		band = 0x8000; // no cache size is known (no CPUID: an ARM machine): bands for the threads to share, 128 KB of the picture each
+	Gfx_Create(o, band, threads); // o->gfx.gfx, o->gfx.bmpMgr
 	o->files.arcMgr = FileSet_New();
 }
 
@@ -620,6 +631,10 @@ static void Engine_ParseOptions(OpenBGI_t* o, char* cmd)
 			o->engine.optChildFrame = opt[16] == 'f' ? 1 : 2;
 		else if(strcmp(opt, "--movies=decoder") == 0 || strcmp(opt, "--movies=player") == 0)
 			o->engine.optMovies = opt[9] == 'd' ? 1 : 2;
+		else if(strncmp(opt, "--threads=", 10) == 0)
+			o->engine.optThreads = atoi(opt + 10) > 0 ? atoi(opt + 10) : 0;
+		else if(strncmp(opt, "--unpack-cache=", 15) == 0)
+			o->engine.optUnpackCache = (atoi(opt + 15) > 0 ? atoi(opt + 15) : 0) + 1;
 		else if(strcmp(opt, "--overlay") == 0)
 			o->engine.optOverlay = 1;
 		else if(strcmp(opt, "--preview") == 0)

@@ -83,6 +83,7 @@ struct OpenBGI
 		OpenBGI_Shell_t shell;
 		OpenBGI_CdAudio_t cdAudio;
 		OpenBGI_MoviePlayer_t moviePlayer;
+		OpenBGI_Threads_t threads;
 		OpenBGI_MovieDecoder_t movieDecoder;
 	} hostTables;
 
@@ -173,11 +174,19 @@ struct OpenBGI
 		// src/fs/arc.c
 		FileSet_t* arcMgr;      // the head of the archive chain, created at start-up
 		FileCache_t* fileCache; // NULL until "90 03" creates it
+		/* the engine's own cache in front of LoadFile: packed archive
+		 * files as they were unpacked, so that a file a program loads
+		 * again and again is unpacked once (LoadFile_FreeCache) */
+		FileCache_t* unpackCache; // NULL until the first load from an archive, and with --unpack-cache=0
+		int unpackCacheOff;       // there is none: it was asked for and is not to be
+		int packed;               // the load under way unpacked its file
+		uint32_t unpackHits;      // loads the cache answered (for the tests)
 		// src/fs/loadfile.c
 		char emptyPath[8]; // zero and only ever read: the empty path prefix of FindFiles, the seed byte of Window_DrawText's tag buffer
 		// src/fs/loader.c
 		int loaderRun;            // between Loader_Start and Loader_Stop
 		int inLoad;               // a loader job runs: a disc prompt is the loader's (RetryPrompt)
+		struct LoadDefer* defer;  // a background load that takes the unpacking on itself (LoadFile_Unpack); NULL: LoadFile unpacks
 		struct LoadJob* loadJobs; // the jobs waiting behind a disc prompt, the one that asked first
 		Retry_t loadRetry;        // that prompt
 		// src/fs/savefile.c
@@ -234,6 +243,8 @@ struct OpenBGI
 		int optDebug;                         // --debug: 1 open the debugger, 2 open it paused
 		int optDetect;                        // --detect: the detection report
 		int optVersion;                       // --version
+		int optUnpackCache;                   // --unpack-cache=MB: the megabytes plus one (0: not given - UNPACK_CACHE_MB, file.h)
+		int optThreads;                       // --threads=N: the threads a frame is painted on (0: not given - BGI_THREADS, else one for each processor)
 		int optHelp;                          // --help
 		int optDialogs;                       // --dialogs=: 0 as the host has them (OPENBGI_CAP_DIALOGS), 1 in the frame, 2 the host's
 		int optChildFrame;                    // --child-windows=: 1 frame (in the frame, though the host has its own), 2 host (the host's, though the window is fitted to its screen)
@@ -260,6 +271,7 @@ struct OpenBGI
 
 	// the performance display: what the run measures of itself, and the panel that shows it (src/sys/perf.c)
 	PerfState_t perf;
+	struct Async* async; // the helpers for work beside the engine's thread, once there was any (bgi/async.h); kept over a restart
 
 	// the string encoding of the assembler, the compilers and the decompilers (src/asm/strlit.c)
 	struct

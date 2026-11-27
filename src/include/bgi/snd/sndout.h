@@ -51,19 +51,47 @@ typedef struct SndOut
 	volatile uint32_t taken;         // frames read out of it so far (wrapping); written by the reader
 	volatile uint32_t dropTo;        // `written` when a lead was set after none: the reader skips what lies before
 	uint32_t lead;                   // frames (OpenBGI_SetAudioLead); 0 when nobody plays the sound
-	int running;                     // the mixer runs (SndOut_Start .. SndOut_Stop)
+	volatile int running;            // the mixer runs (SndOut_Start .. SndOut_Stop)
 	uint32_t lastMs;                 // the host's clock at the last run
 	uint32_t carry;                  // lastMs * SNDOUT_RATE modulo 1000: the frames' grid
 	uint32_t dropped;                // frames mixed that did not fit into the ring (for the tests, and the performance display)
 	volatile uint32_t starved;       // frames the reader asked for while the mixer ran and the ring did not have; written by the reader
 	uint32_t noteMs;                 // BGI_SND_DEBUG: the clock at the last line about the ring,
 	uint32_t noteMin, noteMax;       // .. and the fewest and the most frames unread after a run since
+	/* The reader's own mixing: a read that finds the ring short mixes the
+	 * missing frames itself, whatever the engine's thread is doing, so the
+	 * sound does not wait for a load, a picture or a slow frame.  The
+	 * voices and their streams are therefore behind a lock: `gate` holds
+	 * one of the host's (OpenBGI_Host_t.threads; NULL: there is none, and
+	 * the reader only reads), and whoever mixes or touches a voice holds
+	 * it - the engine's thread between SndOut_Enter and SndOut_Leave. */
+	void* volatile gate; // (a block of its own, which stays when the engine starts again: the reader may be at it)
+	int held;            // the engine's thread: SndOut_Enter calls not left yet
+	int reader;          // the reader is mixing (under the lock): a movie's sound stays out, since its decoder is the engine's thread's alone
+	uint32_t extra;      // frames the reader mixed since the engine's last run: the time they stand for has passed
+	volatile uint32_t helped; // .. and all of them so far (the performance display, the tests)
 } SndOut_t;
 
 void SndOut_Start(OpenBGI_t* o); // the mixer runs from the host's clock now on (Wm_Init)
 void SndOut_Stop(OpenBGI_t* o);  // it runs no more: the ring keeps what it has, then the host reads silence (Wm_Shutdown)
 void SndOut_Run(OpenBGI_t* o);   // run the mixer up to the host's clock now (OpenBGI_RunFrame, OpenBGI_RunAudio)
+/* The engine's thread is about to touch a voice, a stream a voice plays
+ * or the ring, and is done with it: the host's reader (OpenBGI_AudioRead)
+ * mixes only outside the two.  The calls nest.  Whatever takes long - a
+ * file read, a sound decoded whole - is done before SndOut_Enter, since a
+ * reader that needs frames waits for SndOut_Leave.  LeaveAll: whatever is
+ * entered (an error leaves the work by a jump). */
+void SndOut_Enter(OpenBGI_t* o);
+void SndOut_Leave(OpenBGI_t* o);
+void SndOut_LeaveAll(OpenBGI_t* o);
+/* The engine starts again (Engine_Renew): Renew before its state is
+ * cleared, Renewed with Renew's result once the host's tables are back.
+ * The reader stays out between the two. */
+void* SndOut_Renew(OpenBGI_t* o);
+void SndOut_Renewed(OpenBGI_t* o, void* gate);
+void SndOut_Free(OpenBGI_t* o); // the lock goes (the engine is deleted)
 // for the performance display: the frames mixed and not yet read, those lost to a full ring so far, those asked for in vain so far
 void SndOut_Stats(OpenBGI_t* o, uint32_t* ahead, uint32_t* dropped, uint32_t* starved);
+uint32_t SndOut_Helped(OpenBGI_t* o); // the frames the reader mixed itself so far
 
 #endif // BGI_SND_SNDOUT_H_

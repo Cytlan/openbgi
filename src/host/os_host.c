@@ -96,6 +96,9 @@ const OpenBGI_Host_t* OS_Host(void)
 		gHost.window = OsCommon_Window();
 		gHost.debugWindow = OsCommon_DebugWindow();
 		gHost.machine = OsCommon_Machine();
+#if !defined(BGI_WASM)
+		gHost.threads = OS_Threads();
+#endif
 		gHost.shell = OsCommon_Shell();
 		gHost.cdAudio = OsCommon_CdAudio();
 		gHost.moviePlayer = OsCommon_MoviePlayer();

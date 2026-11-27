@@ -22,19 +22,37 @@
 // ---- worker pool -------------------------------------------------------------
 typedef int (*PoolFn_t)(OpenBGI_t* o, void* arg); // returns 0 when there is no more work
 
+#define POOL_THREADS_MAX 32 // the threads of a pool at most, the caller's included
+
 typedef struct WorkerPool
 {
-	int threads; // the thread count the pool was made for (1: nothing to lock)
+	int threads; // the threads that take jobs: the caller's and the helpers that could be started (1: nothing to lock)
 	PoolFn_t fn; // the job callback
 	void* arg;
-	int running; // inside WorkerPool_Run
+	int running; // inside WorkerPool_Run, on more than one thread
+	/* the helpers: threads of the host's (OpenBGI_Host_t.threads) that
+	 * sleep until a run has work for them */
+	OpenBGI_t* o;
+	void* lock;                          // guards everything below, and the callback's own queue (WorkerPool_Lock)
+	void* wake;                          // a helper may take a ticket, or is to end
+	void* done;                          // the last helper of a run has finished
+	void* helper[POOL_THREADS_MAX - 1];  // their handles
+	int helpers;
+	int tickets; // helpers that are still to join this run
+	int busy;    // helpers that have not finished it
+	int quit;
 } WorkerPool_t;
 
-WorkerPool_t* WorkerPool_New(int threads);
+/* A pool of up to `threads` threads for the engine `o`; without `o`, or
+ * where its host has no threads, one of the caller's thread alone. */
+WorkerPool_t* WorkerPool_New(OpenBGI_t* o, int threads);
 void WorkerPool_Delete(WorkerPool_t* p);
 void WorkerPool_SetCallback(WorkerPool_t* p, PoolFn_t fn, void* arg);
-void WorkerPool_Run(OpenBGI_t* o, WorkerPool_t* p, int parallel); // fn(o, arg) until it returns 0
-int WorkerPool_Lock(WorkerPool_t* p);                             // 1 if a lock was taken
+/* fn(o, arg) until it returns 0 - on the caller's thread, and with
+ * `parallel` on as many helpers as `jobs` has use for (jobs - 1 at
+ * most).  It returns when every thread has come back. */
+void WorkerPool_Run(OpenBGI_t* o, WorkerPool_t* p, int parallel, int jobs);
+int WorkerPool_Lock(WorkerPool_t* p);                // the callback's queue: 1 if a lock was taken (none on one thread)
 void WorkerPool_Unlock(WorkerPool_t* p, int locked);
 
 // ---- compositor --------------------------------------------------------------
